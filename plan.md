@@ -1,90 +1,68 @@
 # ZOMBIES-LAN — Plan para continuar
 
-## Estado actual (2026-09-25)
+Shooter cooperativo en primera persona, inspirado en el modo Zombies de Black Ops 2.
+Servidor **Node.js autoritativo** + cliente **navegador con Three.js**, para 1–4 jugadores en LAN.
+Todo el arte y el audio son procedurales. El contrato completo entre módulos está en **`SPEC.md`**:
+es la referencia principal, léelo antes de tocar código.
 
-- El repositorio `mitotkp/ZOMBIES-LAN` estaba **vacío** (sin commits).
-- El código del proyecto está en el equipo local del usuario:
-  `C:\Users\LAPTOP\Downloads\PROYECTOS\ZOMBIES_LAN`
-- La sesión de Claude corre en un contenedor en la nube y **no tiene acceso a
-  discos locales de Windows**, así que no pudo copiar esos archivos. El primer
-  paso (subir el código) hay que hacerlo desde el propio PC.
+## Cómo ejecutar
 
-## Paso 1 — Subir el proyecto local al repo (PRIMORDIAL)
-
-Abrir PowerShell (o Git Bash) en el PC y ejecutar:
-
-```powershell
-cd "C:\Users\LAPTOP\Downloads\PROYECTOS\ZOMBIES_LAN"
-
-# Solo si la carpeta aún no es un repo git
-git init
-git branch -M main
-
-# Traer este plan.md (y lo que haya en el repo remoto)
-git remote add origin https://github.com/mitotkp/ZOMBIES-LAN.git
-git fetch origin
-git merge origin/claude/affectionate-edison-hb53ej --allow-unrelated-histories
-
-# Revisar qué se va a subir (ver sección .gitignore abajo)
-git status
-
-git add .
-git commit -m "Subir proyecto ZOMBIES_LAN"
-git push -u origin main
+```bash
+npm install                 # node_modules ya viene en el repo (three 0.186.1, ws 8.21.3)
+npm start                   # servidor en http://localhost:3000 (Windows: doble clic en start-server.bat)
+node server/index.js --dev  # modo desarrollo: comandos /points, /round, /power, /give... en el chat
+npm run validate-map        # valida shared/map.js
+npm run bots -- --bots 2 --seconds 120 --url ws://localhost:3000   # prueba headless del servidor
 ```
 
-Si `git remote add` dice que `origin` ya existe, usar:
-`git remote set-url origin https://github.com/mitotkp/ZOMBIES-LAN.git`
+Los amigos abren `http://IP-DEL-ANFITRION:3000`. Con `?debug=1` en la URL se puede jugar sin pointer lock y se ven los FPS.
 
-Alternativa sin consola: GitHub Desktop → *File › Add local repository* →
-seleccionar la carpeta → *Publish/Push*. O bien, en github.com →
-*Add file › Upload files* y arrastrar la carpeta (límite 100 archivos / 25 MB
-por archivo por subida).
+## Estado por módulo (revisado 2026-09-25)
 
-### Antes del commit: `.gitignore`
+| Módulo | Archivos | Estado |
+|---|---|---|
+| Compartido | `shared/*.js` | ✅ Hecho. `validate-map` → "Mapa OK" |
+| Servidor | `server/index.js, game.js, zombies.js, nav.js` | ✅ Hecho. `bot-test` 60 s: 0 errores, rondas, bajas y tablas funcionan |
+| Herramientas | `tools/validate-map.js, bot-test.js`, `start-server.bat` | ✅ Hecho |
+| Núcleo cliente | `public/index.html`, `js/main.js, net.js, input.js, player.js, interaction.js, eventbus.js, fallback.js` | ✅ Hecho (`fallback.js` sustituye con stubs cualquier módulo que falte) |
+| Armas | `js/weapons/*` | ✅ Hecho |
+| Entidades | `js/entities/*` | ✅ Hecho |
+| UI / Audio | `js/ui/*`, `js/audio.js`, `css/style.css` | ✅ Hecho |
+| **Mundo** | `js/world/` | ⚠️ **INCOMPLETO** (ver abajo) |
+| README | `README.md` | ❌ Falta (SPEC §0 lo pide, en español) |
 
-No subir builds, dependencias ni secretos. Según la tecnología del proyecto:
+### Qué falta en `public/js/world/`
 
-| Tecnología | Ignorar |
-|---|---|
-| Unity | `Library/ Temp/ Obj/ Build/ Builds/ Logs/ UserSettings/ *.csproj *.sln` |
-| Godot | `.godot/ .import/ export_presets.cfg` (si tiene credenciales) |
-| Node.js | `node_modules/ dist/ .env` |
-| Python | `__pycache__/ .venv/ venv/ *.pyc .env` |
-| C#/.NET | `bin/ obj/ .vs/` |
-| General | `*.log`, archivos `.env` con claves, `.DS_Store`, `Thumbs.db` |
+Ya existen los auxiliares `kit.js` (lotes estáticos, materiales, utilidades), `textures.js`, `levelgeo.js` (geometría
+del mapa), `lighting.js`, `sky.js` y `props.js` (props estáticos + `createInteractives`).
 
-Plantillas oficiales: https://github.com/github/gitignore
+Faltan los archivos que dan vida al mundo. Sin ellos, `main.js` usa un stub y **no se ve el mapa**:
 
-Archivos binarios grandes (>50 MB: audio, modelos, texturas) → usar Git LFS
-(`git lfs install` y `git lfs track "*.wav"` etc.).
+1. **`level.js`**: clase `World` (`constructor(ctx)`, `build()`, `update(dt)`); ver SPEC §6.8. Crea `root`, `StaticBatch`,
+   `MaterialLib`, `SignSet`, `Flames`, `Sky` y `Lighting`, llama a `buildLevelGeometry`, `buildStaticProps` y
+   `createInteractives`, y reparte `gs` y eventos a los interactivos.
+2. **`barriers.js`**: `Doors` (puertas y escombros con cartel de precio; se abren y desaparecen) y `Windows` (marco + 6 tablas
+   según `gs.windows[i]`, animación al arrancar o reparar).
+3. **`machines.js`**: `PerkMachines`, `PackAPunch`, `PowerSwitch`, `Workbench` (con las piezas del escudo).
+4. **`mysterybox.js`**: `MysteryBoxes` (4 ubicaciones, tapa, armas girando, osito, rayo de luz, mudanza).
+5. **Potenciadores** en el suelo (verdes, girando, parpadean al final), dentro de `level.js` o en un `powerups.js` aparte.
 
-## Paso 2 — Retomar con Claude
+Interfaz que `props.js` espera de cada interactivo: `new C(world, B)`, donde `world` expone `root`, `signs`, `flames`, `ctx`,
+`mats`… y `B` es el `StaticBatch`/`Placer`. Revisa `kit.js` y `props.js` para ver los nombres exactos.
 
-Una vez el código esté en `main`, abrir una nueva sesión de Claude Code sobre
-este repo y pedir:
+## Tareas pendientes (en orden)
 
-> "Lee el proyecto y completa las secciones *Arquitectura*, *Qué funciona* y
-> *Tareas pendientes* de plan.md, y continúa con la primera tarea."
+1. [ ] Implementar el módulo Mundo que falta (lista de arriba).
+2. [ ] Abrir el cliente en el navegador (`?debug=1`) y comprobar que no hay errores en la consola; revisar el rendimiento (objetivo: 60 FPS).
+3. [ ] Partida completa de prueba: puertas, caja, PaP, ventajas, escudo, potenciadores, caer y reanimar, fin de partida y vuelta al lobby.
+4. [ ] Revisar el zombi que se queda atascado al final de la ronda 1 en `bot-test` (quedan=1 durante más de 30 s; puede que sea
+   que los bots no lo alcanzan, pero hay que confirmar que `stuckRespawnTime` lo recicla).
+5. [ ] Escribir `README.md` en español (instalación, cómo jugar en LAN, firewall de Windows, controles).
+6. [ ] Probar con 2 o más PCs reales en la misma red.
+7. [ ] Opcional: quitar `node_modules/` del repo y añadir `.gitignore` (`start-server.bat` ya ejecuta `npm install` si falta).
+   Se dejó dentro para poder jugar sin internet.
 
-## Secciones a completar cuando el código esté en el repo
+## Registro de sesiones
 
-### Arquitectura
-_(pendiente: motor/lenguaje, cómo funciona la red LAN — host/cliente,
-protocolo, sincronización de zombis y jugadores)_
-
-### Cómo ejecutar
-_(pendiente: requisitos, comando/escena para lanzar host y cliente)_
-
-### Qué funciona
-_(pendiente)_
-
-### Tareas pendientes (orden sugerido para un juego de zombis en LAN)
-1. Verificar que el proyecto compila/arranca tras clonarlo desde GitHub.
-2. Conexión LAN estable: descubrimiento de partidas, unirse, desconexión limpia.
-3. Autoridad del servidor para zombis (IA, spawn, daño) y sincronización a clientes.
-4. Jugadores: movimiento, disparo, vida, muerte/reaparición sincronizados.
-5. Bucle de juego: oleadas/rondas, puntuación, condición de derrota.
-6. UI: menú principal (host/unirse), HUD, pantalla de fin de partida.
-7. Pruebas con 2+ equipos en la misma red; medir latencia y corregir desincronías.
-8. Build distribuible y README con instrucciones.
+- **2026-09-25**: se subió el proyecto y se revisó. Servidor verificado con bots. Se detectó que falta el módulo Mundo.
+  (Las entradas siguientes, debajo.)
