@@ -22,47 +22,58 @@ Los amigos abren `http://IP-DEL-ANFITRION:3000`. Con `?debug=1` en la URL se pue
 | Módulo | Archivos | Estado |
 |---|---|---|
 | Compartido | `shared/*.js` | ✅ Hecho. `validate-map` → "Mapa OK" |
-| Servidor | `server/index.js, game.js, zombies.js, nav.js` | ✅ Hecho. `bot-test` 60 s: 0 errores, rondas, bajas y tablas funcionan |
+| Servidor | `server/index.js, game.js, zombies.js, nav.js` | ✅ Hecho. `bot-test` 150 s: llega a la ronda 4, 0 errores |
 | Herramientas | `tools/validate-map.js, bot-test.js`, `start-server.bat` | ✅ Hecho |
-| Núcleo cliente | `public/index.html`, `js/main.js, net.js, input.js, player.js, interaction.js, eventbus.js, fallback.js` | ✅ Hecho (`fallback.js` sustituye con stubs cualquier módulo que falte) |
+| Núcleo cliente | `public/index.html`, `js/main.js, net.js, input.js, player.js, interaction.js, eventbus.js, fallback.js` | ✅ Hecho |
 | Armas | `js/weapons/*` | ✅ Hecho |
 | Entidades | `js/entities/*` | ✅ Hecho |
 | UI / Audio | `js/ui/*`, `js/audio.js`, `css/style.css` | ✅ Hecho |
-| **Mundo** | `js/world/` | ⚠️ **INCOMPLETO** (ver abajo) |
-| README | `README.md` | ❌ Falta (SPEC §0 lo pide, en español) |
+| Mundo | `js/world/*` | ✅ Hecho (se completó en esta sesión, ver abajo) |
+| README | `README.md` | ✅ Hecho |
 
-### Qué falta en `public/js/world/`
+### Módulo Mundo (`public/js/world/`)
 
-Ya existen los auxiliares `kit.js` (lotes estáticos, materiales, utilidades), `textures.js`, `levelgeo.js` (geometría
-del mapa), `lighting.js`, `sky.js` y `props.js` (props estáticos + `createInteractives`).
+- `level.js`: clase `World`. Crea la niebla y el cielo, fusiona la geometría estática (`StaticBatch`), añade props
+  e iluminación y reparte `gs` (método `sync(gs, prev, live)`) y los eventos `ev:*` (`onEvent(name, e)`) a cada
+  interactivo; en cada frame llama a `update(dt, t, gs)`. También reproduce el sonido de compra (`ev:buy` propio),
+  la voz de los potenciadores y la música de la electricidad.
+- `barriers.js`: `Doors` (puerta metálica que sube o escombros que se hunden, con placa de precio) y `Windows`
+  (6 tablas; salen volando al arrancarlas y vuelven al repararlas).
+- `machines.js`: `PerkMachines` (se iluminan con la electricidad y suena el jingle al comprar), `PackAPunch`
+  (el arma entra, se mejora y sale flotando), `PowerSwitch` (palanca animada) y `Workbench` (piezas en el suelo
+  y sobre la mesa, chispas al construir, escudo terminado).
+- `mysterybox.js`: `MysteryBoxes` (4 ubicaciones con palé fijo, tapa, armas girando cada vez más lento, arma
+  ofrecida que se hunde, osito, la caja sale volando y cae en la nueva ubicación, rayo azul y luz).
+- `powerups.js`: `Powerups` (símbolo verde que gira, halo, charco de luz y parpadeo al final).
+- Todo deriva de `gs` (idempotente): se probó que al volver al lobby se reinician puertas, luz, piezas y potenciadores.
 
-Faltan los archivos que dan vida al mundo. Sin ellos, `main.js` usa un stub y **no se ve el mapa**:
-
-1. **`level.js`**: clase `World` (`constructor(ctx)`, `build()`, `update(dt)`); ver SPEC §6.8. Crea `root`, `StaticBatch`,
-   `MaterialLib`, `SignSet`, `Flames`, `Sky` y `Lighting`, llama a `buildLevelGeometry`, `buildStaticProps` y
-   `createInteractives`, y reparte `gs` y eventos a los interactivos.
-2. **`barriers.js`**: `Doors` (puertas y escombros con cartel de precio; se abren y desaparecen) y `Windows` (marco + 6 tablas
-   según `gs.windows[i]`, animación al arrancar o reparar).
-3. **`machines.js`**: `PerkMachines`, `PackAPunch`, `PowerSwitch`, `Workbench` (con las piezas del escudo).
-4. **`mysterybox.js`**: `MysteryBoxes` (4 ubicaciones, tapa, armas girando, osito, rayo de luz, mudanza).
-5. **Potenciadores** en el suelo (verdes, girando, parpadean al final), dentro de `level.js` o en un `powerups.js` aparte.
-
-Interfaz que `props.js` espera de cada interactivo: `new C(world, B)`, donde `world` expone `root`, `signs`, `flames`, `ctx`,
-`mats`… y `B` es el `StaticBatch`/`Placer`. Revisa `kit.js` y `props.js` para ver los nombres exactos.
+Verificado en Chromium headless (SwiftShader) con un bot por WebSocket: sin errores de consola; se vieron
+funcionar las puertas, las ventanas, la caja (giro y arma), el PaP (listo con el arma mejorada), las máquinas,
+la palanca, la mesa y los potenciadores.
+Nota para futuras pruebas headless: el render va a ~4 FPS y `dt` se limita a 0,05 s, así que las animaciones
+van lentas, y el servidor rechaza saltos de más de 3 m entre mensajes `st`. Hay que mover al bot en pasos pequeños
+partiendo de la posición de su evento `respawn`.
 
 ## Tareas pendientes (en orden)
 
-1. [ ] Implementar el módulo Mundo que falta (lista de arriba).
-2. [ ] Abrir el cliente en el navegador (`?debug=1`) y comprobar que no hay errores en la consola; revisar el rendimiento (objetivo: 60 FPS).
-3. [ ] Partida completa de prueba: puertas, caja, PaP, ventajas, escudo, potenciadores, caer y reanimar, fin de partida y vuelta al lobby.
-4. [ ] Revisar el zombi que se queda atascado al final de la ronda 1 en `bot-test` (quedan=1 durante más de 30 s; puede que sea
-   que los bots no lo alcanzan, pero hay que confirmar que `stuckRespawnTime` lo recicla).
-5. [ ] Escribir `README.md` en español (instalación, cómo jugar en LAN, firewall de Windows, controles).
-6. [ ] Probar con 2 o más PCs reales en la misma red.
-7. [ ] Opcional: quitar `node_modules/` del repo y añadir `.gitignore` (`start-server.bat` ya ejecuta `npm install` si falta).
+1. [x] Implementar el módulo Mundo.
+2. [x] `README.md` en español.
+3. [x] Arreglar el HUD: la capa "Observando a" (`main.js`) se solapaba con el aviso "Te has desangrado" (`hud.js`).
+4. [x] Arreglar `props.js`: `bottle()` recibía `r()` (un número) en lugar del generador `r` y rompía los props.
+5. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
+   (el audio no se pudo oír en headless) y pointer lock.
+6. [ ] Partida completa a mano: comprar armas de pared y ventajas, beber, Mule Kick, escudo en la mano y en la espalda,
+   reanimar, liquidación y osito de la caja (con `/points` y `--dev` es rápido).
+7. [ ] Probar con 2 o más PCs reales en la misma red (firewall de Windows y latencia).
+8. [ ] Ajustes visuales opcionales: el interior es bastante oscuro antes de activar la electricidad (revisar
+   `lighting.js` / `toneMappingExposure` en `main.js`) y la puerta metálica se ve muy negra.
+9. [ ] Opcional: quitar `node_modules/` del repo y añadir `.gitignore` (`start-server.bat` ya ejecuta `npm install`).
    Se dejó dentro para poder jugar sin internet.
+10. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
+   que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
 
 ## Registro de sesiones
 
-- **2026-09-25**: se subió el proyecto y se revisó. Servidor verificado con bots. Se detectó que falta el módulo Mundo.
-  (Las entradas siguientes, debajo.)
+- **2026-09-25 (1)**: se subió el proyecto y se revisó. Servidor verificado con bots. Se detectó que faltaba el módulo Mundo.
+- **2026-09-25 (2)**: se implementó el módulo Mundo completo, se corrigió el bug de `props.js`, se escribió el README y
+  se arregló el solapamiento del HUD. Probado en navegador headless.
