@@ -122,6 +122,15 @@ Import map (en index.html):
   vida poco a poco (1 → 4 por segundo) hasta curarse o caer. Caer o ser reanimado quita la infección.
 - **Armas cuerpo a cuerpo** (añadido): de pared, sustituyen al cuchillo (`MELEE_WEAPONS` en `shared/weapons.js`): Bowie,
   bate con clavos (golpea a 3 y empuja), machete (golpea a 2) y hacha de bombero (mucho daño, empuja).
+- **Zombis especiales** (añadido, `ZOMBIE_TYPES` en `shared/constants.js`; el tipo va como 8.º campo del snapshot:
+  0 normal, 1 corredor, 2 explosivo, 3 tanque). Su probabilidad crece con la ronda:
+  - **Corredor** (desde la ronda 3, del 6 % al 30 %): esprinta siempre, 60 % de vida, golpea algo menos.
+  - **Explosivo** (desde la 5, del 4 % al 15 %): lento e hinchado. A 1,7 m de un jugador enciende la mecha (`ZF.FUSE`, evento
+    `fuse`) y estalla a los 1,2 s; también estalla al morir (salvo la bomba nuclear). La explosión (`boom` con `w:'bomber'`, radio 3,6 m)
+    quita hasta 80 de vida a los jugadores cercanos con línea de visión y 1500 a los zombis (las bajas cuentan para quien lo mató).
+  - **Tanque** (desde la 8; 40 % de rondas y +6 % por ronda; dos desde la 16): 1,5× de tamaño y de caja de impacto, mucha vida
+    (3000 + 12× la vida normal, +50 % por jugador extra), golpea 90, arranca tablas 4× más rápido y no se deja empujar.
+    Aparece tras el 30 % de la ronda (evento `tank`: aviso y rugido). Da 500 puntos extra y deja siempre un potenciador.
 - **Caer**: con 0 de salud el jugador cae ("última batalla": pistola, se arrastra). Pierde todas sus ventajas, la 3.ª arma
   y el 5% de sus puntos. Un compañero lo reanima manteniendo F (4 s; 2 s con Quick Revive). A los 45 s se desangra y
   espera a la siguiente ronda para reaparecer con la M1911. En solitario, Quick Revive (500) reanima solo (máx. 3 veces).
@@ -217,7 +226,7 @@ El servidor mantiene un objeto de estado y lo envía completo como `{ t:'gs', ..
 |---|---|
 | `welcome` | `id, host, gs, lan:[urls], dev:bool` |
 | `gs` | estado completo (sección 3) |
-| `snap` | `now, z:[[id,x,z,rot,anim,flags,yOff]...], p:[[id,x,y,z,yaw,pitch,flags,w,up]...]` (20 Hz) |
+| `snap` | `now, z:[[id,x,z,rot,anim,flags,yOff,tipo]...], p:[[id,x,y,z,yaw,pitch,flags,w,up]...]` (20 Hz) |
 | `ev` | `e` + datos (tabla 4.4) |
 | `pong` | `c, now` |
 | `kick` | `reason` (partida llena, etc.) |
@@ -289,6 +298,8 @@ Los ids vienen de `INTERACTABLES` en `shared/map.js`, más `revive:PID`. El serv
 | `gameover` | `round, stats:[{id,name,color,points,kills,headshots,downs,revives}]` | todos | pantalla final |
 | `msg` | `text` | solo pid | aviso genérico |
 | `infected` | `pid` | todos | el jugador ha sido infectado |
+| `tank` | `id` | todos | aparece un tanque (aviso en el HUD y rugido) |
+| `fuse` | `id` | todos | un explosivo enciende la mecha |
 | `healStart` | `pid, item` | todos | empieza a usar una cura |
 | `healed` | `pid, item` | todos | cura aplicada |
 | `itemSpawn` | `id, type, x, z` | todos | cura en el suelo |
@@ -409,7 +420,7 @@ compran la puerta A cuando pueden, y registran rondas, bajas y errores. Debe pod
 `node tools/bot-test.js --bots 2 --seconds 120 --url ws://localhost:3000`.
 
 ### 5.5 Modo desarrollo (`--dev`)
-Comandos por chat: `/meds` (curas al máximo), `/infect`, `/item TIPO`, `/points N`, `/round N` (mata a todos y salta a la ronda N), `/power`, `/give KEY [up]`, `/god` (invulnerable),
+Comandos por chat: `/spawn TIPO` (runner, bomber, tank, normal), `/meds` (curas al máximo), `/infect`, `/item TIPO`, `/points N`, `/round N` (mata a todos y salta a la ronda N), `/power`, `/give KEY [up]`, `/god` (invulnerable),
 `/killall`, `/pu TYPE` (aparece delante del jugador), `/parts` (todas las piezas), `/doors` (abre todas), `/perk KEY`.
 El cliente muestra una marca "DEV" si `welcome.dev`.
 

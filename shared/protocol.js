@@ -62,6 +62,7 @@ export const ZF = {
   BURNING: 2,   // en llamas (Hades)
   NOHEAD: 4,    // (reservado)
   OUTSIDE: 8,   // todavía está fuera, en el callejón
+  FUSE: 16,     // zombi explosivo con la mecha encendida
 };
 
 // Partes del cuerpo en los impactos

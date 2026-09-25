@@ -236,7 +236,13 @@ export const ZOMBIE_HITBOX = {
 };
 
 export function rayZombie(ox, oy, oz, dx, dy, dz, zb) {
-  const hb = ZOMBIE_HITBOX;
+  const k = zb.scale > 0 ? zb.scale : 1;   // tamaño relativo (tanque = 1.5)
+  const B = ZOMBIE_HITBOX;
+  const hb = k === 1 ? B : {
+    headY: B.headY * k, headR: B.headR * k, torsoR: B.torsoR * k, torsoY0: B.torsoY0 * k, torsoY1: B.torsoY1 * k,
+    legsR: B.legsR * k, legsY0: B.legsY0 * k, legsY1: B.legsY1 * k,
+    crawlerHeadY: B.crawlerHeadY * k, crawlerHeadFwd: B.crawlerHeadFwd * k, crawlerBodyR: B.crawlerBodyR * k, crawlerBodyY1: B.crawlerBodyY1 * k,
+  };
   const yo = zb.yOff || 0;
   let best = null;
   const consider = (t, part) => { if (t >= 0 && (!best || t < best.t)) best = { t, part }; };

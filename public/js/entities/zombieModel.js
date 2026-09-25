@@ -657,6 +657,21 @@ function legH(swing, knee, splay, hipPitch) {
 // --------------------------------------------------------------------------------------------
 // ZombieModel
 // --------------------------------------------------------------------------------------------
+// Materiales y geometrías de los tipos especiales (compartidos; los emisivos se animan por modelo en update)
+let TYPE_ASSETS = null;
+function typeAssets() {
+  if (TYPE_ASSETS) return TYPE_ASSETS;
+  TYPE_ASSETS = {
+    eyesRed: new THREE.MeshBasicMaterial({ color: new THREE.Color(1.0, 0.12, 0.05), toneMapped: false }),
+    bloat: new THREE.MeshStandardMaterial({ color: 0x8a8a5a, roughness: 0.55, metalness: 0 }),
+    pustule: new THREE.MeshStandardMaterial({ color: 0x6a5a10, emissive: 0xffa020, emissiveIntensity: 1.2, roughness: 0.4 }),
+    tankSkin: new THREE.MeshStandardMaterial({ color: 0x6f7560, roughness: 0.85, metalness: 0 }),
+    sphere: new THREE.SphereGeometry(1, 14, 10),
+    lump: new THREE.SphereGeometry(1, 8, 6),
+  };
+  return TYPE_ASSETS;
+}
+
 export class ZombieModel {
   constructor(opts = {}) {
     const A = getZombieAssets(opts.quality);
@@ -784,9 +799,52 @@ export class ZombieModel {
     this.pieces = [];
     this._goreCaps = [];
     this._fadeMats = null;
+    this.type = opts.type || 'normal';
+    this._decorateType(this.type, r);
     this._poseIdle(0);
     this.cp.set(this.tp);
     this._apply();
+  }
+
+  // Aspecto de los tipos especiales: corredor (delgado, ojos rojos), explosivo (hinchado con pústulas brillantes)
+  // y tanque (enorme, hombros y antebrazos de gorila, joroba)
+  _decorateType(type, r) {
+    if (type === 'normal') return;
+    const T = typeAssets();
+    const add = (parent, geo, mat, x, y, z, sx, sy = sx, sz = sx) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.scale.set(sx, sy, sz);
+      m.castShadow = this.A.quality !== 'low';
+      parent.add(m);
+      this.meshes.push(m);
+      return m;
+    };
+    if (type === 'runner' || type === 'tank') this.eyes.material = T.eyesRed;
+    if (type === 'runner') {
+      this.group.scale.set(0.9, 0.98, 0.9);
+    } else if (type === 'bomber') {
+      this.group.scale.set(1.14, 1.0, 1.14);
+      add(this.spine, T.sphere, T.bloat, 0, 0.2, -0.09, 0.25, 0.27, 0.22);          // barriga hinchada
+      add(this.spine, T.sphere, T.bloat, 0, 0.42, 0.06, 0.2, 0.17, 0.16);           // espalda
+      this.pustules = [];
+      const spots = [[0.1, 0.24, -0.29], [-0.12, 0.14, -0.28], [0.02, 0.36, -0.24], [-0.16, 0.3, -0.18],
+        [0.17, 0.08, -0.2], [0.1, 0.5, 0.18], [-0.09, 0.44, 0.2]];
+      for (const [x, y, z] of spots) this.pustules.push(add(this.spine, T.lump, T.pustule, x, y, z, 0.035 + r() * 0.03));
+      for (const side of [this.armL, this.armR]) add(side.el, T.lump, T.pustule, 0, -0.1, -0.04, 0.03);
+      // material propio para poder hacerlo parpadear con la mecha sin afectar a los demás
+      this.pustMat = T.pustule.clone();
+      for (const p of this.pustules) p.material = this.pustMat;
+    } else if (type === 'tank') {
+      this.group.scale.set(1.5, 1.5, 1.5);
+      add(this.spine, T.sphere, T.tankSkin, 0, 0.5, 0.1, 0.28, 0.22, 0.22);         // joroba
+      for (const side of [this.armL, this.armR]) {
+        add(side.sh, T.sphere, T.tankSkin, 0, -0.03, 0, 0.14, 0.15, 0.13);            // hombro
+        add(side.sh, T.sphere, T.tankSkin, 0, -0.14, 0, 0.1, 0.16, 0.1);              // bíceps
+        add(side.el, T.sphere, T.tankSkin, 0, -0.12, -0.01, 0.1, 0.17, 0.1);          // antebrazo
+        add(side.hand, T.sphere, T.tankSkin, 0, 0.02, -0.01, 0.085, 0.08, 0.09);      // puño
+      }
+    }
   }
 
   // ------------------------------------------------------------------ Actualización por frame
@@ -801,6 +859,12 @@ export class ZombieModel {
     const headless = !!(flags & ZF.NOHEAD);
     if (headless && this.neck.visible) this._removeHead(null);
     this._pose(dt, st, crawler);
+    if (this.pustMat) {
+      // pústulas: latido lento; con la mecha encendida, parpadeo rápido y más fuerte
+      const fuse = !!(flags & ZF.FUSE);
+      this.pustMat.emissiveIntensity = fuse ? (Math.sin(this.time * 28) > 0 ? 4 : 0.4) : 0.9 + 0.5 * Math.sin(this.time * 2.5);
+      if (fuse) this.pustMat.emissive.setHex(0xff3010); else this.pustMat.emissive.setHex(0xffa020);
+    }
     // suavizado hacia la pose objetivo
     const rate = this._crawlBlend < 1 ? 5 : 11;
     this._crawlBlend = Math.min(1, this._crawlBlend + dt * 2);
@@ -1575,6 +1639,7 @@ export class ZombieModel {
     for (const p of this.pieces) if (p.obj.parent) p.obj.parent.remove(p.obj);
     this.pieces.length = 0;
     if (this._fadeMats) { for (const m of this._fadeMats.values()) m.dispose(); this._fadeMats = null; }
+    if (this.pustMat) { this.pustMat.dispose(); this.pustMat = null; }
   }
 }
 

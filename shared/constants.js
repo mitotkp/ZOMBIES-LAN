@@ -71,6 +71,33 @@ export const ZOMBIE = {
   stuckRespawnTime: 25,     // si no avanza en este tiempo, reaparece
 };
 
+// Tipos especiales de zombi (además de los normales). code = valor en el snapshot.
+// Probabilidad de que un zombi de la ronda sea de ese tipo: min(max, base + perRound·(ronda − from)) a partir de 'from'.
+export const ZOMBIE_TYPES = {
+  normal: { code: 0, name: 'Zombi' },
+  runner: {
+    code: 1, name: 'Corredor', from: 3, base: 0.06, perRound: 0.02, max: 0.3,
+    hpMult: 0.6, speed: 5.7, damage: 40, scale: 0.95,
+  },
+  bomber: {
+    code: 2, name: 'Explosivo', from: 5, base: 0.04, perRound: 0.012, max: 0.15,
+    hpMult: 0.8, speed: 1.55, damage: 50, scale: 1,
+    trigger: 1.7,          // m: a esta distancia de un jugador enciende la mecha
+    fuse: 1.2,             // s de mecha antes de estallar
+    radius: 3.6,           // radio de la explosión (al morir o al estallar)
+    playerDamage: 80,      // daño máximo a los jugadores (baja con la distancia)
+    zombieDamage: 1500,    // daño a otros zombis en el radio
+  },
+  tank: {
+    code: 3, name: 'Tanque', from: 8, chance: 0.4, perRound: 0.06,   // probabilidad de que la ronda traiga un tanque
+    hpBase: 3000, hpRoundMult: 12, hpPerExtraPlayer: 0.5,           // vida = (hpBase + vida normal · hpRoundMult) · (1 + 0.5 por jugador extra)
+    speed: 4.0, damage: 90, attackRange: 1.8, windup: 0.6, cooldown: 1.8, tearMult: 0.25, scale: 1.5,
+    points: 500,           // puntos extra al que lo mata (y deja siempre un potenciador)
+    twoFrom: 16,           // desde esta ronda pueden venir dos tanques
+  },
+};
+export const ZOMBIE_TYPE_BY_CODE = Object.fromEntries(Object.entries(ZOMBIE_TYPES).map(([k, v]) => [v.code, k]));
+
 // Vida de los zombis según la ronda (fórmula de Black Ops)
 export function zombieHealth(round) {
   if (round < 10) return 150 + 100 * (round - 1);

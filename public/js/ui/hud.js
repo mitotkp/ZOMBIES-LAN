@@ -372,6 +372,10 @@ export class HUD {
     });
 
     this._on('ev:power', () => this.message('¡Electricidad activada!', 3));
+    this._on('ev:tank', () => {
+      this._flash('rgba(120,0,0,0.35)', 0.8);
+      this._banner('¡Un Tanque se acerca!', 'Mucha vida y golpes brutales · Mantén la distancia', '#ff3b30');
+    });
     this._on('ev:infected', (e) => {
       if (!this._isSelf(e.pid)) return;
       this._flash('rgba(90,220,70,0.35)', 0.9);

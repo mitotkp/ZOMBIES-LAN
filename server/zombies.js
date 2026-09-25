@@ -3,7 +3,7 @@
 // API usada por Game (SPEC.md 5.3).
 
 import {
-  ZOMBIE, ROUND, zombieHealth, zombiesForRound, zombieSpeedChances, angleDiff, yawTo,
+  ZOMBIE, ROUND, ZOMBIE_TYPES, zombieHealth, zombiesForRound, zombieSpeedChances, angleDiff, yawTo,
 } from '../shared/constants.js';
 import { WINDOW_INFO, DIRS } from '../shared/map.js';
 import { moveCircle, resolveCircle, solidForZombieInside, solidForZombieOutside } from '../shared/collision.js';
@@ -36,6 +36,11 @@ function baseSpeed(cls) {
   if (cls === 'sprint') return ZOMBIE.sprintSpeed;
   if (cls === 'run') return ZOMBIE.runSpeed;
   return ZOMBIE.walkSpeed;
+}
+// Probabilidad de que un zombi de la ronda r sea del tipo especial t
+function typeChance(t, r) {
+  if (!t || r < t.from) return 0;
+  return Math.min(t.max, t.base + t.perRound * (r - t.from));
 }
 function moveAnim(z) {
   if (z.crawler) return ZA.CRAWL;
@@ -146,7 +151,7 @@ export class ZombieManager {
       this._kill(z, pid || null, inf);
       return { killed: true, existed: true };
     }
-    if (inf.kind === 'explosion' && !z.crawler && Math.random() < 0.3) this._makeCrawler(z);
+    if (inf.kind === 'explosion' && !z.crawler && z.type !== 'tank' && z.type !== 'bomber' && Math.random() < 0.3) this._makeCrawler(z);
     return { killed: false, existed: true };
   }
 
@@ -173,6 +178,7 @@ export class ZombieManager {
     const z = this.byId.get(zid);
     if (!z || z.dead || z.dieAt) return false;
     if (!INSIDE_STATES.has(z.state)) return false;
+    if (z.type === 'tank' || z.fuseAt) return false;
     const now = Date.now();
     let dx = z.x - fromX, dz = z.z - fromZ;
     let len = Math.hypot(dx, dz);
@@ -191,12 +197,12 @@ export class ZombieManager {
     return true;
   }
 
-  // [[id, x, z, rot, anim, flags, yOff], ...]
+  // [[id, x, z, rot, anim, flags, yOff, tipo], ...]
   snapshot() {
     const out = new Array(this.zombies.length);
     for (let i = 0; i < this.zombies.length; i++) {
       const z = this.zombies[i];
-      out[i] = [z.id, r2(z.x), r2(z.z), r2(z.rot), z.anim, z.flags, 0];
+      out[i] = [z.id, r2(z.x), r2(z.z), r2(z.rot), z.anim, z.flags, 0, z.tcode | 0];
     }
     return out;
   }
@@ -233,11 +239,13 @@ export class ZombieManager {
     if (this.queue > 0) {
       this.spawnTimer -= dt;
       if (this.spawnTimer <= 0 && this.zombies.length < ZOMBIE.maxAlive) {
-        if (this._spawnOne()) {
+        const type = this._pickType();
+        if (this._spawnOne(type)) {
           this.queue--;
           this.spawnTimer = this.spawnDelay;
           this._syncZLeft();
         } else {
+          if (type === 'tank') this.pendingTanks++;
           this.spawnTimer = 0.4; // no hay ventana disponible ahora mismo: reintentar pronto
         }
       }
@@ -254,6 +262,18 @@ export class ZombieManager {
     let players = 1;
     try { players = Math.max(1, Object.keys(gs.players || {}).length); } catch { players = 1; }
     this.queue = zombiesForRound(r, players);
+    // Tanques: a partir de su ronda, con probabilidad creciente (y dos desde 'twoFrom')
+    const T = ZOMBIE_TYPES.tank;
+    this.pendingTanks = 0;
+    if (r >= T.from) {
+      const ch = Math.min(1, T.chance + T.perRound * (r - T.from));
+      if (Math.random() < ch) this.pendingTanks++;
+      if (r >= T.twoFrom && Math.random() < ch * 0.5) this.pendingTanks++;
+    }
+    this.queue += this.pendingTanks;
+    this.roundTotal = this.queue;
+    this.spawnedThisRound = 0;
+    this.players = players;
     this.health = zombieHealth(r);
     this.speedChances = zombieSpeedChances(r);
     this.spawnDelay = Math.max(ZOMBIE.minSpawnDelay, ZOMBIE.firstSpawnDelay * Math.pow(ZOMBIE.spawnDelayDecay, r - 1));
@@ -273,7 +293,31 @@ export class ZombieManager {
     this._call('onRoundEnd', gs.round);
   }
 
-  _spawnOne() {
+  // Tipo del siguiente zombi de la cola
+  _pickType() {
+    const r = this.gs.round | 0;
+    if (this.pendingTanks > 0 && this.spawnedThisRound >= (this.roundTotal || 0) * 0.3) {
+      const alive = this.zombies.filter((z) => z.type === 'tank').length;
+      if (alive < (r >= ZOMBIE_TYPES.tank.twoFrom ? 2 : 1)) { this.pendingTanks--; return 'tank'; }
+    }
+    // no dejar que la cola se quede sin sitio para los tanques pendientes
+    if (this.pendingTanks > 0 && this.queue <= this.pendingTanks) { this.pendingTanks--; return 'tank'; }
+    const x = Math.random();
+    const pr = typeChance(ZOMBIE_TYPES.runner, r), pb = typeChance(ZOMBIE_TYPES.bomber, r);
+    if (x < pb) return 'bomber';
+    if (x < pb + pr) return 'runner';
+    return 'normal';
+  }
+
+  // Modo desarrollo: hace aparecer ya un zombi del tipo indicado
+  spawnSpecial(type) {
+    if (!ZOMBIE_TYPES[type]) return false;
+    const ok = this._spawnOne(type);
+    if (ok) this._syncZLeft();
+    return ok;
+  }
+
+  _spawnOne(type = 'normal') {
     const gs = this.gs;
     const open = new Set(Array.isArray(gs.openZones) ? gs.openZones : [0]);
     const counts = new Array(WINDOW_INFO.length).fill(0);
@@ -322,10 +366,43 @@ export class ZombieManager {
       stuckT: 0, bestDist: Infinity, ax: x, az: zz, farT: 0, nearD: Infinity,
       wander: null, wanderUntil: 0,
       dead: false,
+      type: 'normal', tcode: 0, dmg: ZOMBIE.damage, range: ZOMBIE.attackRange,
+      windup: ZOMBIE.attackWindup, cooldown: ZOMBIE.attackCooldown, tearMult: 1, fuseAt: 0,
     };
+    this._applyType(z, type);
     this.zombies.push(z);
     this.byId.set(z.id, z);
+    this.spawnedThisRound = (this.spawnedThisRound || 0) + 1;
+    if (z.type === 'tank') this._call('broadcastEvent', { e: 'tank', id: z.id });
     return true;
+  }
+
+  _applyType(z, type) {
+    const T = ZOMBIE_TYPES[type];
+    if (!T || type === 'normal') return;
+    z.type = type;
+    z.tcode = T.code;
+    if (type === 'runner') {
+      z.hp = z.maxHp = Math.max(1, Math.round(this.health * T.hpMult));
+      z.cls = 'sprint';
+      z.speed = T.speed * (0.94 + Math.random() * 0.12);
+      z.dmg = T.damage;
+    } else if (type === 'bomber') {
+      z.hp = z.maxHp = Math.max(1, Math.round(this.health * T.hpMult));
+      z.cls = 'walk';
+      z.speed = T.speed;
+      z.dmg = T.damage;
+    } else if (type === 'tank') {
+      const extra = Math.max(0, (this.players || 1) - 1);
+      z.hp = z.maxHp = Math.round((T.hpBase + this.health * T.hpRoundMult) * (1 + T.hpPerExtraPlayer * extra));
+      z.cls = 'run';
+      z.speed = T.speed;
+      z.dmg = T.damage;
+      z.range = T.attackRange;
+      z.windup = T.windup;
+      z.cooldown = T.cooldown;
+      z.tearMult = T.tearMult;
+    }
   }
 
   _syncZLeft() {
@@ -377,6 +454,14 @@ export class ZombieManager {
     } else if (z.flags & ZF.BURNING) {
       z.flags &= ~ZF.BURNING;
       z.burnAcc = 0;
+    }
+
+    // Explosivo con la mecha encendida: tiembla quieto y estalla
+    if (z.fuseAt) {
+      z.anim = ZA.STUN;
+      z.atk = null;
+      if (now >= z.fuseAt) this._kill(z, null, { kind: 'selfdestruct', part: 'b' });
+      return;
     }
 
     switch (z.state) {
@@ -452,8 +537,9 @@ export class ZombieManager {
     }
     z.anim = ZA.TEAR;
     z.tearAcc += dt;
-    if (z.tearAcc >= ZOMBIE.tearTime) {
-      z.tearAcc -= ZOMBIE.tearTime;
+    const tearTime = ZOMBIE.tearTime * (z.tearMult || 1);
+    if (z.tearAcc >= tearTime) {
+      z.tearAcc -= tearTime;
       this._call('setBoards', z.win, Math.max(0, boards - 1), null);
     }
   }
@@ -508,7 +594,7 @@ export class ZombieManager {
         z.x = r.x; z.z = r.z;
       }
     }
-    if (!a.hit && a.t >= ZOMBIE.attackWindup) {
+    if (!a.hit && a.t >= z.windup) {
       a.hit = true;
       let inRange = false;
       if (tp) {
@@ -516,19 +602,19 @@ export class ZombieManager {
           const w = WINDOW_INFO[z.win];
           inRange = Math.hypot(tp.x - (w.land[0] + 0.5), tp.z - (w.land[1] + 0.5)) <= WINDOW_REACH + 0.35;
         } else {
-          inRange = Math.hypot(tp.x - z.x, tp.z - z.z) <= ZOMBIE.attackRange + 0.35;
+          inRange = Math.hypot(tp.x - z.x, tp.z - z.z) <= z.range + 0.35;
         }
       }
       let hit = false, blocked = false;
       if (inRange) {
-        const res = this._call('damagePlayer', a.pid, ZOMBIE.damage, z);
+        const res = this._call('damagePlayer', a.pid, z.dmg, z);
         if (res && typeof res === 'object') { hit = !!res.hit; blocked = !!res.blocked; } else hit = !!res;
       }
       this._call('broadcastEvent', { e: 'zatk', id: z.id, pid: a.pid, hit, blocked });
     }
-    if (a.t >= ZOMBIE.attackWindup + ATTACK_RECOVER) {
+    if (a.t >= z.windup + ATTACK_RECOVER) {
       z.atk = null;
-      z.nextAttackAt = a.start + ZOMBIE.attackCooldown * 1000;
+      z.nextAttackAt = a.start + z.cooldown * 1000;
       if (z.state === 'attacking') z.state = 'inside';
     }
   }
@@ -556,12 +642,20 @@ export class ZombieManager {
       if (d < bd) { bd = d; best = t; }
     }
     z.nearD = bd;
-    if (bd <= ZOMBIE.attackRange && now >= z.nextAttackAt) {
+    // Explosivo: al acercarse enciende la mecha
+    if (z.type === 'bomber' && bd <= ZOMBIE_TYPES.bomber.trigger && !z.crawler) {
+      z.fuseAt = now + ZOMBIE_TYPES.bomber.fuse * 1000;
+      z.flags |= ZF.FUSE;
+      z.anim = ZA.STUN;
+      this._call('broadcastEvent', { e: 'fuse', id: z.id });
+      return;
+    }
+    if (bd <= z.range && now >= z.nextAttackAt) {
       this._startAttack(z, best.pid, now, false);
       return;
     }
     // Ya está pegado al jugador esperando el siguiente golpe
-    if (bd <= ZOMBIE.attackRange * 0.8) {
+    if (bd <= z.range * 0.8) {
       turnTowards(z, yawTo(z.x, z.z, best.x, best.z), dt);
       z.anim = z.crawler ? ZA.CRAWL : ZA.IDLE;
       return;
@@ -730,6 +824,7 @@ export class ZombieManager {
   _respawn(z) {
     if (z.dead) return;
     this._remove(z);
+    if (z.type === 'tank') this.pendingTanks = (this.pendingTanks || 0) + 1;
     this.queue++;
     this._syncZLeft();
   }
@@ -738,7 +833,10 @@ export class ZombieManager {
     if (z.dead) return;
     this._remove(z);
     this._syncZLeft();
-    this._call('onZombieKilled', z, pid, info || { kind: 'bullet', part: 'b' });
+    const inf = info || { kind: 'bullet', part: 'b' };
+    this._call('onZombieKilled', z, pid, inf);
+    // El explosivo estalla al morir (salvo la bomba nuclear o el modo desarrollo)
+    if (z.type === 'bomber' && inf.kind !== 'nuke' && inf.kind !== 'dev') this._call('zombieExplosion', z, pid);
   }
 
   _markDirty() { this._call('markDirty'); }

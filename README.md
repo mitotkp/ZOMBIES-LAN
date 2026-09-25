@@ -61,6 +61,17 @@ que la red wifi esté configurada como **privada** y no como pública.
   - Se compran en los armarios con una cruz roja (Terminal: vendas, Bar: antídotos, Almacén: botiquines) y los zombis
     a veces las sueltan al morir: pasa por encima para recogerlas.
 
+### Zombis especiales
+
+Según avanzan las rondas aparecen, cada vez con más frecuencia:
+
+- **Corredor** (desde la ronda 3): delgado y con ojos rojos; corre siempre, pero aguanta menos.
+- **Explosivo** (desde la ronda 5): hinchado y con pústulas que brillan. Si se te acerca enciende la mecha (pita y parpadea en rojo)
+  y estalla; también estalla al morir. Mátalo de lejos: la explosión hace daño a los jugadores cercanos, pero también
+  a los zombis de alrededor.
+- **Tanque** (desde la ronda 8): enorme, con mucha vida y golpes brutales. Se anuncia con un rugido. No se deja empujar
+  y destroza las barricadas en un momento. Da 500 puntos extra y siempre suelta un potenciador.
+
 ### Armas cuerpo a cuerpo
 
 Además del Cuchillo Bowie, en las paredes hay (dibujos de tiza) un **bate con clavos** (Terminal, golpea a varios y los
@@ -89,7 +100,7 @@ Si lo ves muy oscuro, sube el **Brillo** en *Ajustes* (menú de pausa con Esc) o
 - `plan.md`: estado actual del proyecto y tareas pendientes.
 - `node server/index.js --dev`: modo desarrollo. En el chat puedes usar `/help`, `/points N`, `/round N`,
   `/power`, `/give ARMA [up]`, `/god`, `/killall`, `/pu TIPO`, `/parts`, `/doors`, `/perk VENTAJA`,
-  `/meds`, `/infect` e `/item TIPO`.
+  `/meds`, `/infect`, `/item TIPO` y `/spawn TIPO` (runner, bomber, tank).
 - `http://localhost:3000/?debug=1`: permite jugar sin capturar el ratón y muestra los FPS.
 - `npm run validate-map`: comprueba el mapa.
 - `npm run bots -- --bots 2 --seconds 120 --url ws://localhost:3000`: prueba automática del servidor con bots.

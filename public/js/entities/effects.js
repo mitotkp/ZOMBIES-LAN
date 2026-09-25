@@ -58,6 +58,12 @@ function isAttached(obj) {
 
 // Paletas de explosión por tipo
 const EXPL = {
+  bomber: {
+    scale: 1.1, nFire: 1.2, nSmoke: 1.4, nEmber: 0.8, nDebris: 0.6, dust: true, scorch: 1, lightMul: 1.1,
+    flash: [0.85, 1, 0.5], fire0: [0.75, 0.95, 0.25], fire1: [0.3, 0.35, 0.02],
+    smoke0: [0.2, 0.26, 0.12], smoke1: [0.12, 0.15, 0.08], emb0: [0.9, 1, 0.5], emb1: [0.5, 0.7, 0.1],
+    ring: [0.7, 1, 0.3], light: 0xb0ff50,
+  },
   frag: {
     scale: 1, nFire: 1, nSmoke: 1, nEmber: 1, nDebris: 1, dust: true, scorch: 1, lightMul: 1,
     flash: [1, 0.82, 0.52], fire0: [1, 0.62, 0.22], fire1: [0.5, 0.1, 0.02],
@@ -619,8 +625,8 @@ export class Effects {
     const P = _boom.set(+e.p[0] || 0, Math.max(0.05, +e.p[1] || 0), +e.p[2] || 0);
     if (!isFinite(P.x) || !isFinite(P.z)) return;
     let def = null;
-    if (e.w && e.w !== 'frag') { try { def = weaponDef(e.w, !!e.up); } catch { def = null; } }
-    let kind = 'frag';
+    if (e.w && e.w !== 'frag' && e.w !== 'bomber') { try { def = weaponDef(e.w, !!e.up); } catch { def = null; } }
+    let kind = e.w === 'bomber' ? 'bomber' : 'frag';
     if (def) {
       if (def.model === 'raygun') kind = e.up ? 'raygun_up' : 'raygun';
       else if (def.model === 'launcher') kind = 'launcher';

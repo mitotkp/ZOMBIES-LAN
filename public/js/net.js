@@ -265,7 +265,7 @@ export class Net {
         if (!Array.isArray(a)) continue;
         z.set(a[0], {
           x: +a[1] || 0, z: +a[2] || 0, rot: +a[3] || 0,
-          anim: a[4] | 0, flags: a[5] | 0, yOff: +a[6] || 0,
+          anim: a[4] | 0, flags: a[5] | 0, yOff: +a[6] || 0, type: a[7] | 0,
         });
       }
     }
@@ -331,7 +331,7 @@ export class Net {
         out.zombies.set(id, {
           x: b.x + (b.x - a.x) * k, z: b.z + (b.z - a.z) * k,
           rot: b.rot + angleDiff(a.rot, b.rot) * k,
-          anim: b.anim, flags: b.flags, yOff: b.yOff,
+          anim: b.anim, flags: b.flags, yOff: b.yOff, type: b.type,
         });
       }
       for (const [id, b] of last.p) {
@@ -363,7 +363,7 @@ export class Net {
       out.zombies.set(id, {
         x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t,
         rot: lerpAngle(a.rot, b.rot, t),
-        anim: d.anim, flags: d.flags, yOff: a.yOff + (b.yOff - a.yOff) * t,
+        anim: d.anim, flags: d.flags, yOff: a.yOff + (b.yOff - a.yOff) * t, type: b.type,
       });
     }
     for (const [id, b] of B.p) {

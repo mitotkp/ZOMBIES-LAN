@@ -4,7 +4,7 @@
 // zombis que desaparecen sin morir; sangre y reacción a los impactos de otros jugadores (ev:zhit); zarpazos (ev:zatk);
 // gruñidos y pasos en 3D. El jugador local no se dibuja.
 import * as THREE from 'three';
-import { INTERP_DELAY_MS, angleDiff } from '/shared/constants.js';
+import { INTERP_DELAY_MS, angleDiff, ZOMBIE_TYPES, ZOMBIE_TYPE_BY_CODE } from '/shared/constants.js';
 import { ZA, ZF, PF } from '/shared/protocol.js';
 import { lineOfSight } from '/shared/collision.js';
 import { ZombieModel, getZombieAssets, zombieMaterials } from './zombieModel.js';
@@ -56,6 +56,8 @@ export class EntityManager {
       ev.on('ev:zdie', (e) => this._onZDie(e));
       ev.on('ev:zhit', (e) => this._onZHit(e));
       ev.on('ev:zatk', (e) => this._onZAtk(e));
+      ev.on('ev:fuse', (e) => this._onFuse(e));
+      ev.on('ev:tank', (e) => this._onTank(e));
       ev.on('ev:fire', (e) => this._onRemoteFire(e));
       ev.on('ev:proj', (e) => this._onRemoteFire(e));
     }
@@ -147,14 +149,17 @@ export class EntityManager {
   _spawnZombie(id, s) {
     // semilla según el id: todos los clientes ven el mismo aspecto para el mismo zombi
     const seed = (Math.imul(Number(id) || 1, 2654435761) ^ 0x5bd1e995) >>> 0;
-    const model = new ZombieModel({ quality: this.quality, seed });
+    const type = ZOMBIE_TYPE_BY_CODE[s.type | 0] || 'normal';
+    const scale = (ZOMBIE_TYPES[type] && ZOMBIE_TYPES[type].scale) || 1;
+    const model = new ZombieModel({ quality: this.quality, seed, type });
     model.group.position.set(s.x, s.yOff || 0, s.z);
     model.group.rotation.y = s.rot || 0;
     this.group.add(model.group);
     const rec = {
       id, model, x: s.x, z: s.z, rot: s.rot || 0, anim: s.anim | 0, flags: s.flags | 0, yOff: s.yOff || 0,
       speed: 0, lastX: null, lastZ: null, groanAt: this.t + rnd(0.6, 5), burnAt: 0, seen: 0, crawler: false,
-      target: { id, x: s.x, z: s.z, rot: s.rot || 0, yOff: s.yOff || 0, crawler: false, anim: s.anim | 0 },
+      type, fuseBeep: 0,
+      target: { id, x: s.x, z: s.z, rot: s.rot || 0, yOff: s.yOff || 0, crawler: false, anim: s.anim | 0, scale, type },
     };
     this.zombies.set(id, rec);
     return rec;
@@ -202,6 +207,10 @@ export class EntityManager {
         try { fx.fire(g, 0.45); } catch { /* nada */ }
       }
       if (camPos) this._zombieAudio(rec, camPos);
+      if ((s.flags & ZF.FUSE) && this.t >= rec.fuseBeep) {
+        rec.fuseBeep = this.t + 0.2;
+        try { this.ctx.audio.play('round_tick', { pos: { x: rec.x, y: 1.2, z: rec.z }, volume: 0.9, rate: 1.6 }); } catch { /* sin sonido */ }
+      }
       rec.seen = this.frame;
       const tg = rec.target;
       tg.x = rec.x; tg.z = rec.z; tg.rot = rec.rot; tg.yOff = rec.yOff; tg.crawler = rec.crawler; tg.anim = rec.anim;
@@ -254,7 +263,8 @@ export class EntityManager {
         rec.model.groan();
         rec.model.getHeadWorld(_v);
         try {
-          audio.play('zombie_groan', { pos: plain(_v), volume: rnd(0.55, 0.9), rate: fast ? rnd(1.08, 1.3) : rnd(0.8, 1.02) });
+          const tank = rec.type === 'tank', runner = rec.type === 'runner';
+          audio.play('zombie_groan', { pos: plain(_v), volume: tank ? 1 : rnd(0.55, 0.9), rate: tank ? rnd(0.5, 0.6) : runner ? rnd(1.3, 1.5) : fast ? rnd(1.08, 1.3) : rnd(0.8, 1.02) });
         } catch { /* sin sonido */ }
       }
     }
@@ -264,10 +274,25 @@ export class EntityManager {
       if (d2 < 11 * 11 && rec.speed > 0.3 && this.t - S.step > 0.09) {
         S.step = this.t;
         try {
-          audio.play('zombie_step', { pos: { x: rec.x, y: 0.1, z: rec.z }, volume: Math.min(0.9, 0.3 + rec.speed * 0.12) });
+          audio.play('zombie_step', { pos: { x: rec.x, y: 0.1, z: rec.z }, volume: rec.type === 'tank' ? 1 : Math.min(0.9, 0.3 + rec.speed * 0.12), rate: rec.type === 'tank' ? 0.55 : 1 });
         } catch { /* sin sonido */ }
       }
     }
+  }
+
+  // Explosivo: enciende la mecha (destello de aviso)
+  _onFuse(e) {
+    const rec = this._zrec(e.id);
+    if (!rec) return;
+    const fx = this.ctx.effects;
+    try { if (fx) fx.flash(new THREE.Vector3(rec.x, 1.3, rec.z), 0xff7a20, 1.4); } catch { /* nada */ }
+    try { this.ctx.audio.play('pin', { pos: { x: rec.x, y: 1.2, z: rec.z }, volume: 1 }); } catch { /* sin sonido */ }
+  }
+
+  // Tanque: rugido al aparecer (se oye en todo el mapa)
+  _onTank() {
+    try { this.ctx.audio.play('zombie_groan', { volume: 1, rate: 0.42 }); } catch { /* sin sonido */ }
+    setTimeout(() => { try { this.ctx.audio.play('zombie_attack', { volume: 1, rate: 0.5 }); } catch { /* nada */ } }, 450);
   }
 
   _crawlerFx(rec) {

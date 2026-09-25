@@ -5,7 +5,7 @@
 import {
   MAX_PLAYERS, TICK_RATE, GS_MAX_RATE, SNAPSHOT_RATE, PLAYER, POINTS, BOARDS_PER_WINDOW, REPAIR_TIME,
   BOX, PAP, SHIELD, MELEE, GRENADE, POWERUPS, PLAYER_COLORS, clamp, angleDiff, yawTo, forwardXZ,
-  MEDS, MED_KEYS, MED_DROPS, INFECTION,
+  MEDS, MED_KEYS, MED_DROPS, INFECTION, ZOMBIE_TYPES,
 } from '../shared/constants.js';
 import {
   W, H, DOORS, WINDOW_INFO, INTERACTABLE_BY_ID, BOX_LOCATIONS, BOX_START, SHIELD_PARTS,
@@ -1526,7 +1526,8 @@ export class Game {
     else if (kind === 'shield') fx = 'shield';
     else if (kind === 'fire') fx = 'fire';
     else if (kind === 'bullet' && part === 'h') fx = 'head';
-    const scoring = kind !== 'nuke' && kind !== 'dev';
+    if (z.type === 'bomber' && kind !== 'nuke' && kind !== 'dev') fx = 'explode';
+    const scoring = kind !== 'nuke' && kind !== 'dev' && kind !== 'selfdestruct';
     if (p && scoring) {
       let pts = POINTS.killBody;
       if (kind === 'melee' || kind === 'shield') pts = POINTS.killMelee;
@@ -1534,7 +1535,13 @@ export class Game {
       this._addPoints(p, pts, true);
       p.kills++;
       if (kind === 'bullet' && part === 'h') p.headshots++;
+      if (z.type === 'tank') this._addPoints(p, ZOMBIE_TYPES.tank.points, true);
       this.markDirty();
+    }
+    // El tanque deja siempre un potenciador
+    if (z.type === 'tank' && kind !== 'dev') {
+      const t = this._randomPowerupType(Date.now());
+      if (t) this.spawnPowerup(t, z.x, z.z);
     }
     this._ev({ e: 'zdie', id: z.id, pid: p ? p.id : null, part, fx });
     // Potenciadores
@@ -1555,6 +1562,30 @@ export class Game {
         if (w) { x = w.land[0] + 0.5; zz = w.land[1] + 0.5; }
       }
       if (this.spawnItem(pickWeighted(MED_DROPS.weights), x, zz)) this.medDropsThisRound++;
+    }
+  }
+
+  // Explosión de un zombi explosivo: daña a los jugadores y a los zombis cercanos
+  zombieExplosion(z, pid) {
+    const T = ZOMBIE_TYPES.bomber;
+    const R = T.radius;
+    this._ev({ e: 'boom', pid: pid || 0, w: 'bomber', up: false, p: [r2(z.x), 1, r2(z.z)], r: R });
+    for (const p of this._players()) {
+      if (p.state !== 'alive') continue;
+      const d = this.pd.get(p.id);
+      if (!d || !d.hasPos) continue;
+      const dist = Math.hypot(d.x - z.x, d.z - z.z);
+      if (dist > R) continue;
+      if (!lineOfSight(z.x, 1, z.z, d.x, 1.2, d.z, this.gs.doors)) continue;
+      const amt = Math.round(T.playerDamage * (1 - 0.6 * dist / R));
+      this.damagePlayer(p.id, amt, z);
+    }
+    const killer = pid != null && this.gs.players[pid] ? pid : null;
+    for (const o of this.zombies.list().slice()) {
+      if (o.dead || o === z) continue;
+      const dist = Math.hypot(o.x - z.x, o.z - z.z);
+      if (dist > R) continue;
+      this.zombies.damage(o.id, T.zombieDamage * (1 - 0.5 * dist / R), killer, { kind: 'explosion', part: 'b' });
     }
   }
 
@@ -1687,7 +1718,7 @@ export class Game {
     this._log(`[dev] ${p.name}: ${msg}`);
     switch (cmd) {
       case 'help':
-        say('Comandos: /points N, /round N, /power, /give ARMA [up], /god, /killall, /pu TIPO, /parts, /doors, /perk VENTAJA, /meds, /infect, /item TIPO');
+        say('Comandos: /points N, /round N, /power, /give ARMA [up], /god, /killall, /pu TIPO, /parts, /doors, /perk VENTAJA, /meds, /infect, /item TIPO, /spawn TIPO');
         break;
       case 'points': {
         if (!needPlay()) break;
@@ -1738,6 +1769,13 @@ export class Game {
         const f = forwardXZ(d.yaw);
         const pu = this.spawnPowerup(type, d.x + f.x * 2, d.z + f.z * 2, now);
         if (!pu) say('No hay espacio para el potenciador.');
+        break;
+      }
+      case 'spawn': {
+        if (!needPlay()) break;
+        const type = (args[0] || '').toLowerCase();
+        if (!ZOMBIE_TYPES[type]) { say(`Tipos: ${Object.keys(ZOMBIE_TYPES).join(', ')}`); break; }
+        say(this.zombies.spawnSpecial(type) ? `Aparece: ${ZOMBIE_TYPES[type].name}.` : 'No hay ventana libre.');
         break;
       }
       case 'meds':
