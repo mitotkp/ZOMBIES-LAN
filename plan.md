@@ -60,19 +60,26 @@ partiendo de la posición de su evento `respawn`.
 2. [x] `README.md` en español.
 3. [x] Arreglar el HUD: la capa "Observando a" (`main.js`) se solapaba con el aviso "Te has desangrado" (`hud.js`).
 4. [x] Arreglar `props.js`: `bottle()` recibía `r()` (un número) en lugar del generador `r` y rompía los props.
-5. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
-   (el audio no se pudo oír en headless) y pointer lock.
-6. [ ] Partida completa a mano: comprar armas de pared y ventajas, beber, Mule Kick, escudo en la mano y en la espalda,
-   reanimar, liquidación y osito de la caja (con `/points` y `--dev` es rápido).
-7. [ ] Probar con 2 o más PCs reales en la misma red (firewall de Windows y latencia).
-8. [x] Iluminación: se subió la luz ambiente y la de cada zona, la exposición base (1.3) y se añadió el ajuste **Brillo**
+5. [x] Iluminación: se subió la luz ambiente y la de cada zona, la exposición base (1.3) y se añadió el ajuste **Brillo**
    (Ajustes, 50–200 %) y una **linterna** con la tecla L (los compañeros ven el haz).
-9. [ ] Opcional: quitar `node_modules/` del repo y añadir `.gitignore` (`start-server.bat` ya ejecuta `npm install`).
-   Se dejó dentro para poder jugar sin internet.
+6. [x] Barra de salud en el HUD (abajo a la izquierda), con la marca del límite de regeneración (60 %).
+7. [x] Curas: venda, antídoto y botiquín (tecla H), armarios de primeros auxilios y curas que sueltan los zombis.
+8. [x] Infección: 25 % por golpe; pierde vida poco a poco (1 → 4 por segundo) hasta curarse o caer; viñeta verde.
+9. [x] Armas cuerpo a cuerpo de pared: bate con clavos, machete y hacha de bombero (además del Bowie).
 10. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
    que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
+11. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
+   (el audio no se pudo oír en headless) y pointer lock.
+12. [ ] Partida completa a mano: comprar armas de pared y ventajas, beber, Mule Kick, escudo en la mano y en la espalda,
+   reanimar, liquidación y osito de la caja (con `/points` y `--dev` es rápido).
+13. [ ] Probar con 2 o más PCs reales en la misma red (firewall de Windows y latencia).
+14. [ ] Probar el equilibrio en partidas reales: probabilidad de infección, límite de regeneración (60 %), precios de las
+    curas y daño de las armas cuerpo a cuerpo (todo está en `shared/constants.js` y `MELEE_WEAPONS` en `shared/weapons.js`).
+15. [ ] Opcional: que los demás jugadores vean el arma cuerpo a cuerpo y la animación de curarse en el modelo en tercera persona.
+16. [ ] Opcional: quitar `node_modules/` del repo y añadir `.gitignore` (`start-server.bat` ya ejecuta `npm install`).
+   Se dejó dentro para poder jugar sin internet.
 
-## Mapa procedural (propuesta, pendiente de decidir)
+## Mapa procedural (propuesta para una próxima sesión: convivirá con "Pueblo Olvidado" como opción en la sala)
 
 Es posible, pero es el cambio más grande que queda: hoy todo el juego lee un mapa fijo de `shared/map.js`
 (servidor, colisiones, navegación de los zombis y cliente), y parte del decorado del cliente tiene coordenadas
@@ -105,3 +112,4 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
   se arregló el solapamiento del HUD. Probado en navegador headless.
 - **2026-09-25 (3)**: tras la prueba del usuario ("se ve muy oscuro"): más luz, ajuste de Brillo y linterna (L). Propuesta
   de mapa procedural en este documento.
+- **2026-09-25 (4)**: barra de salud, curas (H), infección y armas cuerpo a cuerpo (bate, machete, hacha).

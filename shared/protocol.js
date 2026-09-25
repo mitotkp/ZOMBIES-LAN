@@ -14,6 +14,7 @@ export const C2S = {
   USE: 'use',         // { id }                                        (interactuable de pulsación)
   HOLD: 'hold',       // { id, on: bool }                              (interactuable de mantener: win:N, bench, revive:PID)
   CHAT: 'chat',       // { msg }
+  HEAL: 'heal',       // { item: 'bandage'|'antidote'|'medkit' }  (usar una cura; item null = cancelar)
   PING: 'ping',       // { c: clientTimeMs }
 };
 

@@ -32,6 +32,8 @@ export const PLAYER = {
   jugHealth: 250,
   regenDelay: 2.5,          // segundos sin daño antes de regenerar
   regenRate: 100,           // puntos de salud por segundo
+  regenCap: 0.6,            // la regeneración natural solo llega hasta este % de la salud máxima (el resto, con curas)
+  startBandages: 1,         // vendas al aparecer
   startPoints: 500,
   startGrenades: 2,
   maxGrenades: 4,
@@ -175,6 +177,31 @@ export const GRENADE = {
   upSpeed: 3.5,
   bounce: 0.35,
   friction: 0.6,
+};
+
+// Curas (se usan con la tecla H). heal: salud que recupera (Infinity = toda); cures: quita la infección.
+export const MEDS = {
+  bandage:  { key: 'bandage',  name: 'Venda',    plural: 'Vendas',    heal: 35,       useTime: 2.0, max: 5, price: 500,  pack: 2, cures: false, color: '#e8e2d0' },
+  antidote: { key: 'antidote', name: 'Antídoto', plural: 'Antídotos', heal: 10,       useTime: 1.5, max: 2, price: 900,  pack: 1, cures: true,  color: '#39c46a' },
+  medkit:   { key: 'medkit',   name: 'Botiquín', plural: 'Botiquines', heal: Infinity, useTime: 4.0, max: 1, price: 1500, pack: 1, cures: true,  color: '#d8262a' },
+};
+export const MED_KEYS = Object.keys(MEDS);
+
+// Curas que sueltan los zombis al morir (se recogen pasando por encima si hay hueco)
+export const MED_DROPS = {
+  chance: 0.05,             // por baja
+  maxPerRound: 6,
+  lifetime: 45,             // segundos en el suelo
+  pickupRadius: 1.2,
+  weights: { bandage: 6, antidote: 2.5, medkit: 1.2 },
+};
+
+// Infección: un golpe de zombi que conecta puede infectar; se pierde vida poco a poco hasta curarse o caer
+export const INFECTION = {
+  chance: 0.25,             // probabilidad por golpe recibido
+  dps: 1.0,                 // daño por segundo al empezar
+  ramp: 0.03,               // el daño por segundo crece esto cada segundo
+  dpsMax: 4.0,
 };
 
 // Potenciadores

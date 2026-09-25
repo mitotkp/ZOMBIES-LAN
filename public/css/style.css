@@ -905,3 +905,47 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   .drip, .mn-title-glow, .am-name.is-up, .di-glyph { animation: none !important; }
 }
+
+/* ---------------------------------------------------------------- Salud, infección y curas */
+.hud-infect {
+  opacity: 0;
+  background: radial-gradient(ellipse 85% 80% at 50% 50%, rgba(60, 200, 40, 0) 40%, rgba(40, 150, 20, 0.6) 100%);
+  transition: opacity 0.3s linear;
+}
+.hud-health {
+  display: none; flex-direction: column; gap: 0.3em;
+  width: calc(var(--u) * 30); padding: 0.35em 0.6em 0.45em;
+  background: rgba(0, 0, 0, 0.42); border-left: 3px solid var(--chalk-dim);
+  font-family: var(--f-ui);
+}
+.hud-health.on { display: flex; }
+.hp-row { display: flex; align-items: baseline; gap: 0.6em; }
+.hp-label { font-size: 0.72em; letter-spacing: 0.14em; text-transform: uppercase; color: var(--chalk-dim); }
+.hp-num { font: 1.05em/1 var(--f-display); letter-spacing: 0.05em; color: var(--chalk); }
+.hp-inf {
+  display: none; margin-left: auto; font-size: 0.7em; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+  color: #8dff6a; text-shadow: 0 0 6px rgba(80, 255, 60, 0.6); animation: hp-blink 1.2s ease-in-out infinite;
+}
+.hud-health.inf .hp-inf { display: inline; }
+.hp-bar { position: relative; height: calc(var(--u) * 1.5); background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.hp-fill {
+  position: absolute; inset: 0; transform-origin: 0 50%;
+  background: linear-gradient(90deg, #b8140f, #e0342a); transition: transform 0.18s ease-out;
+}
+.hud-health.low .hp-fill { animation: hp-blink 0.8s ease-in-out infinite; }
+.hud-health.inf .hp-fill { background: linear-gradient(90deg, #3c8a1c, #7ad63a); }
+.hp-cap { position: absolute; top: 0; bottom: 0; width: 2px; background: rgba(255, 255, 255, 0.45); }
+.hp-heal { display: none; align-items: center; gap: 0.5em; font-size: 0.72em; color: var(--chalk); }
+.hp-heal.on { display: flex; }
+.hp-heal-bar { flex: 1; height: 4px; background: rgba(255, 255, 255, 0.15); }
+.hp-heal-bar i { display: block; height: 100%; background: #fff; transform-origin: 0 50%; transform: scaleX(0); }
+.hud-meds { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35em 0.8em; font-size: 0.72em; color: var(--chalk); }
+.hud-meds .med { display: inline-flex; align-items: center; gap: 0.3em; }
+.hud-meds .med i { width: 0.7em; height: 0.7em; border-radius: 2px; background: var(--mc); box-shadow: 0 0 4px var(--mc); }
+.hud-meds .med b { font-weight: 700; }
+.hud-meds .med.none { opacity: 0.4; }
+.hud-meds .med-key {
+  margin-left: auto; padding: 0 0.4em; border: 1px solid var(--chalk-dim); border-radius: 3px;
+  font-size: 0.9em; color: var(--chalk-dim);
+}
+@keyframes hp-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }

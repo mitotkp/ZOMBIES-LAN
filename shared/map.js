@@ -108,6 +108,17 @@ export const WALLBUYS = [
   { id: 'wb5', weapon: 'bowie',   x: 4,  z: 16, wall: 'W' },
   { id: 'wb6', weapon: 'ak74u',   x: 21, z: 18, wall: 'S' },
   { id: 'wb7', weapon: 'm16',     x: 40, z: 18, wall: 'S' },
+  // armas cuerpo a cuerpo
+  { id: 'wb8', weapon: 'bat',     x: 4,  z: 26, wall: 'W' },
+  { id: 'wb9', weapon: 'machete', x: 31, z: 18, wall: 'S' },
+  { id: 'wb10', weapon: 'axe',    x: 50, z: 5,  wall: 'N' },
+];
+
+// Armarios de primeros auxilios (en la pared, no sólidos). (x, z) = celda de suelo frente al muro; item = cura que venden.
+export const MED_CABINETS = [
+  { id: 0, item: 'bandage',  x: 13, z: 20, wall: 'N' },   // Terminal
+  { id: 1, item: 'antidote', x: 17, z: 14, wall: 'E' },   // Bar
+  { id: 2, item: 'medkit',   x: 36, z: 7,  wall: 'E' },   // Almacén
 ];
 
 // Máquinas de ventajas: ocupan una celda (sólida). face = hacia dónde mira el frente (donde se para el jugador).
@@ -278,7 +289,8 @@ build();
 // ---------------------------------------------------------------------------
 // Cada interactuable: { id, kind, x, z (punto de mundo donde se para el jugador / centro de la interacción), y, ...extra }
 // kinds: 'door' | 'wallbuy' | 'perk' | 'pap' | 'power' | 'box' | 'bench' | 'part' | 'window'
-// Ids: 'door:A', 'wall:wb0', 'perk:juggernog', 'pap', 'power', 'box:0'..'box:3', 'bench', 'part:0'..'part:2', 'win:0'..'win:12'
+// Ids: 'door:A', 'wall:wb0', 'perk:juggernog', 'pap', 'power', 'box:0'..'box:3', 'bench', 'part:0'..'part:2', 'win:0'..'win:12',
+//      'med:bandage' | 'med:antidote' | 'med:medkit'
 
 function frontOfRect(x0, z0, x1, z1, face) {
   const d = DIRS[face];
@@ -305,6 +317,15 @@ export const INTERACTABLES = (() => {
       x: wb.x + 0.5, z: wb.z + 0.5, y: 1.5,
       // punto sobre la superficie del muro donde va el dibujo de tiza
       wx: wb.x + 0.5 + d.dx * 0.5, wz: wb.z + 0.5 + d.dz * 0.5, wall: wb.wall,
+      range: 1.9,
+    });
+  }
+  for (const mc of MED_CABINETS) {
+    const d = DIRS[mc.wall];
+    list.push({
+      id: `med:${mc.item}`, kind: 'med', item: mc.item, cabinet: mc.id,
+      x: mc.x + 0.5, z: mc.z + 0.5, y: 1.4,
+      wx: mc.x + 0.5 + d.dx * 0.5, wz: mc.z + 0.5 + d.dz * 0.5, wall: mc.wall,
       range: 1.9,
     });
   }

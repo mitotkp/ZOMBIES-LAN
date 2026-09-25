@@ -24,7 +24,9 @@ export const CONTROL_GROUPS = [
       [['G'], 'Granada'],
       [['Q'], 'Escudo'],
   [['L'], 'Linterna'],
+  [['H'], 'Curarse'],
       [['L'], 'Linterna'],
+      [['H'], 'Curarse (venda, antídoto o botiquín)'],
       [['1', '2', '3', 'Rueda'], 'Cambiar de arma'],
     ],
   },
@@ -66,7 +68,7 @@ export const CONTROLS_SHORT = [
 
 export const CONTROLS_LINE =
   'WASD mover · Ratón mirar · Clic izq. disparar · Clic der. apuntar · Shift correr · C/Ctrl agacharse · Espacio saltar · ' +
-  'R recargar · F usar/comprar (mantener para reconstruir, construir y reanimar) · V cuchillo · G granada · Q escudo · L linterna · ' +
+  'R recargar · F usar/comprar (mantener para reconstruir, construir y reanimar) · V cuchillo · G granada · Q escudo · L linterna · H curarse · ' +
   '1/2/3 o rueda cambiar de arma · Tab puntuaciones · T/Enter chat · Esc pausa';
 
 export const TIPS = [

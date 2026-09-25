@@ -11,12 +11,13 @@ import { Lighting } from './lighting.js';
 import { Sky, FOG_COLOR, FOG_DENSITY } from './sky.js';
 import { Powerups } from './powerups.js';
 import { Flashlight } from './flashlight.js';
+import { MedItems } from './medical.js';
 import { POWERUP_INFO } from '/shared/constants.js';
 
 // Eventos del servidor que se reenvían a los objetos interactivos
 const FORWARD = [
   'door', 'power', 'board', 'boxOpen', 'boxTeddy', 'boxMove', 'papStart', 'papReady', 'perk', 'part', 'built',
-  'pu', 'puSpawn', 'shieldTake',
+  'pu', 'puSpawn', 'shieldTake', 'itemSpawn', 'itemPick',
 ];
 
 export class World {
@@ -59,6 +60,8 @@ export class World {
     this.interactives = createInteractives(this, B);
     this.powerups = new Powerups(this);
     this.interactives.push(this.powerups);
+    this.medItems = new MedItems(this);
+    this.interactives.push(this.medItems);
     this.flashlight = new Flashlight(this);
     this.interactives.push(this.flashlight);
 

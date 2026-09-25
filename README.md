@@ -51,6 +51,21 @@ que la red wifi esté configurada como **privada** y no como pública.
    y ventajas, activa la electricidad y mejora tu arma en el Pack-a-Punch.
 5. Si caes, un compañero puede reanimarte. Si caen todos, se acaba la partida.
 
+### Salud, infección y curas
+
+- La barra de **salud** está abajo a la izquierda. Sin curas solo se regenera hasta el 60 % (la marca blanca de la barra).
+- Un golpe de zombi puede **infectarte**: la barra se pone verde y pierdes vida poco a poco hasta curarte o caer.
+- Pulsa **H** para curarte. Se usa la cura más adecuada: el antídoto si estás infectado, el botiquín si te queda poca vida
+  y, si no, una venda.
+  - **Venda**: +35 de salud (máx. 5). **Antídoto**: cura la infección (máx. 2). **Botiquín**: salud completa y cura la infección (máx. 1).
+  - Se compran en los armarios con una cruz roja (Terminal: vendas, Bar: antídotos, Almacén: botiquines) y los zombis
+    a veces las sueltan al morir: pasa por encima para recogerlas.
+
+### Armas cuerpo a cuerpo
+
+Además del Cuchillo Bowie, en las paredes hay (dibujos de tiza) un **bate con clavos** (Terminal, golpea a varios y los
+empuja), un **machete** (Almacén) y un **hacha de bombero** (Planta Eléctrica). Sustituyen al cuchillo en la tecla V.
+
 Si lo ves muy oscuro, sube el **Brillo** en *Ajustes* (menú de pausa con Esc) o enciende la linterna con **L**.
 
 ### Controles
@@ -64,6 +79,7 @@ Si lo ves muy oscuro, sube el **Brillo** en *Ajustes* (menú de pausa con Esc) o
 | Usar / comprar | F (mantener para reconstruir, construir y reanimar) |
 | Cuchillo / granada / escudo | V / G / Q |
 | Linterna | L |
+| Curarse (venda, antídoto o botiquín) | H (otra vez para cancelar) |
 | Cambiar de arma | 1, 2, 3 o rueda del ratón |
 | Puntuaciones / chat / pausa | Tab / T o Enter / Esc |
 
@@ -72,7 +88,8 @@ Si lo ves muy oscuro, sube el **Brillo** en *Ajustes* (menú de pausa con Esc) o
 - `SPEC.md`: especificación técnica completa (protocolo, estado de juego y API de cada módulo).
 - `plan.md`: estado actual del proyecto y tareas pendientes.
 - `node server/index.js --dev`: modo desarrollo. En el chat puedes usar `/help`, `/points N`, `/round N`,
-  `/power`, `/give ARMA [up]`, `/god`, `/killall`, `/pu TIPO`, `/parts`, `/doors` y `/perk VENTAJA`.
+  `/power`, `/give ARMA [up]`, `/god`, `/killall`, `/pu TIPO`, `/parts`, `/doors`, `/perk VENTAJA`,
+  `/meds`, `/infect` e `/item TIPO`.
 - `http://localhost:3000/?debug=1`: permite jugar sin capturar el ratón y muestra los FPS.
 - `npm run validate-map`: comprueba el mapa.
 - `npm run bots -- --bots 2 --seconds 120 --url ws://localhost:3000`: prueba automática del servidor con bots.

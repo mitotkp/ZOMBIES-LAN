@@ -4,7 +4,7 @@
 import { INTERACTABLES, DOORS, SHIELD_PARTS } from '/shared/map.js';
 import { WEAPONS, weaponName, ammoPrice } from '/shared/weapons.js';
 import { PERKS, PERK_LIMIT, perkPrice } from '/shared/perks.js';
-import { PLAYER, BOX, PAP, SHIELD, MELEE, REPAIR_TIME, BOARDS_PER_WINDOW, clamp } from '/shared/constants.js';
+import { PLAYER, BOX, PAP, SHIELD, MELEE, MEDS, REPAIR_TIME, BOARDS_PER_WINDOW, clamp } from '/shared/constants.js';
 
 const LOOK_ANGLE = (70 * Math.PI) / 180;   // puertas y armas de pared: hay que mirarlas
 const ANGLE_WEIGHT = 0.35;                  // desempate por ángulo entre objetivos casi equidistantes
@@ -134,7 +134,7 @@ export class Interaction {
       const al = Math.hypot(ax, az);
       let angle = 0;
       if (al > 0.05) angle = Math.acos(clamp((ax * fx + az * fz) / al, -1, 1));
-      if ((it.kind === 'door' || it.kind === 'wallbuy') && al > 0.05 && angle > LOOK_ANGLE) continue;
+      if ((it.kind === 'door' || it.kind === 'wallbuy' || it.kind === 'med') && al > 0.05 && angle > LOOK_ANGLE) continue;
       const score = d + angle * ANGLE_WEIGHT;
       if (score >= bestScore) continue;
       const info = this._describe(it, gs, self);
@@ -191,7 +191,7 @@ export class Interaction {
         const def = WEAPONS[key];
         if (!def) return null;
         if (key === 'bowie' || def.melee) {
-          if (self.melee === 'bowie') return null;
+          if (self.melee === key) return null;
           const cost = def.price || MELEE.bowiePrice;
           return { ...base, mode: 'use', text: `Pulsa F para comprar el ${def.name} [Costo: ${cost}]`, cost };
         }
@@ -248,6 +248,14 @@ export class Interaction {
           return { ...base, mode: 'use', text: `Pulsa F para mejorar tu arma [Costo: ${PAP.price}]`, cost: PAP.price };
         }
         return null;
+      }
+      case 'med': {
+        const def = MEDS[it.item];
+        if (!def) return null;
+        const have = self.meds ? (self.meds[it.item] | 0) : 0;
+        if (have >= def.max) return { ...base, mode: 'info', text: `Ya llevas el máximo de ${def.plural.toLowerCase()} (${def.max})` };
+        const what = def.pack > 1 ? `${def.plural} x${def.pack}` : def.name;
+        return { ...base, mode: 'use', text: `Pulsa F para comprar: ${what} [Costo: ${def.price}]`, cost: def.price };
       }
       case 'part': {
         const parts = gs.shield && Array.isArray(gs.shield.parts) ? gs.shield.parts : null;

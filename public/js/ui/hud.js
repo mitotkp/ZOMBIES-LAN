@@ -3,8 +3,8 @@
 
 import * as THREE from 'three';
 import { PERKS } from '/shared/perks.js';
-import { POWERUP_INFO, PLAYER, angleDiff, yawTo, clamp } from '/shared/constants.js';
-import { weaponName } from '/shared/weapons.js';
+import { POWERUP_INFO, PLAYER, MEDS, MED_KEYS, angleDiff, yawTo, clamp } from '/shared/constants.js';
+import { weaponName, meleeStats } from '/shared/weapons.js';
 import { MAP_NAME, SHIELD_PARTS } from '/shared/map.js';
 import { esc, safeColor, mulberry32, serverNow, sfx, ensureChalkDefs, isDebugUrl } from './uiutil.js';
 
@@ -32,6 +32,7 @@ const TEMPLATE = `
 <svg class="hud-defs" width="0" height="0" aria-hidden="true"><defs><linearGradient id="zlDmgGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff2a1a"/><stop offset="1" stop-color="#7a0000" stop-opacity="0"/></linearGradient></defs></svg>
 <div class="hud-layer hud-vignette"></div>
 <div class="hud-layer hud-hurt"></div>
+<div class="hud-layer hud-infect"></div>
 <div class="hud-layer hud-splats"></div>
 <div class="hud-layer hud-flash"></div>
 <div class="hud-scope"><div class="scope-glass"></div><i class="scope-h"></i><i class="scope-v"></i><i class="scope-dot"></i></div>
@@ -46,7 +47,7 @@ const TEMPLATE = `
 <div class="hud-reload"></div>
 <div class="hud-downpanel"><div class="dp-title"></div><div class="dp-sub"></div><div class="dp-bar"><i></i></div></div>
 <div class="hud-chat"><div class="chat-feed"></div><div class="chat-entry"><span class="chat-label">Decir:</span><input class="chat-input" type="text" maxlength="120" autocomplete="off" spellcheck="false"></div></div>
-<div class="hud-bl"><div class="hud-parts"></div><div class="hud-perks"></div><div class="hud-round"></div></div>
+<div class="hud-bl"><div class="hud-parts"></div><div class="hud-perks"></div><div class="hud-round"></div><div class="hud-health"><div class="hp-row"><span class="hp-label">Salud</span><span class="hp-num"></span><span class="hp-inf">Infectado</span></div><div class="hp-bar"><i class="hp-fill"></i><i class="hp-cap"></i></div><div class="hp-heal"><span class="hp-heal-t"></span><div class="hp-heal-bar"><i></i></div></div><div class="hud-meds"></div></div></div>
 <div class="hud-br">
   <div class="hud-scores"></div>
   <div class="hud-ammo">
@@ -156,6 +157,8 @@ export class HUD {
       ammo: q('.hud-ammo'), amName: q('.am-name'), amMag: q('.am-mag'), amRes: q('.am-res'), amSep: q('.am-sep'),
       amMelee: q('.am-melee'), amShield: q('.am-shield'), amShieldBar: q('.am-shield-bar i'), amNades: q('.am-nades'),
       powerups: q('.hud-powerups'), scoreboard: q('.hud-scoreboard'), dev: q('.hud-dev'),
+      infect: q('.hud-infect'), health: q('.hud-health'), hpNum: q('.hp-num'), hpFill: q('.hp-fill'), hpCap: q('.hp-cap'),
+      hpInf: q('.hp-inf'), hpHeal: q('.hp-heal'), hpHealT: q('.hp-heal-t'), hpHealBar: q('.hp-heal-bar i'), meds: q('.hud-meds'),
     };
 
     this.time = 0;
@@ -367,6 +370,23 @@ export class HUD {
     });
 
     this._on('ev:power', () => this.message('¡Electricidad activada!', 3));
+    this._on('ev:infected', (e) => {
+      if (!this._isSelf(e.pid)) return;
+      this._flash('rgba(90,220,70,0.35)', 0.9);
+      this._banner('¡Estás infectado!', 'Pierdes salud poco a poco · Pulsa H para usar un antídoto o un botiquín', '#6fe04a');
+    });
+    this._on('ev:healed', (e) => {
+      if (!this._isSelf(e.pid)) return;
+      const def = MEDS[e.item];
+      sfx(this.ctx, 'revive');
+      this._flash('rgba(255,255,255,0.18)', 0.5);
+      if (def) this.message(def.cures ? `${def.name}: infección curada` : `${def.name}: +${def.heal} de salud`, 2);
+    });
+    this._on('ev:itemPick', (e) => {
+      if (!this._isSelf(e.pid)) return;
+      const def = MEDS[e.type];
+      if (def) this.message(`Has recogido: ${def.name}`, 1.8);
+    });
     this._on('ev:boxMove', () => this.message('La Caja Misteriosa se ha movido a otro lugar', 3.5));
     this._on('ev:part', (e) => {
       const part = SHIELD_PARTS.find((p) => p.id === +e.id);
@@ -450,6 +470,7 @@ export class HUD {
     this._updateCrosshair(self, dt, menusOpen);
     this._updateHitmarker(dt);
     this._updateHealth(self, dt);
+    this._updateVitals(self, now);
     this._updateDamageDirs(dt);
     this._updateSplats(dt);
     this._updateDownState(self, gs, now);
@@ -622,7 +643,7 @@ export class HUD {
       el.amShieldBar.style.transform = `scaleX(${f.toFixed(3)})`;
       el.amShield.classList.toggle('low', f < 0.3);
     }
-    el.amMelee.innerHTML = melee === 'bowie' ? `${ICONS.knife}<span>Bowie</span>` : '';
+    el.amMelee.innerHTML = melee && melee !== 'knife' ? `${ICONS.knife}<span>${esc(meleeStats(melee).name)}</span>` : '';
     return info;
   }
 
@@ -722,6 +743,48 @@ export class HUD {
     // Latido con poca salud
     if (self && self.state === 'alive' && hpFrac < 0.35) this._startHeartbeat();
     else this._stopHeartbeat();
+  }
+
+  // Barra de salud, infección, curas en el inventario y progreso de la cura en uso
+  _updateVitals(self, now) {
+    const el = this.el;
+    const alive = !!self && self.state === 'alive';
+    el.health.classList.toggle('on', alive);
+    const inf = alive && !!self.infected;
+    el.infect.style.opacity = inf ? (0.32 + 0.14 * Math.sin(this.time * 2.6)).toFixed(3) : '0';
+    if (!alive) return;
+    const maxHp = +self.maxHp || PLAYER.health;
+    const hp = Math.max(0, Math.round(+self.hp || 0));
+    const f = clamp(hp / maxHp, 0, 1);
+    const c = this._cache;
+    const key = `${hp}|${maxHp}|${inf}`;
+    if (c.vitals !== key) {
+      c.vitals = key;
+      el.hpNum.textContent = `${hp} / ${maxHp}`;
+      el.hpFill.style.transform = `scaleX(${f.toFixed(3)})`;
+      el.hpCap.style.left = `${(PLAYER.regenCap * 100).toFixed(1)}%`;
+      el.health.classList.toggle('low', f < 0.35);
+      el.health.classList.toggle('inf', inf);
+    }
+    // curas
+    const meds = self.meds || {};
+    const mkey = MED_KEYS.map((k) => meds[k] | 0).join(',');
+    if (c.meds !== mkey) {
+      c.meds = mkey;
+      el.meds.innerHTML = MED_KEYS.map((k) => {
+        const n = meds[k] | 0;
+        return `<span class="med ${n ? '' : 'none'}" style="--mc:${MEDS[k].color}"><i></i>${esc(MEDS[k].name)} <b>${n}</b></span>`;
+      }).join('') + '<span class="med-key">H</span>';
+    }
+    // cura en curso
+    const h = self.healing && MEDS[self.healing.item] ? self.healing : null;
+    el.hpHeal.classList.toggle('on', !!h);
+    if (h) {
+      const def = MEDS[h.item];
+      const p = clamp(1 - ((+h.until || now) - now) / (def.useTime * 1000), 0, 1);
+      if (c.healT !== h.item) { c.healT = h.item; el.hpHealT.textContent = `Usando: ${def.name}`; }
+      el.hpHealBar.style.transform = `scaleX(${p.toFixed(3)})`;
+    } else c.healT = null;
   }
 
   _startHeartbeat() {

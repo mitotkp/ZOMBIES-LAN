@@ -4,7 +4,7 @@
 // cambio de arma, cuchillo, granada, escudo, beber ventajas y última batalla.
 import * as THREE from 'three';
 import {
-  createWeaponMesh, createShieldMesh, createKnifeMesh, createGrenadeMesh, createBottleMesh,
+  createWeaponMesh, createShieldMesh, createKnifeMesh, createMeleeMesh, createGrenadeMesh, createBottleMesh,
   getFlashTexture, getArmMaterials,
 } from './models.js';
 
@@ -56,6 +56,14 @@ const KNIFE_KEYS = [
   { t: 0.4, p: [-0.03, -0.1, -0.5], r: [-0.1, -0.05, 0.3] },
   { t: 0.62, p: [-0.22, -0.28, -0.42], r: [-0.3, -0.6, 0.9] },
   { t: 1.0, p: [0.05, -0.55, -0.32], r: [-0.2, -0.2, 0.4] },
+];
+// Golpe amplio para armas pesadas (bate, machete, hacha): se alza sobre el hombro derecho y cruza en diagonal
+const SWING_KEYS = [
+  { t: 0.0, p: [0.3, -0.35, -0.25], r: [0.6, -0.2, -0.3] },
+  { t: 0.28, p: [0.3, -0.02, -0.18], r: [1.45, -0.35, -0.5] },
+  { t: 0.5, p: [0.02, -0.14, -0.42], r: [0.15, 0.85, -1.25] },
+  { t: 0.72, p: [-0.24, -0.32, -0.38], r: [-0.55, 1.25, -0.9] },
+  { t: 1.0, p: [0.12, -0.62, -0.3], r: [-0.3, 0.3, 0.0] },
 ];
 // Lanzar granada: sube, quita la anilla, echa el brazo atrás y lanza
 const THROW_KEYS = [
@@ -150,6 +158,14 @@ export class ViewModel {
     this.knifeCombat = createKnifeMesh(false);
     this.knifeBowie = createKnifeMesh(true);
     this.knifeHolder.add(this.knifeCombat, this.knifeBowie);
+    this.meleeMeshes = { knife: this.knifeCombat, bowie: this.knifeBowie };
+    for (const k of ['bat', 'machete', 'axe']) {
+      const m = createMeleeMesh(k);
+      m.visible = false;
+      m.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
+      this.meleeMeshes[k] = m;
+      this.knifeHolder.add(m);
+    }
     this.knifeHolder.visible = false;
     this.sway.add(this.knifeHolder);
 
@@ -220,7 +236,7 @@ export class ViewModel {
     this.switchState = 'lowering';
     this.switchLower = 1;
     this.actionLower = 0;
-    this.knifeT = -1; this.knifeBowieOn = false;
+    this.knifeT = -1; this.knifeBowieOn = false; this.knifeKey = 'knife'; this.knifeDur = KNIFE_DUR;
     this.throwT = -1;
     this.drinkT = -1; this.drinkDur = DRINK_DUR;
     this.bashT = -1;
@@ -323,9 +339,14 @@ export class ViewModel {
     }
   }
 
-  playKnife(bowie = false) {
+  // key: 'knife' | 'bowie' | 'bat' | 'machete' | 'axe' (un booleano = bowie o no, por compatibilidad)
+  playKnife(key = 'knife', dur = KNIFE_DUR) {
+    if (key === true) key = 'bowie';
+    else if (!key || key === false) key = 'knife';
     this.knifeT = 0;
-    this.knifeBowieOn = !!bowie;
+    this.knifeKey = this.meleeMeshes[key] ? key : 'knife';
+    this.knifeBowieOn = this.knifeKey === 'bowie';
+    this.knifeDur = dur > 0 ? dur : KNIFE_DUR;
   }
   playThrow() { this.throwT = 0; }
   playBash() { this.bashT = 0; }
@@ -394,7 +415,7 @@ export class ViewModel {
     let knifeU = -1, throwU = -1, drinkU = -1, bashU = -1;
     if (this.knifeT >= 0) {
       this.knifeT += dt;
-      knifeU = this.knifeT / KNIFE_DUR;
+      knifeU = this.knifeT / this.knifeDur;
       if (knifeU >= 1) { this.knifeT = -1; knifeU = -1; } else actLower = Math.max(actLower, 0.6 * bump(knifeU, 0, 0.15, 0.7, 1));
     }
     if (this.throwT >= 0) {
@@ -544,11 +565,11 @@ export class ViewModel {
     // cuchillo
     this.knifeHolder.visible = knifeU >= 0;
     if (knifeU >= 0) {
-      sampleKeys(KNIFE_KEYS, knifeU, this._tmpP, this._tmpR);
+      const heavy = this.knifeKey === 'bat' || this.knifeKey === 'machete' || this.knifeKey === 'axe';
+      sampleKeys(heavy ? SWING_KEYS : KNIFE_KEYS, knifeU, this._tmpP, this._tmpR);
       this.knifeHolder.position.copy(this._tmpP);
       this.knifeHolder.rotation.set(this._tmpR.x, this._tmpR.y, this._tmpR.z);
-      this.knifeCombat.visible = !this.knifeBowieOn;
-      this.knifeBowie.visible = this.knifeBowieOn;
+      for (const k in this.meleeMeshes) this.meleeMeshes[k].visible = k === this.knifeKey;
     }
     // granada
     this.throwHolder.visible = throwU >= 0;
@@ -608,6 +629,10 @@ export class ViewModel {
         leftW.add(R.leftOff);
         this.sway.localToWorld(leftW);
       }
+      hasLeft = true;
+    } else if (knifeU >= 0 && this.meleeMeshes[this.knifeKey] && this.meleeMeshes[this.knifeKey].userData.grip2) {
+      // armas a dos manos: la izquierda agarra el mango por detrás de la derecha
+      this.meleeMeshes[this.knifeKey].localToWorld(leftW.copy(this.meleeMeshes[this.knifeKey].userData.grip2));
       hasLeft = true;
     } else if (knifeU < 0 && throwU < 0) {
       this.sway.localToWorld(leftW.set(-0.15, -0.21, -0.36).add(fistBob));

@@ -17,6 +17,7 @@ export const DEFAULT_BINDINGS = {
   grenade: ['KeyG'],
   shield: ['KeyQ'],
   flashlight: ['KeyL'],
+  heal: ['KeyH'],
   weapon1: ['Digit1', 'Numpad1'],
   weapon2: ['Digit2', 'Numpad2'],
   weapon3: ['Digit3', 'Numpad3'],

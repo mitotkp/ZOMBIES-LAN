@@ -4,9 +4,9 @@
 // "última batalla". El arma en primera persona se dibuja con ViewModel en una escena propia (vmScene/vmCamera)
 // y los proyectiles/granadas se simulan con Projectiles. También muestra los disparos de los demás jugadores.
 import * as THREE from 'three';
-import { WEAPONS, weaponDef, fireInterval } from '/shared/weapons.js';
+import { WEAPONS, weaponDef, fireInterval, meleeStats } from '/shared/weapons.js';
 import { PERKS } from '/shared/perks.js';
-import { PLAYER, MELEE, SHIELD, GRENADE, clamp, lerp } from '/shared/constants.js';
+import { PLAYER, MELEE, SHIELD, GRENADE, MEDS, clamp, lerp } from '/shared/constants.js';
 import { raycastMap } from '/shared/collision.js';
 import { r2, r3 } from '/shared/protocol.js';
 import { updateCamo } from './models.js';
@@ -166,7 +166,7 @@ export class WeaponSystem {
       shieldOut: !!this.shieldOut,
       lowAmmo: !!(def && mag !== null && mag <= Math.max(1, Math.ceil(def.mag * 0.25))),
       noAmmo: !!(def && mag === 0 && reserve === 0),
-      melee: self && self.melee === 'bowie' ? 'bowie' : 'knife',
+      melee: self && self.melee ? self.melee : 'knife',
     };
   }
 
@@ -197,9 +197,9 @@ export class WeaponSystem {
     this.reload = null;
     this.cycle = null;
     this.autoReloadAt = -1;
-    this.knifeT = -1; this.knifeHitDone = false; this.meleeCd = 0;
+    this.knifeT = -1; this.knifeHitDone = false; this.meleeCd = 0; this.knifeDur = KNIFE_DUR; this.knifeHitAt = KNIFE_HIT;
     this.throwT = -1; this.throwDone = false;
-    this.drinkT = -1;
+    this.drinkT = -1; this.drinkDur = DRINK_DUR; this.drinkKind = 'perk'; this.healKey = null;
     this.bashT = -1; this.bashDone = false; this.bashCd = 0;
     this.shieldOut = false;
     this.shotCount = 0;
@@ -258,6 +258,7 @@ export class WeaponSystem {
     this._fixActive(self);
     this._syncNades(self);
     this._checkPendingGive(self);
+    this._syncHealing(self);
   }
 
   // Copia el inventario del servidor: armas nuevas con munición llena, las que desaparecen se descartan
@@ -493,6 +494,7 @@ export class WeaponSystem {
       else this._tryKnife(self);
     }
     if (input.pressed('grenade') && alive) this._tryThrow();
+    if (input.pressed('heal') && alive) this._requestHeal(self);
     if (input.pressed('reload')) this._tryReload();
     if (this.shieldOut) {
       this.burstLeft = 0;
@@ -993,8 +995,8 @@ export class WeaponSystem {
   _updateActions(dt) {
     if (this.knifeT >= 0) {
       this.knifeT += dt;
-      if (!this.knifeHitDone && this.knifeT >= KNIFE_HIT) { this.knifeHitDone = true; this._knifeHit(); }
-      if (this.knifeT >= KNIFE_DUR) this.knifeT = -1;
+      if (!this.knifeHitDone && this.knifeT >= this.knifeHitAt) { this.knifeHitDone = true; this._knifeHit(); }
+      if (this.knifeT >= this.knifeDur) this.knifeT = -1;
     }
     if (this.bashT >= 0) {
       this.bashT += dt;
@@ -1012,9 +1014,11 @@ export class WeaponSystem {
     if (this.drinkT >= 0) {
       const prev = this.drinkT;
       this.drinkT += dt;
-      if (prev < 0.4 && this.drinkT >= 0.4) this._play('perk_drink');
-      if (prev < 1.3 && this.drinkT >= 1.3) this._play('perk_burp', { volume: 0.8 });
-      if (this.drinkT >= DRINK_DUR) {
+      if (this.drinkKind === 'perk') {
+        if (prev < 0.4 && this.drinkT >= 0.4) this._play('perk_drink');
+        if (prev < 1.3 && this.drinkT >= 1.3) this._play('perk_burp', { volume: 0.8 });
+      } else if (prev < 0.25 && this.drinkT >= 0.25) this._play('reload_out', { volume: 0.7, rate: 0.8 });
+      if (this.drinkT >= this.drinkDur) {
         this.drinkT = -1;
         this._scheduleAutoReload(0.3);
       }
@@ -1024,29 +1028,35 @@ export class WeaponSystem {
   _tryKnife(self) {
     if (this.knifeT >= 0 || this.throwT >= 0 || this.drinkT >= 0 || this.meleeCd > 0) return;
     this._interrupt();
+    const ms = meleeStats(self.melee);
     this.knifeT = 0;
     this.knifeHitDone = false;
-    this.meleeCd = MELEE.cooldown;
-    this._safe('vm.playKnife', () => this.vm.playKnife(self.melee === 'bowie'));
-    this._play('knife', { volume: 0.9 });
+    this.knifeDur = ms.dur;
+    this.knifeHitAt = ms.hit;
+    this.meleeCd = ms.cd;
+    this._safe('vm.playKnife', () => this.vm.playKnife(ms.key, ms.dur));
+    this._play('knife', { volume: 0.9, rate: ms.dur > 0.5 ? 0.7 : 1 });
   }
 
   _knifeHit() {
     const self = this.ctx.self, p = this.ctx.player;
     if (!self || self.state !== 'alive' || !p || !p.position) return;
     const eyeY = p.eye ? p.eye.y : p.position.y + PLAYER.eyeHeight;
+    const ms = meleeStats(self.melee);
     const list = meleeTargets(this._targets(), p.position.x, p.position.z, eyeY, p.yaw || 0,
-      MELEE.range, MELEE.arcDeg, 1, this._doors());
+      ms.range, ms.arc, ms.targets, this._doors());
     if (!list.length) return;
-    const z = list[0];
-    this._send({ t: 'melee', hits: [zidOf(z.id)], shield: false });
-    const dir = new V3(z.x - p.position.x, 0, z.z - p.position.z);
-    if (dir.lengthSq() > 1e-6) dir.normalize(); else dir.set(0, 0, -1);
-    this._fx('blood', new V3(z.x, z.y, z.z), dir, self.melee === 'bowie' ? 1.6 : 1.1);
-    this._ents('hitReact', z.id, 'b');
+    this._send({ t: 'melee', hits: list.map((z) => zidOf(z.id)), shield: false });
+    const heavy = ms.key !== 'knife';
+    for (const z of list) {
+      const dir = new V3(z.x - p.position.x, 0, z.z - p.position.z);
+      if (dir.lengthSq() > 1e-6) dir.normalize(); else dir.set(0, 0, -1);
+      this._fx('blood', new V3(z.x, z.y, z.z), dir, heavy ? 1.6 : 1.1);
+      this._ents('hitReact', z.id, 'b');
+    }
     this._hud('hitmarker', 'hit');
-    this._play('knife_hit', { volume: 0.9 });
-    if (typeof p.shake === 'function') p.shake(0.12, 0.1);
+    this._play(ms.knock ? 'bash' : 'knife_hit', { volume: 0.9 });
+    if (typeof p.shake === 'function') p.shake(heavy ? 0.2 : 0.12, heavy ? 0.14 : 0.1);
   }
 
   _tryBash() {
@@ -1116,7 +1126,62 @@ export class WeaponSystem {
     this._cancelAll();
     this.shieldOut = false;
     this.drinkT = 0;
+    this.drinkDur = DRINK_DUR;
+    this.drinkKind = 'perk';
     this._safe('vm.playDrink', () => this.vm.playDrink(info ? info.color : '#e0282e', DRINK_DUR));
+  }
+
+  // ================================================================== curas (tecla H)
+  // Elige la cura más adecuada: antídoto si hay infección, botiquín con poca vida, si no venda.
+  _pickMed(self) {
+    const meds = self.meds || {};
+    const has = (k) => (meds[k] | 0) > 0;
+    const hurt = (+self.hp || 0) < (+self.maxHp || PLAYER.health);
+    const low = (+self.hp || 0) <= (+self.maxHp || PLAYER.health) * 0.4;
+    if (self.infected) {
+      if (has('antidote')) return 'antidote';
+      if (has('medkit')) return 'medkit';
+    }
+    if (!hurt) return null;
+    if (low && has('medkit')) return 'medkit';
+    if (has('bandage')) return 'bandage';
+    if (has('medkit')) return 'medkit';
+    return null;
+  }
+
+  _requestHeal(self) {
+    if (self.healing) { this._send({ t: 'heal', item: null }); return; }   // volver a pulsar H cancela
+    if (this.drinkT >= 0 || this.throwT >= 0 || this.knifeT >= 0) return;
+    const item = this._pickMed(self);
+    if (!item) {
+      const meds = self.meds || {};
+      const any = (meds.bandage | 0) + (meds.antidote | 0) + (meds.medkit | 0) > 0;
+      this._hud('message', !any ? 'No tienes curas' : self.infected ? 'Necesitas un antídoto o un botiquín' : 'Ya tienes la salud al máximo', 1.8);
+      this._play('deny', { volume: 0.6 });
+      return;
+    }
+    this._send({ t: 'heal', item });
+  }
+
+  // La cura la decide el servidor (self.healing); aquí solo se anima
+  _syncHealing(self) {
+    const h = self.healing && MEDS[self.healing.item] ? self.healing : null;
+    const key = h ? `${h.item}:${h.until}` : null;
+    if (key === this.healKey) return;
+    this.healKey = key;
+    if (h) {
+      const def = MEDS[h.item];
+      this._cancelAll();
+      this.shieldOut = false;
+      this.drinkT = 0;
+      this.drinkDur = def.useTime;
+      this.drinkKind = 'heal';
+      this._safe('vm.playDrink', () => this.vm.playDrink(def.color, def.useTime));
+    } else if (this.drinkKind === 'heal' && this.drinkT >= 0) {
+      this.drinkT = -1;
+      this._safe('vm.cancelActions', () => this.vm.cancelActions());
+      this._scheduleAutoReload(0.2);
+    }
   }
 
   // ================================================================== eventos del servidor

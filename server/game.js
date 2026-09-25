@@ -5,18 +5,32 @@
 import {
   MAX_PLAYERS, TICK_RATE, GS_MAX_RATE, SNAPSHOT_RATE, PLAYER, POINTS, BOARDS_PER_WINDOW, REPAIR_TIME,
   BOX, PAP, SHIELD, MELEE, GRENADE, POWERUPS, PLAYER_COLORS, clamp, angleDiff, yawTo, forwardXZ,
+  MEDS, MED_KEYS, MED_DROPS, INFECTION,
 } from '../shared/constants.js';
 import {
   W, H, DOORS, WINDOW_INFO, INTERACTABLE_BY_ID, BOX_LOCATIONS, BOX_START, SHIELD_PARTS,
   PLAYER_SPAWNS, PLAYER_SPAWN_YAW, START_ZONE,
 } from '../shared/map.js';
 import { solidForPlayer, lineOfSight } from '../shared/collision.js';
-import { WEAPONS, weaponDef, weaponName, BOX_POOL, ammoPrice, partMult, falloff } from '../shared/weapons.js';
+import { WEAPONS, weaponDef, weaponName, BOX_POOL, ammoPrice, partMult, falloff, meleeStats } from '../shared/weapons.js';
 import { PERKS, PERK_LIMIT, perkPrice } from '../shared/perks.js';
 import { PF, r2, safeParse } from '../shared/protocol.js';
 import { ZombieManager } from './zombies.js';
 
 const DEG = Math.PI / 180;
+
+// Curas con las que aparece un jugador
+function freshMeds() { return { bandage: PLAYER.startBandages, antidote: 0, medkit: 0 }; }
+
+// Elige una clave según pesos { clave: peso }
+function pickWeighted(weights) {
+  const entries = Object.entries(weights);
+  let total = 0;
+  for (const [, w] of entries) total += w;
+  let r = Math.random() * total;
+  for (const [k, w] of entries) { r -= w; if (r <= 0) return k; }
+  return entries[entries.length - 1][0];
+}
 const GAMEOVER_TIME = 15000;          // ms en la pantalla final antes de volver al lobby
 const TELEPORT_GRACE = 3000;          // ms tras reaparecer en los que se acepta cualquier salto de posición
 const MAX_JUMP = 3;                   // m máximos por mensaje 'st'
@@ -75,6 +89,8 @@ export class Game {
     this.nextPuId = 1;
     this.lastPuType = null;
     this.dropsThisRound = 0;
+    this.medDropsThisRound = 0;
+    this.nextItemId = 1;
     this.gameOverAt = 0;
     this.boxPriv = BOX_LOCATIONS.map(() => ({ teddy: false, weapon: null, paid: 0 }));
     this.errorCount = 0;
@@ -103,6 +119,7 @@ export class Game {
       pap: { state: 'idle', user: null, weapon: null, until: 0 },
       shield: { parts: SHIELD_PARTS.map(() => false), built: false, builder: null, buildUntil: 0 },
       powerups: [],
+      items: [],                     // curas en el suelo: { id, type, x, z, until }
       timers: { instakill: 0, doublepoints: 0, firesale: 0 },
       players: {},
     };
@@ -122,6 +139,7 @@ export class Game {
       melee: 'knife',
       shield: null,
       bleedUntil: 0, selfReviveAt: 0, reviver: null, reviveUntil: 0, qrUses: 0,
+      infected: false, meds: freshMeds(), healing: null,
     });
     return p;
   }
@@ -136,6 +154,7 @@ export class Game {
       state: p.state, hp: p.hp, maxHp: p.maxHp, perks: p.perks, weapons: p.weapons, cur: p.cur,
       grenades: p.grenades, melee: p.melee, shield: p.shield, bleedUntil: p.bleedUntil,
       selfReviveAt: p.selfReviveAt, reviver: p.reviver, reviveUntil: p.reviveUntil, qrUses: p.qrUses, ping: p.ping,
+      infected: p.infected, meds: p.meds, healing: p.healing,
     };
   }
 
@@ -147,6 +166,7 @@ export class Game {
       lastDamageAt: 0, invulnUntil: 0,
       hold: null, nades: [], lastMeleeAt: 0, boomTimes: [], fireTimes: [],
       repairPts: 0, god: false, chatTimes: [], bleedRemain: 0,
+      infT: 0, infAcc: 0,
     };
   }
 
@@ -355,6 +375,7 @@ export class Game {
       this._updateBox(now);
       this._updatePap(now);
       this._updatePowerups(now);
+      this._updateItems(now);
       this._updateTimers(now);
       try { this.zombies.update(dt); } catch (e) { this._logError('zombis', e); }
       if (gs.phase === 'playing') this._checkGameOver(now);
@@ -403,6 +424,7 @@ export class Game {
       case 'use': this._onUse(p, d, m, now); break;
       case 'hold': this._onHold(p, d, m, now); break;
       case 'chat': this._onChat(p, d, m, now); break;
+      case 'heal': this._onHeal(p, d, m, now); break;
       default: break;
     }
   }
@@ -645,12 +667,13 @@ export class Game {
     if (this.gs.phase !== 'playing' || p.state !== 'alive' || !d.hasPos) return;
     const shield = !!m.shield;
     if (shield && !p.shield) return;
-    const cd = (shield ? SHIELD.bashCooldown : MELEE.cooldown) * 1000 * 0.7;
+    const ms = meleeStats(p.melee);
+    const cd = (shield ? SHIELD.bashCooldown : ms.cd) * 1000 * 0.7;
     if (now - d.lastMeleeAt < cd) return;
     d.lastMeleeAt = now;
     const raw = Array.isArray(m.hits) ? m.hits : [];
-    const ids = [...new Set(raw.filter((v) => Number.isInteger(v)))].slice(0, shield ? 8 : 2);
-    const range = (shield ? Math.max(SHIELD.bashRange, MELEE.range) : MELEE.range) + 1;
+    const ids = [...new Set(raw.filter((v) => Number.isInteger(v)))].slice(0, shield ? 8 : ms.targets);
+    const range = (shield ? Math.max(SHIELD.bashRange, ms.range) : ms.range) + 1;
     const instakill = this._timerActive('instakill', now);
     for (const zid of ids) {
       const z = this.zombies.get(zid);
@@ -671,16 +694,106 @@ export class Game {
         this.markDirty();
         if (p.shield.hp <= 0) this._breakShield(p);
       } else {
-        const dmg = p.melee === 'bowie' ? MELEE.bowieDamage : MELEE.knifeDamage;
-        const res = this.zombies.damage(zid, dmg, p.id, {
+        const res = this.zombies.damage(zid, ms.dmg, p.id, {
           part: 'b', kind: 'melee', weapon: p.melee, upgraded: false, instakill, special: null,
+          knockFrom: ms.knock ? { x: d.x, z: d.z } : undefined,
         }) || {};
         if (res.existed && !res.killed) {
+          if (ms.knock) this.zombies.knockback(zid, d.x, d.z, ms.knock);
           this._addPoints(p, POINTS.hit, true);
           this._ev({ e: 'zhit', id: zid, pid: p.id, part: 'b' }, { except: p.id });
         }
       }
     }
+  }
+
+  // ---- curas e infección
+
+  _onHeal(p, d, m, now) {
+    if (this.gs.phase !== 'playing' || p.state !== 'alive') return;
+    if (m.item == null) { if (p.healing) { p.healing = null; this.markDirty(); } return; }
+    const item = typeof m.item === 'string' ? m.item : '';
+    const def = MEDS[item];
+    if (!def) return;
+    if (p.healing) { this._deny(p.id, 'busy'); return; }
+    if (!p.meds || (p.meds[item] | 0) <= 0) { this._msg(p.id, `No tienes ${def.plural.toLowerCase()}.`); return; }
+    const useful = (def.cures && p.infected) || (def.heal > 0 && p.hp < p.maxHp);
+    if (!useful) { this._msg(p.id, p.infected ? 'Eso no cura la infección.' : 'Ya tienes la salud al máximo.'); return; }
+    p.healing = { item, until: now + def.useTime * 1000 };
+    this.markDirty();
+    this.flushGs();
+    this._ev({ e: 'healStart', pid: p.id, item });
+  }
+
+  _finishHeal(p, d, now) {
+    const item = p.healing.item;
+    const def = MEDS[item];
+    p.healing = null;
+    this.markDirty();
+    if (!def || !p.meds || (p.meds[item] | 0) <= 0) return;
+    p.meds[item]--;
+    if (def.heal > 0) p.hp = Math.min(p.maxHp, Math.round(p.hp + (Number.isFinite(def.heal) ? def.heal : p.maxHp)));
+    if (def.cures && p.infected) { p.infected = false; d.infT = 0; d.infAcc = 0; }
+    this._ev({ e: 'healed', pid: p.id, item });
+  }
+
+  _updateInfection(p, d, dt, now) {
+    if (d.god && p.hp <= 1) return;   // con /god la infección baja la vida pero no derriba
+    d.infT += dt;
+    const dps = Math.min(INFECTION.dpsMax, INFECTION.dps + INFECTION.ramp * d.infT);
+    d.infAcc += dps * dt;
+    if (d.infAcc < 1) return;
+    const n = Math.floor(d.infAcc);
+    d.infAcc -= n;
+    p.hp = Math.max(0, p.hp - n);
+    this.markDirty();
+    if (p.hp <= 0) this._goDown(p, d, now);
+  }
+
+  _useMed(p, item) {
+    const def = MEDS[item];
+    if (!def) return;
+    if (!p.meds) p.meds = freshMeds();
+    const have = p.meds[item] | 0;
+    if (have >= def.max) { this._deny(p.id, 'full'); return; }
+    if (!this._spend(p, def.price)) return;
+    p.meds[item] = Math.min(def.max, have + def.pack);
+    this.markDirty();
+    this._ev({ e: 'buy', pid: p.id, kind: 'med', item });
+  }
+
+  // Cura en el suelo (la suelta un zombi); se recoge pasando por encima si hay hueco
+  spawnItem(type, x, z, now = Date.now()) {
+    if (!MEDS[type]) return null;
+    const pt = this._walkablePoint(x, z);
+    if (!pt) return null;
+    const it = { id: this.nextItemId++, type, x: r2(pt.x), z: r2(pt.z), until: now + MED_DROPS.lifetime * 1000 };
+    this.gs.items.push(it);
+    this.markDirty();
+    this._ev({ e: 'itemSpawn', id: it.id, type, x: it.x, z: it.z });
+    return it;
+  }
+
+  _updateItems(now) {
+    const gs = this.gs;
+    if (!gs.items.length) return;
+    const keep = [];
+    for (const it of gs.items) {
+      if (now >= it.until) continue;
+      const def = MEDS[it.type];
+      let taker = null;
+      for (const p of this._players()) {
+        if (p.state !== 'alive' || !p.meds || (p.meds[it.type] | 0) >= def.max) continue;
+        const d = this.pd.get(p.id);
+        if (!d || !d.hasPos) continue;
+        if (Math.hypot(d.x - it.x, d.z - it.z) <= MED_DROPS.pickupRadius) { taker = p; break; }
+      }
+      if (taker) {
+        taker.meds[it.type] = (taker.meds[it.type] | 0) + 1;
+        this._ev({ e: 'itemPick', id: it.id, type: it.type, pid: taker.id, x: it.x, z: it.z });
+      } else keep.push(it);
+    }
+    if (keep.length !== gs.items.length) { gs.items = keep; this.markDirty(); }
   }
 
   _breakShield(p) {
@@ -712,6 +825,7 @@ export class Game {
       case 'pap': this._usePap(p, now); break;
       case 'part': this._usePart(p, it.part); break;
       case 'bench': this._useBench(p); break;
+      case 'med': this._useMed(p, it.item); break;
       default: break; // ventanas: solo con 'hold'
     }
   }
@@ -780,11 +894,11 @@ export class Game {
     const base = WEAPONS[key];
     if (!base) return;
     if (key === 'bowie' || base.melee) {
-      if (p.melee === 'bowie') { this._deny(p.id, 'owned'); return; }
+      if (p.melee === key) { this._deny(p.id, 'owned'); return; }
       if (!this._spend(p, base.price || MELEE.bowiePrice)) return;
-      p.melee = 'bowie';
+      p.melee = key;
       this.markDirty();
-      this._ev({ e: 'buy', pid: p.id, kind: 'bowie', item: 'bowie' });
+      this._ev({ e: 'buy', pid: p.id, kind: key === 'bowie' ? 'bowie' : 'melee', item: key });
       return;
     }
     const slot = p.weapons.findIndex((x) => x.k === key);
@@ -1166,7 +1280,12 @@ export class Game {
     p.hp = Math.max(0, p.hp - amt);
     d.lastDamageAt = now;
     this.markDirty();
-    if (p.hp <= 0) this._goDown(p, d, now);
+    if (p.hp <= 0) { this._goDown(p, d, now); return { hit: true, blocked: false }; }
+    if (!p.infected && Math.random() < INFECTION.chance) {
+      p.infected = true;
+      d.infT = 0; d.infAcc = 0;
+      this._ev({ e: 'infected', pid: p.id });
+    }
     return { hit: true, blocked: false };
   }
 
@@ -1174,6 +1293,8 @@ export class Game {
     this._cancelHold(p, d, now);
     p.state = 'down';
     p.hp = 0;
+    p.infected = false;
+    p.healing = null;
     p.downs++;
     const loss = Math.floor(p.points * PLAYER.downPointsLoss);
     if (loss > 0) {
@@ -1207,6 +1328,8 @@ export class Game {
     const d = this.pd.get(p.id);
     p.state = 'alive';
     p.hp = p.maxHp;
+    p.infected = false;
+    p.healing = null;
     p.bleedUntil = 0;
     p.selfReviveAt = 0;
     p.reviver = null;
@@ -1226,6 +1349,7 @@ export class Game {
     Object.assign(p, {
       state: 'dead', hp: 0, maxHp: PLAYER.health, perks: [], weapons: [], cur: 0, grenades: 0,
       melee: 'knife', shield: null, bleedUntil: 0, selfReviveAt: 0, reviver: null, reviveUntil: 0,
+      infected: false, meds: { bandage: 0, antidote: 0, medkit: 0 }, healing: null,
     });
     this.markDirty();
     this.flushGs();
@@ -1241,7 +1365,9 @@ export class Game {
       state: 'alive', hp: PLAYER.health, maxHp: PLAYER.health, perks: [],
       weapons: [{ k: PLAYER.startWeapon, up: false }], cur: 0, grenades: PLAYER.startGrenades,
       melee: 'knife', shield: null, bleedUntil: 0, selfReviveAt: 0, reviver: null, reviveUntil: 0,
+      infected: false, meds: freshMeds(), healing: null,
     });
+    d.infT = 0; d.infAcc = 0;
     d.x = sp.x; d.y = 0; d.z = sp.z; d.yaw = PLAYER_SPAWN_YAW; d.pitch = 0; d.flags = 0;
     d.hasPos = true; d.teleportUntil = now + TELEPORT_GRACE; d.badPos = 0;
     d.lastDamageAt = 0; d.invulnUntil = now + SPAWN_INVULN; d.hold = null; d.nades = [];
@@ -1254,12 +1380,16 @@ export class Game {
       const d = this.pd.get(p.id);
       if (!d) continue;
       if (p.state === 'alive') {
-        if (p.hp < p.maxHp && now - d.lastDamageAt >= PLAYER.regenDelay * 1000) {
-          p.hp = Math.min(p.maxHp, Math.round(p.hp + PLAYER.regenRate * dt));
+        // Regeneración natural solo hasta regenCap (y nunca infectado)
+        const cap = Math.round(p.maxHp * PLAYER.regenCap);
+        if (!p.infected && p.hp < cap && now - d.lastDamageAt >= PLAYER.regenDelay * 1000) {
+          p.hp = Math.min(cap, Math.round(p.hp + PLAYER.regenRate * dt));
           this.markDirty();
         }
         if (p.hp > p.maxHp) { p.hp = p.maxHp; this.markDirty(); }
-        this._updateHold(p, d, now);
+        if (p.infected) this._updateInfection(p, d, dt, now);
+        if (p.state === 'alive' && p.healing && now >= p.healing.until) this._finishHeal(p, d, now);
+        if (p.state === 'alive') this._updateHold(p, d, now);
       } else if (p.state === 'down') {
         if (p.selfReviveAt && now >= p.selfReviveAt) this._revive(p, null, now);
         else if (p.reviver == null && !p.selfReviveAt && p.bleedUntil && now >= p.bleedUntil) this._bleedout(p, now);
@@ -1415,6 +1545,15 @@ export class Game {
       const type = this._randomPowerupType(Date.now());
       if (type && this.spawnPowerup(type, x, zz)) this.dropsThisRound++;
     }
+    // Curas
+    if (scoring && this.medDropsThisRound < MED_DROPS.maxPerRound && Math.random() < MED_DROPS.chance) {
+      let x = z.x, zz = z.z;
+      if (z.state === 'outside' || z.state === 'tearing' || z.state === 'climbing') {
+        const w = WINDOW_INFO[z.win];
+        if (w) { x = w.land[0] + 0.5; zz = w.land[1] + 0.5; }
+      }
+      if (this.spawnItem(pickWeighted(MED_DROPS.weights), x, zz)) this.medDropsThisRound++;
+    }
   }
 
   setBoards(win, n, pid) {
@@ -1430,6 +1569,7 @@ export class Game {
   onRoundStart(round) {
     const now = Date.now();
     this.dropsThisRound = 0;
+    this.medDropsThisRound = 0;
     for (const d of this.pd.values()) d.repairPts = 0;
     const respawns = [];
     for (const p of this._players()) {
@@ -1462,6 +1602,8 @@ export class Game {
     this.nextPuId = 1;
     this.lastPuType = null;
     this.dropsThisRound = 0;
+    this.medDropsThisRound = 0;
+    this.nextItemId = 1;
     const respawns = [];
     for (const p of this._players()) {
       this._resetPlayer(p);
@@ -1543,7 +1685,7 @@ export class Game {
     this._log(`[dev] ${p.name}: ${msg}`);
     switch (cmd) {
       case 'help':
-        say('Comandos: /points N, /round N, /power, /give ARMA [up], /god, /killall, /pu TIPO, /parts, /doors, /perk VENTAJA');
+        say('Comandos: /points N, /round N, /power, /give ARMA [up], /god, /killall, /pu TIPO, /parts, /doors, /perk VENTAJA, /meds, /infect, /item TIPO');
         break;
       case 'points': {
         if (!needPlay()) break;
@@ -1572,7 +1714,7 @@ export class Game {
         const key = (args[0] || '').toLowerCase();
         const up = /^(up|1|true|pap)$/i.test(args[1] || '');
         if (!WEAPONS[key]) { say(`Arma desconocida. Opciones: ${Object.keys(WEAPONS).join(', ')}`); break; }
-        if (key === 'bowie' || WEAPONS[key].melee) { p.melee = 'bowie'; this.markDirty(); say('Cuchillo Bowie equipado.'); break; }
+        if (key === 'bowie' || WEAPONS[key].melee) { p.melee = key; this.markDirty(); say(`${WEAPONS[key].name} equipado.`); break; }
         this._giveWeapon(p, key, up && !!WEAPONS[key].pap);
         say(`Recibiste ${weaponName(key, up && !!WEAPONS[key].pap)}.`);
         break;
@@ -1594,6 +1736,26 @@ export class Game {
         const f = forwardXZ(d.yaw);
         const pu = this.spawnPowerup(type, d.x + f.x * 2, d.z + f.z * 2, now);
         if (!pu) say('No hay espacio para el potenciador.');
+        break;
+      }
+      case 'meds':
+        if (!needPlay()) break;
+        p.meds = { bandage: MEDS.bandage.max, antidote: MEDS.antidote.max, medkit: MEDS.medkit.max };
+        this.markDirty();
+        say('Curas al máximo.');
+        break;
+      case 'infect':
+        if (!needPlay() || p.state !== 'alive') break;
+        p.infected = true; d.infT = 0; d.infAcc = 0;
+        this.markDirty();
+        this._ev({ e: 'infected', pid: p.id });
+        break;
+      case 'item': {
+        if (!needPlay()) break;
+        const type = (args[0] || 'bandage').toLowerCase();
+        if (!MEDS[type]) { say(`Tipos: ${MED_KEYS.join(', ')}`); break; }
+        const f = forwardXZ(d.yaw);
+        if (!this.spawnItem(type, d.x + f.x * 2, d.z + f.z * 2, now)) say('No hay espacio.');
         break;
       }
       case 'parts':

@@ -1055,6 +1055,60 @@ function buildKnife(g, bowie) {
   return { muzzle: V(0, 0, -0.22), sight: V(0, 0.04, 0), leftHand: V(0, 0, 0) };
 }
 
+// ------------------------------------------------------------------ Armas cuerpo a cuerpo pesadas
+// Origen en la empuñadura (mano derecha), la hoja/cabeza hacia -Z. userData.grip2 = punto de la mano izquierda.
+function buildBat(g) {
+  const wood = woodMat(0x9a7448);
+  add(g, CZ(0.017, 0.015, 0.2, 10), MAT('grip_tape', () => new THREE.MeshStandardMaterial({ color: 0x2a2a2e, roughness: 0.9 })), 0, 0, 0.0);
+  add(g, CZ(0.022, 0.022, 0.012, 10), wood, 0, 0, 0.1);                      // pomo
+  add(g, CZ(0.036, 0.018, 0.34, 12), wood, 0, 0, -0.27);                     // se ensancha
+  add(g, CZ(0.038, 0.036, 0.26, 12), wood, 0, 0, -0.57);                     // cabeza
+  add(g, SPH(0.038, 12, 8), wood, 0, 0, -0.7);
+  // clavos
+  const nail = metalMat(0x8a8e94);
+  for (let i = 0; i < 9; i++) {
+    const a = i * 2.3, z = -0.48 - (i % 3) * 0.07;
+    add(g, CY(0.0025, 0.0025, 0.05, 4), nail, Math.cos(a) * 0.045, Math.sin(a) * 0.045, z, 0, 0, a - PI / 2);
+  }
+  return { muzzle: V(0, 0, -0.72), sight: V(0, 0.05, 0), leftHand: V(0, 0, 0.07), grip2: V(0, 0, 0.07) };
+}
+
+function buildMachete(g) {
+  add(g, CZ(0.015, 0.016, 0.13, 10), MAT('machete_grip', () => new THREE.MeshStandardMaterial({ color: 0x2a1c14, roughness: 0.85 })), 0, 0, 0.01);
+  add(g, B(0.012, 0.03, 0.02), metalMat(0x3a3c40), 0, 0, -0.06);             // guarda
+  const steel = MAT('machete_blade', () => new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.35, metalness: 0.85 }));
+  add(g, B(0.004, 0.05, 0.42), steel, 0, 0.006, -0.28);
+  add(g, B(0.0042, 0.02, 0.38), metalMat(0x5a5e64), 0, 0.028, -0.27);       // lomo
+  add(g, B(0.004, 0.035, 0.08), steel, 0, 0.0, -0.5, 0.35);                  // punta
+  return { muzzle: V(0, 0, -0.54), sight: V(0, 0.05, 0), leftHand: V(0, 0, 0) };
+}
+
+function buildAxe(g) {
+  const handle = woodMat(0xb08a58);
+  add(g, CZ(0.018, 0.02, 0.72, 10), handle, 0, 0, -0.26);
+  add(g, CZ(0.022, 0.022, 0.03, 10), rubberMat(), 0, 0, 0.08);
+  const red = MAT('axe_red', () => new THREE.MeshStandardMaterial({ color: 0xb01818, roughness: 0.4, metalness: 0.5 }));
+  add(g, B(0.04, 0.07, 0.09), red, 0, 0, -0.6);                              // ojo
+  add(g, B(0.012, 0.16, 0.11), red, 0, 0.08, -0.6);                          // hoja
+  add(g, B(0.008, 0.03, 0.115), chromeMat(), 0, 0.165, -0.6);                // filo
+  add(g, CONEZ(0.02, 0.1, 6), red, 0, -0.08, -0.6, PI / 2, 0, 0);            // pico
+  return { muzzle: V(0, 0, -0.65), sight: V(0, 0.05, 0), leftHand: V(0, 0, 0.05), grip2: V(0, 0, 0.05) };
+}
+
+// Modelo del arma cuerpo a cuerpo equipada: 'knife' | 'bowie' | 'bat' | 'machete' | 'axe'
+export function createMeleeMesh(key) {
+  if (key === 'knife' || key === 'bowie' || !key) return createKnifeMesh(key === 'bowie');
+  const g = new THREE.Group();
+  g.name = 'melee_' + key;
+  let ud;
+  if (key === 'bat') ud = buildBat(g);
+  else if (key === 'machete') ud = buildMachete(g);
+  else if (key === 'axe') ud = buildAxe(g);
+  else return createKnifeMesh(false);
+  g.userData = Object.assign(DEFAULT_UD(), ud, { key, upgraded: false, model: key });
+  return g;
+}
+
 // ------------------------------------------------------------------ API: arma
 const DEFAULT_UD = () => ({
   muzzle: V(0, 0.06, -0.5), sight: V(0, 0.1, 0), eyeRelief: 0.16,
@@ -1088,6 +1142,9 @@ export function createWeaponMesh(key, upgraded = false) {
     case 'raygun2': ud = buildRaygun2(g, def, P, up); break;
     case 'launcher': ud = buildLauncher(g, def, P); break;
     case 'knife': ud = buildKnife(g, key === 'bowie'); break;
+    case 'bat': ud = buildBat(g); break;
+    case 'machete': ud = buildMachete(g); break;
+    case 'axe': ud = buildAxe(g); break;
     default: break;
   }
   g.userData = Object.assign(DEFAULT_UD(), ud, { key: key || null, upgraded: up, model });

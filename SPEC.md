@@ -115,6 +115,13 @@ Import map (en index.html):
   de trabajo (mantener F 3 s). Cada jugador puede tomar uno. En las manos bloquea golpes frontales y permite golpear
   (empuja y daña); en la espalda bloquea golpes por detrás. Tiene 1500 de vida; al romperse se puede tomar otro en la mesa.
 - **Potenciadores** (3% por baja, máx. 4 por ronda): Max Ammo, Insta-Kill, Doble Puntos, Bomba Nuclear, Carpintero, Liquidación.
+- **Salud y curas** (añadido): la regeneración natural solo llega al 60 % (`PLAYER.regenCap`). Las **curas** (`MEDS`) se usan
+  con H: venda (+35, 2 s), antídoto (cura la infección, +10, 1,5 s) y botiquín (salud completa y cura, 4 s). Se compran en
+  armarios de primeros auxilios (`MED_CABINETS`) o las sueltan los zombis (`MED_DROPS`, se recogen pasando por encima).
+- **Infección** (añadido): cada golpe de zombi que conecta tiene un 25 % de infectar. Infectado: sin regeneración y se pierde
+  vida poco a poco (1 → 4 por segundo) hasta curarse o caer. Caer o ser reanimado quita la infección.
+- **Armas cuerpo a cuerpo** (añadido): de pared, sustituyen al cuchillo (`MELEE_WEAPONS` en `shared/weapons.js`): Bowie,
+  bate con clavos (golpea a 3 y empuja), machete (golpea a 2) y hacha de bombero (mucho daño, empuja).
 - **Caer**: con 0 de salud el jugador cae ("última batalla": pistola, se arrastra). Pierde todas sus ventajas, la 3.ª arma
   y el 5% de sus puntos. Un compañero lo reanima manteniendo F (4 s; 2 s con Quick Revive). A los 45 s se desangra y
   espera a la siguiente ronda para reaparecer con la M1911. En solitario, Quick Revive (500) reanima solo (máx. 3 veces).
@@ -151,6 +158,7 @@ El servidor mantiene un objeto de estado y lo envía completo como `{ t:'gs', ..
   pap: { state: 'idle'|'working'|'ready', user: null|pid, weapon: null|key, until: 0 },
   shield: { parts: [false,false,false], built: false, builder: null|pid, buildUntil: 0 },
   powerups: [ { id: 1, type: 'maxammo', x: 10.2, z: 25.7, until: ms } ],
+  items: [ { id: 1, type: 'bandage'|'antidote'|'medkit', x, z, until: ms } ],   // curas en el suelo
   timers: { instakill: 0, doublepoints: 0, firesale: 0 },   // ms de fin (0 = inactivo)
   players: {
     "1": {
@@ -162,8 +170,11 @@ El servidor mantiene un objeto de estado y lo envía completo como `{ t:'gs', ..
       weapons: [ { k: 'm1911', up: false }, { k: 'mp5', up: true } ],   // 2 (3 con Mule Kick); puede quedar vacío tras un PaP
       cur: 0,                        // índice de arma en la mano (lo informa el cliente)
       grenades: 2,
-      melee: 'knife' | 'bowie',
+      melee: 'knife' | 'bowie' | 'bat' | 'machete' | 'axe',
       shield: null | { hp: 1500 },
+      infected: false,               // infección activa
+      meds: { bandage: 1, antidote: 0, medkit: 0 },   // curas que lleva
+      healing: null | { item, until }, // cura en uso (ms de fin)
       bleedUntil: 0,                 // ms en que se desangra (estado 'down')
       selfReviveAt: 0,               // ms de auto-reanimación en solitario (0 si no aplica)
       reviver: null | pid,           // quién lo está reanimando
@@ -194,6 +205,7 @@ El servidor mantiene un objeto de estado y lo envía completo como `{ t:'gs', ..
 | `melee` | `hits:[zid...], shield` | cuchillo o golpe con escudo |
 | `use` | `id` | interactuable de pulsación (ver 4.3) |
 | `hold` | `id, on` | interactuable de mantener: `win:N`, `bench`, `revive:PID`. `on:false` al soltar |
+| `heal` | `item` | usar una cura (`bandage`, `antidote` o `medkit`); `item: null` cancela |
 | `chat` | `msg` | máx. 120 caracteres. En modo desarrollo, los mensajes que empiezan con `/` son comandos (ver 5.12) |
 | `ping` | `c` | tiempo del cliente; el servidor responde `pong` |
 
@@ -228,6 +240,7 @@ Los ids vienen de `INTERACTABLES` en `shared/map.js`, más `revive:PID`. El serv
 | `bench` | use | si el escudo está construido y el jugador no tiene uno: toma un escudo |
 | `bench` | hold | si están las 3 piezas y no está construido: construye (3 s manteniendo) |
 | `win:N` | hold | reconstruye una tabla cada `REPAIR_TIME` s (la mitad con Speed Cola) mientras mantenga |
+| `med:ITEM` | use | compra curas en el armario (vendas x2, antídoto o botiquín) si no lleva el máximo |
 | `revive:PID` | hold | reanima al caído (4 s, 2 s con Quick Revive) mientras mantenga y esté cerca |
 
 ### 4.4 Eventos (`{ t:'ev', e, ... }`)
@@ -252,7 +265,7 @@ Los ids vienen de `INTERACTABLES` en `shared/map.js`, más `revive:PID`. El serv
 | `roundEnd` | `round` | todos | música de fin de ronda |
 | `door` | `id, pid` | todos | abrir puerta/escombros |
 | `power` | `pid` | todos | electricidad activada |
-| `buy` | `pid, kind, item` | todos | `kind` ∈ `'weapon','ammo','perk','box','pap','door','bowie'`; el comprador oye la "caja registradora" |
+| `buy` | `pid, kind, item` | todos | `kind` ∈ `'weapon','ammo','perk','box','pap','door','bowie','melee','med'`; el comprador oye la "caja registradora" |
 | `deny` | `reason` | solo pid | `'points','power','limit','full','busy','owned'` → sonido de error + mensaje |
 | `give` | `pid, slot` | solo pid | el arma del `slot` es nueva: llenar munición y cambiar a ella |
 | `ammo` | `pid, slot` | solo pid | recargar munición de reserva (slot `null` = todas) |
@@ -273,6 +286,11 @@ Los ids vienen de `INTERACTABLES` en `shared/map.js`, más `revive:PID`. El serv
 | `chat` | `pid, name, msg` | todos | chat (incluye mensajes del sistema con `pid` 0) |
 | `gameover` | `round, stats:[{id,name,color,points,kills,headshots,downs,revives}]` | todos | pantalla final |
 | `msg` | `text` | solo pid | aviso genérico |
+| `infected` | `pid` | todos | el jugador ha sido infectado |
+| `healStart` | `pid, item` | todos | empieza a usar una cura |
+| `healed` | `pid, item` | todos | cura aplicada |
+| `itemSpawn` | `id, type, x, z` | todos | cura en el suelo |
+| `itemPick` | `id, type, pid, x, z` | todos | cura recogida |
 
 ---------------------------------------------------------------------------------------------------
 
@@ -389,7 +407,7 @@ compran la puerta A cuando pueden, y registran rondas, bajas y errores. Debe pod
 `node tools/bot-test.js --bots 2 --seconds 120 --url ws://localhost:3000`.
 
 ### 5.5 Modo desarrollo (`--dev`)
-Comandos por chat: `/points N`, `/round N` (mata a todos y salta a la ronda N), `/power`, `/give KEY [up]`, `/god` (invulnerable),
+Comandos por chat: `/meds` (curas al máximo), `/infect`, `/item TIPO`, `/points N`, `/round N` (mata a todos y salta a la ronda N), `/power`, `/give KEY [up]`, `/god` (invulnerable),
 `/killall`, `/pu TYPE` (aparece delante del jugador), `/parts` (todas las piezas), `/doors` (abre todas), `/perk KEY`.
 El cliente muestra una marca "DEV" si `welcome.dev`.
 
@@ -474,7 +492,7 @@ connected
 ### 6.5 `Input` (`js/input.js`)
 Acciones y teclas por defecto:
 `forward` W, `back` S, `left` A, `right` D, `sprint` Shift, `crouch` C/Ctrl, `jump` Espacio, `fire` clic izq., `ads` clic der.,
-`reload` R, `use` F, `melee` V, `grenade` G, `shield` Q, `flashlight` L, `weapon1` 1, `weapon2` 2, `weapon3` 3, `nextWeapon` rueda abajo,
+`reload` R, `use` F, `melee` V, `grenade` G, `shield` Q, `flashlight` L, `heal` H, `weapon1` 1, `weapon2` 2, `weapon3` 3, `nextWeapon` rueda abajo,
 `prevWeapon` rueda arriba, `scoreboard` Tab, `chat` T o Enter, `pause` Esc.
 ```js
 isDown(action) → bool;  pressed(action) → bool (flanco en este frame);  released(action) → bool
@@ -689,5 +707,5 @@ Objetivo de rendimiento: 60 FPS en un portátil medio con 24 zombis y 4 jugadore
 ## 8. Controles (pantalla de ayuda)
 
 WASD mover · Ratón mirar · Clic izq. disparar · Clic der. apuntar · Shift correr · C/Ctrl agacharse · Espacio saltar ·
-R recargar · F usar/comprar (mantener para reconstruir, construir y reanimar) · V cuchillo · G granada · Q escudo · L linterna ·
+R recargar · F usar/comprar (mantener para reconstruir, construir y reanimar) · V cuchillo · G granada · Q escudo · L linterna · H curarse ·
 1/2/3 o rueda cambiar de arma · Tab puntuaciones · T/Enter chat · Esc pausa.

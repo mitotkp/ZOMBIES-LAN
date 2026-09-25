@@ -218,7 +218,38 @@ export const WEAPONS = {
     pen: 0, price: 3000, box: false, weight: 0, model: 'knife', sound: 'knife', color: 0x9a9a9a, zoom: 1, moveMult: 1,
     melee: true,
   },
+  // ------------------------------------------------------------------ Armas cuerpo a cuerpo de pared (sustituyen al cuchillo)
+  bat: {
+    key: 'bat', name: 'Bate con clavos', cls: 'melee', mode: 'semi', dmg: 0, head: 1, rpm: 60,
+    mag: 0, reserve: 0, reload: 0, pellets: 0, spreadHip: 0, spreadAds: 0, range: 0, minDmgMult: 1,
+    pen: 0, price: 1500, box: false, weight: 0, model: 'bat', sound: 'knife', color: 0x8a6a48, zoom: 1, moveMult: 1,
+    melee: true,
+  },
+  machete: {
+    key: 'machete', name: 'Machete', cls: 'melee', mode: 'semi', dmg: 0, head: 1, rpm: 60,
+    mag: 0, reserve: 0, reload: 0, pellets: 0, spreadHip: 0, spreadAds: 0, range: 0, minDmgMult: 1,
+    pen: 0, price: 2500, box: false, weight: 0, model: 'machete', sound: 'knife', color: 0x9a9a9a, zoom: 1, moveMult: 1,
+    melee: true,
+  },
+  axe: {
+    key: 'axe', name: 'Hacha de bombero', cls: 'melee', mode: 'semi', dmg: 0, head: 1, rpm: 60,
+    mag: 0, reserve: 0, reload: 0, pellets: 0, spreadHip: 0, spreadAds: 0, range: 0, minDmgMult: 1,
+    pen: 0, price: 4000, box: false, weight: 0, model: 'axe', sound: 'knife', color: 0xb02020, zoom: 1, moveMult: 1,
+    melee: true,
+  },
 };
+
+// Estadísticas del arma cuerpo a cuerpo equipada (campo 'melee' del jugador).
+// dmg: daño por zombi; range (m); arc (grados); cd: enfriamiento (s); targets: zombis por golpe;
+// knock: empuje (m, 0 = nada); dur/hit: duración de la animación y momento del impacto (s).
+export const MELEE_WEAPONS = {
+  knife:   { key: 'knife',   name: 'Cuchillo',         dmg: 150,  range: 1.7, arc: 70,  cd: 0.65, targets: 1, knock: 0,   dur: 0.42, hit: 0.12 },
+  bowie:   { key: 'bowie',   name: 'Bowie',            dmg: 1000, range: 1.7, arc: 70,  cd: 0.65, targets: 1, knock: 0,   dur: 0.42, hit: 0.12 },
+  bat:     { key: 'bat',     name: 'Bate con clavos',  dmg: 550,  range: 2.1, arc: 120, cd: 0.95, targets: 3, knock: 1.3, dur: 0.62, hit: 0.24 },
+  machete: { key: 'machete', name: 'Machete',          dmg: 1100, range: 1.9, arc: 95,  cd: 0.7,  targets: 2, knock: 0,   dur: 0.48, hit: 0.16 },
+  axe:     { key: 'axe',     name: 'Hacha de bombero', dmg: 2600, range: 1.9, arc: 75,  cd: 1.15, targets: 1, knock: 0.8, dur: 0.72, hit: 0.3 },
+};
+export function meleeStats(key) { return MELEE_WEAPONS[key] || MELEE_WEAPONS.knife; }
 
 // Devuelve la definición efectiva (con Pack-a-Punch aplicado si upgraded)
 const cache = new Map();

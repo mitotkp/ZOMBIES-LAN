@@ -13,6 +13,7 @@ import { facadePoint, facadePlaneYaw } from './levelgeo.js';
 import { Doors, Windows } from './barriers.js';
 import { PerkMachines, PackAPunch, PowerSwitch, Workbench } from './machines.js';
 import { MysteryBoxes } from './mysterybox.js';
+import { MedCabinets } from './medical.js';
 
 // ---------------------------------------------------------------------------------------------
 // Carteles con textura propia (se fusionan los que comparten textura)
@@ -563,6 +564,7 @@ export function createInteractives(world, B) {
   make('power', PowerSwitch);
   make('bench', Workbench);
   make('box', MysteryBoxes);
+  make('medcabinets', MedCabinets);
   return list;
 }
 
