@@ -363,6 +363,24 @@ function flashColor(def) {
 // --------------------------------------------------------------------------------------------
 // PlayerModel
 // --------------------------------------------------------------------------------------------
+// Haz de linterna (PF.FLASHLIGHT): cono aditivo compartido por todos los modelos
+let torchAssets = null;
+function getTorchAssets() {
+  if (torchAssets) return torchAssets;
+  const len = 7;
+  const cone = new THREE.ConeGeometry(1.5, len, 18, 1, true);
+  cone.translate(0, -len / 2, 0);
+  cone.rotateX(Math.PI / 2);           // vértice en el origen, abre hacia -Z
+  const beam = new THREE.MeshBasicMaterial({
+    color: 0xfff1c8, transparent: true, opacity: 0.07, blending: THREE.AdditiveBlending,
+    depthWrite: false, side: THREE.DoubleSide,
+  });
+  const lens = new THREE.MeshBasicMaterial({ color: 0xfff8e8 });
+  torchAssets = { cone, beam, lens, lensGeo: new THREE.SphereGeometry(0.035, 8, 6) };
+  return torchAssets;
+}
+const _tv = new THREE.Vector3();
+
 export class PlayerModel {
   constructor(opts = {}) {
     const A = getPlayerAssets(opts.quality);
@@ -608,6 +626,30 @@ export class PlayerModel {
 
   // ------------------------------------------------------------------ Actualización
   // st: { x, y, z, yaw, pitch, flags, w, up, hasShield }
+  _ensureTorch() {
+    if (this.torch) return this.torch;
+    const T = getTorchAssets();
+    this.torch = new THREE.Group();
+    this.torch.name = 'torch';
+    const cone = new THREE.Mesh(T.cone, T.beam);
+    cone.renderOrder = 4;
+    cone.frustumCulled = false;
+    this.torch.add(cone, new THREE.Mesh(T.lensGeo, T.lens));
+    this.group.add(this.torch);
+    return this.torch;
+  }
+
+  _updateTorch(on) {
+    if (!on) { if (this.torch) this.torch.visible = false; return; }
+    const t = this._ensureTorch();
+    t.visible = true;
+    // a la altura de la cabeza, algo adelantada y a la derecha
+    this.headPt.getWorldPosition(_tv);
+    this.group.worldToLocal(_tv);
+    t.position.set(0.14, _tv.y - 0.12, -0.2);
+    t.rotation.set(this.pitch, 0, 0);
+  }
+
   update(dt, st) {
     this.time += dt;
     const flags = st.flags | 0;
@@ -640,6 +682,7 @@ export class PlayerModel {
     const kk = 1 - Math.exp(-12 * dt);
     for (let i = 0; i < NP; i++) cp[i] += (tp[i] - cp[i]) * kk;
     this._apply(flags, !!st.hasShield);
+    this._updateTorch(!!(flags & PF.FLASHLIGHT));
 
     // destello y retroceso
     if (this.muzzleT > 0) { this.muzzleT -= dt; if (this.muzzleT <= 0) this.muzzle.visible = false; }

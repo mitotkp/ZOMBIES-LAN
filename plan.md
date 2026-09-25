@@ -65,15 +65,43 @@ partiendo de la posición de su evento `respawn`.
 6. [ ] Partida completa a mano: comprar armas de pared y ventajas, beber, Mule Kick, escudo en la mano y en la espalda,
    reanimar, liquidación y osito de la caja (con `/points` y `--dev` es rápido).
 7. [ ] Probar con 2 o más PCs reales en la misma red (firewall de Windows y latencia).
-8. [ ] Ajustes visuales opcionales: el interior es bastante oscuro antes de activar la electricidad (revisar
-   `lighting.js` / `toneMappingExposure` en `main.js`) y la puerta metálica se ve muy negra.
+8. [x] Iluminación: se subió la luz ambiente y la de cada zona, la exposición base (1.3) y se añadió el ajuste **Brillo**
+   (Ajustes, 50–200 %) y una **linterna** con la tecla L (los compañeros ven el haz).
 9. [ ] Opcional: quitar `node_modules/` del repo y añadir `.gitignore` (`start-server.bat` ya ejecuta `npm install`).
    Se dejó dentro para poder jugar sin internet.
 10. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
    que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
+
+## Mapa procedural (propuesta, pendiente de decidir)
+
+Es posible, pero es el cambio más grande que queda: hoy todo el juego lee un mapa fijo de `shared/map.js`
+(servidor, colisiones, navegación de los zombis y cliente), y parte del decorado del cliente tiene coordenadas
+escritas a mano para "Pueblo Olvidado" (`levelgeo.js` FACADES, las luces de `lighting.js` y el decorado de `props.js`).
+
+Enfoque propuesto:
+1. `shared/map.js` → `buildMap(seed)`: devuelve las mismas estructuras de ahora (ZONES, DOORS, WINDOWS, PROPS, WALLBUYS,
+   PERK_MACHINES, PAP_MACHINE, POWER_SWITCH, WORKBENCH, BOX_LOCATIONS, SHIELD_PARTS, PLAYER_SPAWNS, cuadrícula e
+   INTERACTABLES) dentro de un objeto de mapa. "Pueblo Olvidado" pasa a ser un mapa fijo más.
+2. Generador (con semilla, para que servidor y clientes obtengan el mismo mapa):
+   - 5–8 salas de 10–16 celdas colocadas en una rejilla (o BSP), cada una con un estilo (interior/calle/almacén/planta...).
+   - Conexiones: árbol de expansión desde la sala inicial, más alguna puerta extra para crear bucles; precio de las puertas
+     creciente según la distancia a la sala inicial (750 → 1250).
+   - Ventanas en los muros exteriores (2–3 por sala) con su callejón de 3×3.
+   - Colocación contra las paredes: armas de pared (las más baratas cerca del inicio), 6 ventajas repartidas, electricidad
+     y Pack-a-Punch en salas lejanas, 4 ubicaciones de la caja, 3 piezas del escudo en salas distintas, mesa y obstáculos.
+   - Validación automática (reutilizar `tools/validate-map.js`): todo alcanzable, interactuables accesibles y ventanas válidas.
+3. Servidor: elige la semilla al iniciar la partida (o el anfitrión escoge "Pueblo Olvidado"/"Aleatorio" en la sala) y la
+   envía en `gs.map`. Hay que regenerar la navegación.
+4. Cliente: `World` se reconstruye cuando cambia `gs.map`. Hay que generalizar las fachadas, luces y decorado para que se
+   generen por sala (cada estilo de sala sabe decorarse a sí mismo).
+5. Pruebas: `bot-test` con varias semillas; `validate-map --seed N`.
+
+Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (1 → 2 con validación → 3 → 4).
 
 ## Registro de sesiones
 
 - **2026-09-25 (1)**: se subió el proyecto y se revisó. Servidor verificado con bots. Se detectó que faltaba el módulo Mundo.
 - **2026-09-25 (2)**: se implementó el módulo Mundo completo, se corrigió el bug de `props.js`, se escribió el README y
   se arregló el solapamiento del HUD. Probado en navegador headless.
+- **2026-09-25 (3)**: tras la prueba del usuario ("se ve muy oscuro"): más luz, ajuste de Brillo y linterna (L). Propuesta
+  de mapa procedural en este documento.

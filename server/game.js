@@ -308,7 +308,7 @@ export class Game {
       if (p.state === 'dead') continue;
       const d = this.pd.get(p.id);
       if (!d || !d.hasPos) continue;
-      let flags = d.flags & 0x1ff & ~(PF.DOWN | PF.UPGRADED);
+      let flags = d.flags & 0x3ff & ~(PF.DOWN | PF.UPGRADED);
       let w = '', up = 0;
       if (p.state === 'down') {
         flags |= PF.DOWN;
@@ -462,7 +462,7 @@ export class Game {
     if (this.gs.phase !== 'playing') return;
     if (isNum(m.yaw)) d.yaw = r2(m.yaw);
     if (isNum(m.pitch)) d.pitch = r2(clamp(m.pitch, -1.5, 1.5));
-    if (isNum(m.f)) d.flags = (m.f | 0) & 0x1ff;
+    if (isNum(m.f)) d.flags = (m.f | 0) & 0x3ff;
     if (Number.isInteger(m.cur)) {
       const c = clamp(m.cur, 0, Math.max(0, p.weapons.length - 1));
       if (c !== p.cur) { p.cur = c; this.markDirty(); }

@@ -18,6 +18,7 @@ const DEBUG = PARAMS.get('debug') === '1';
 const SEND_INTERVAL = 1 / CLIENT_SEND_RATE;
 const PING_INTERVAL_MS = 2000;
 const WELCOME_TIMEOUT_MS = 7000;
+const BASE_EXPOSURE = 1.3;            // exposición base (el ajuste 'Brillo' la multiplica)
 
 // Cámara de fondo (título / sala / fin): órbita lenta sobre la calle
 const ORBIT = { cx: 36.5, cz: 25.5, rx: 13, rz: 4, y: 3.3, speed: 0.055 };
@@ -39,7 +40,7 @@ const UPDATE_ORDER = ['player', 'interaction', 'weapons', 'entities', 'world', '
 // ---------------------------------------------------------------------------------------------
 // Ajustes persistidos
 const DEFAULT_SETTINGS = {
-  name: '', color: PLAYER_COLORS[0], sensitivity: 1.0, fov: 75, volume: 0.8, music: 0.5, quality: 'high', invertY: false,
+  name: '', color: PLAYER_COLORS[0], sensitivity: 1.0, fov: 75, volume: 0.8, music: 0.5, quality: 'high', invertY: false, brightness: 1.0,
 };
 
 function sanitizeSettings(s) {
@@ -53,6 +54,7 @@ function sanitizeSettings(s) {
   s.music = num(s.music, d.music, 0, 1);
   s.quality = s.quality === 'low' ? 'low' : 'high';
   s.invertY = !!s.invertY;
+  s.brightness = num(s.brightness, d.brightness, 0.5, 2);
   return s;
 }
 
@@ -217,7 +219,7 @@ async function boot() {
   }
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
+  renderer.toneMappingExposure = BASE_EXPOSURE * settings.brightness;
   renderer.autoClear = false;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.shadowMap.enabled = settings.quality === 'high';
@@ -360,6 +362,7 @@ async function boot() {
     sanitizeSettings(settings);
     renderer.setPixelRatio(pixelRatioFor(settings.quality));
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMappingExposure = BASE_EXPOSURE * settings.brightness;
     const shadows = settings.quality === 'high';
     if (renderer.shadowMap.enabled !== shadows) {
       renderer.shadowMap.enabled = shadows;

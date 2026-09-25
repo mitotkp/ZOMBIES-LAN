@@ -411,7 +411,8 @@ ctx = {
   player, interaction, world, entities, effects, weapons, hud, menus, audio,   // se asignan en main.js
 }
 ```
-`settings` (persistido en `localStorage` 'zlan.settings'): `{ name, color, sensitivity: 1.0, fov: 75, volume: 0.8, music: 0.5, quality: 'high'|'low', invertY: false }`.
+`settings` (persistido en `localStorage` 'zlan.settings'): `{ name, color, sensitivity: 1.0, fov: 75, volume: 0.8, music: 0.5, quality: 'high'|'low', invertY: false, brightness: 1.0 }`
+(`brightness` multiplica la exposición base del renderer, 0.5–2).
 `window.game = ctx` para depurar.
 
 ### 6.2 `EventBus` (`js/eventbus.js`)
@@ -473,7 +474,7 @@ connected
 ### 6.5 `Input` (`js/input.js`)
 Acciones y teclas por defecto:
 `forward` W, `back` S, `left` A, `right` D, `sprint` Shift, `crouch` C/Ctrl, `jump` Espacio, `fire` clic izq., `ads` clic der.,
-`reload` R, `use` F, `melee` V, `grenade` G, `shield` Q, `weapon1` 1, `weapon2` 2, `weapon3` 3, `nextWeapon` rueda abajo,
+`reload` R, `use` F, `melee` V, `grenade` G, `shield` Q, `flashlight` L, `weapon1` 1, `weapon2` 2, `weapon3` 3, `nextWeapon` rueda abajo,
 `prevWeapon` rueda arriba, `scoreboard` Tab, `chat` T o Enter, `pause` Esc.
 ```js
 isDown(action) → bool;  pressed(action) → bool (flanco en este frame);  released(action) → bool
@@ -490,7 +491,7 @@ spawn(x, z, yaw)
 update(dt)
 position → THREE.Vector3 (pies);  eye → THREE.Vector3;  yaw;  pitch
 velocity → THREE.Vector3;  onGround;  isSprinting;  isCrouching;  isMoving;  speed01 (0..1 respecto a la velocidad de correr)
-flags() → bits PF (combina los suyos con weapons: ADS, SHIELD_OUT, RELOADING, DRINKING)
+flags() → bits PF (combina los suyos con weapons: ADS, SHIELD_OUT, RELOADING, DRINKING; y FLASHLIGHT si ctx.flashlightOn)
 addRecoil(pitchRad, yawRad)       // retroceso (se recupera parcialmente)
 shake(intensity, seconds)
 adsZoom, adsAmount                // los fija WeaponSystem cada frame; FOV = settings.fov / lerp(1, adsZoom, adsAmount)
@@ -552,6 +553,11 @@ constructor(ctx);  build();  update(dt)
 - Reproduce los sonidos de su dominio con `ctx.audio.play(...)` y el locutor con `ctx.audio.announce(...)` en `ev:pu`.
 - Rendimiento: fusionar geometría estática por material (`BufferGeometryUtils.mergeGeometries`), ≤ 8 luces dinámicas
   (resto con materiales emisivos y sprites aditivos), sin sombras en `quality:'low'`.
+
+### 6.8b Linterna (`js/world/flashlight.js`)
+Tecla L (acción `flashlight`). `SpotLight` hijo de la cámara, siempre en la escena (apagada = intensidad 0, así no cambia
+el número de luces ni se recompilan shaders). Publica `ctx.flashlightOn`; el jugador lo envía como `PF.FLASHLIGHT` (512)
+y `PlayerModel` dibuja un cono aditivo en los jugadores remotos. Se apaga en el lobby y en modo espectador.
 
 ### 6.9 `EntityManager` (`js/entities/entities.js`) y `Effects` (`js/entities/effects.js`)
 ```js
@@ -683,5 +689,5 @@ Objetivo de rendimiento: 60 FPS en un portátil medio con 24 zombis y 4 jugadore
 ## 8. Controles (pantalla de ayuda)
 
 WASD mover · Ratón mirar · Clic izq. disparar · Clic der. apuntar · Shift correr · C/Ctrl agacharse · Espacio saltar ·
-R recargar · F usar/comprar (mantener para reconstruir, construir y reanimar) · V cuchillo · G granada · Q escudo ·
+R recargar · F usar/comprar (mantener para reconstruir, construir y reanimar) · V cuchillo · G granada · Q escudo · L linterna ·
 1/2/3 o rueda cambiar de arma · Tab puntuaciones · T/Enter chat · Esc pausa.

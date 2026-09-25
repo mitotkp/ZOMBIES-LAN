@@ -163,6 +163,8 @@ const TEMPLATE = `
           <input id="zl-st-sens" class="st-range" data-key="sensitivity" type="range" min="0.1" max="4" step="0.05"><span class="st-val" data-val="sensitivity"></span></div>
         <div class="st-row"><label class="st-label" for="zl-st-fov">Campo de visión</label>
           <input id="zl-st-fov" class="st-range" data-key="fov" type="range" min="60" max="100" step="1"><span class="st-val" data-val="fov"></span></div>
+        <div class="st-row"><label class="st-label" for="zl-st-bri">Brillo</label>
+          <input id="zl-st-bri" class="st-range" data-key="brightness" type="range" min="0.5" max="2" step="0.05"><span class="st-val" data-val="brightness"></span></div>
         <div class="st-row"><label class="st-label" for="zl-st-vol">Volumen general</label>
           <input id="zl-st-vol" class="st-range" data-key="volume" type="range" min="0" max="1" step="0.01"><span class="st-val" data-val="volume"></span></div>
         <div class="st-row"><label class="st-label" for="zl-st-mus">Volumen de la música</label>
@@ -241,7 +243,8 @@ function fmtSetting(key, v) {
     case 'sensitivity': return Number(v).toFixed(2);
     case 'fov': return `${Math.round(v)}°`;
     case 'volume':
-    case 'music': return `${Math.round(v * 100)}%`;
+    case 'music':
+    case 'brightness': return `${Math.round(v * 100)}%`;
     case 'invertY': return v ? 'Sí' : 'No';
     default: return String(v);
   }
@@ -760,6 +763,7 @@ export class Menus {
     s.music = num(s.music, d.music, 0, 1);
     s.quality = s.quality === 'low' ? 'low' : 'high';
     s.invertY = !!s.invertY;
+    s.brightness = num(s.brightness, d.brightness, 0.5, 2);
     return s;
   }
 

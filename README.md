@@ -51,6 +51,8 @@ que la red wifi esté configurada como **privada** y no como pública.
    y ventajas, activa la electricidad y mejora tu arma en el Pack-a-Punch.
 5. Si caes, un compañero puede reanimarte. Si caen todos, se acaba la partida.
 
+Si lo ves muy oscuro, sube el **Brillo** en *Ajustes* (menú de pausa con Esc) o enciende la linterna con **L**.
+
 ### Controles
 
 | Acción | Tecla |
@@ -61,6 +63,7 @@ que la red wifi esté configurada como **privada** y no como pública.
 | Recargar | R |
 | Usar / comprar | F (mantener para reconstruir, construir y reanimar) |
 | Cuchillo / granada / escudo | V / G / Q |
+| Linterna | L |
 | Cambiar de arma | 1, 2, 3 o rueda del ratón |
 | Puntuaciones / chat / pausa | Tab / T o Enter / Esc |
 

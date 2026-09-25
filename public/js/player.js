@@ -155,6 +155,7 @@ export class PlayerController {
     if (this.isSprinting) f |= PF.SPRINT;
     if (!this.onGround) f |= PF.JUMPING;
     if (st === 'down') f |= PF.DOWN;
+    if (this.ctx.flashlightOn) f |= PF.FLASHLIGHT;
     const w = this.ctx.weapons;
     if (w) {
       const ads = typeof w.adsAmount === 'number' ? w.adsAmount : this.adsAmount;

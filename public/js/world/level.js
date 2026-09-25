@@ -10,6 +10,7 @@ import { buildStaticProps, createInteractives, SignSet, Flames } from './props.j
 import { Lighting } from './lighting.js';
 import { Sky, FOG_COLOR, FOG_DENSITY } from './sky.js';
 import { Powerups } from './powerups.js';
+import { Flashlight } from './flashlight.js';
 import { POWERUP_INFO } from '/shared/constants.js';
 
 // Eventos del servidor que se reenvían a los objetos interactivos
@@ -58,6 +59,8 @@ export class World {
     this.interactives = createInteractives(this, B);
     this.powerups = new Powerups(this);
     this.interactives.push(this.powerups);
+    this.flashlight = new Flashlight(this);
+    this.interactives.push(this.flashlight);
 
     B.build(this.root, { shadows: true, name: 'level' });
     this.signs.build(this.root);

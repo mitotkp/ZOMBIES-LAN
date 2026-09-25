@@ -38,6 +38,7 @@ export const PF = {
   UPGRADED: 64,     // arma actual mejorada (solo en snapshot)
   JUMPING: 128,
   DRINKING: 256,    // bebiendo una ventaja / animación de compra
+  FLASHLIGHT: 512,  // linterna encendida
 };
 
 // Animaciones de zombi (campo anim del snapshot)

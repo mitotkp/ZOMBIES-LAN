@@ -23,6 +23,8 @@ export const CONTROL_GROUPS = [
       [['V'], 'Cuchillo'],
       [['G'], 'Granada'],
       [['Q'], 'Escudo'],
+  [['L'], 'Linterna'],
+      [['L'], 'Linterna'],
       [['1', '2', '3', 'Rueda'], 'Cambiar de arma'],
     ],
   },
@@ -64,7 +66,7 @@ export const CONTROLS_SHORT = [
 
 export const CONTROLS_LINE =
   'WASD mover · Ratón mirar · Clic izq. disparar · Clic der. apuntar · Shift correr · C/Ctrl agacharse · Espacio saltar · ' +
-  'R recargar · F usar/comprar (mantener para reconstruir, construir y reanimar) · V cuchillo · G granada · Q escudo · ' +
+  'R recargar · F usar/comprar (mantener para reconstruir, construir y reanimar) · V cuchillo · G granada · Q escudo · L linterna · ' +
   '1/2/3 o rueda cambiar de arma · Tab puntuaciones · T/Enter chat · Esc pausa';
 
 export const TIPS = [
@@ -86,5 +88,5 @@ export const TIPS = [
 
 // Valores por defecto de los ajustes (SPEC 6.1)
 export const DEFAULT_SETTINGS = {
-  sensitivity: 1.0, fov: 75, volume: 0.8, music: 0.5, quality: 'high', invertY: false,
+  sensitivity: 1.0, fov: 75, volume: 0.8, music: 0.5, quality: 'high', invertY: false, brightness: 1.0,
 };

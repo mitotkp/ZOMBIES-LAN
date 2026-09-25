@@ -28,7 +28,7 @@ export class Lighting {
   build(batch) {
     const root = this.world.root;
     // Ambiente de luna
-    this.hemi = new THREE.HemisphereLight(0x46597e, 0x1e1a14, 0.8);
+    this.hemi = new THREE.HemisphereLight(0x5a6d92, 0x2a241c, 1.25);
     root.add(this.hemi);
     const moon = new THREE.DirectionalLight(0xa9bcff, 1.15);
     const target = new THREE.Object3D();
@@ -46,7 +46,7 @@ export class Lighting {
     // Luces puntuales (posición inicial; algunas se mueven o cambian de color)
     const defs = [
       [0xffb46a, 20, 18, 11, 3.5, 26],       // terminal
-      [0xff9a62, 22, 16, 11, 3.3, 12.5],     // bar
+      [0xff9a62, 22, 20, 11, 3.3, 12.5],     // bar
       [0xffa040, 24, 20, 28, 3.5, 12],       // almacén
       [0xff2a14, 10, 20, 46.5, 3.5, 12],     // planta
       [0xffa650, 42, 24, 37, 4.5, 20.95],    // farola de la calle
@@ -155,9 +155,9 @@ export class Lighting {
     const high = !this.ctx.settings || this.ctx.settings.quality !== 'low';
     if (this.moon) {
       this.moon.castShadow = high;
-      this.moon.intensity = high ? 1.15 : 0.7;
+      this.moon.intensity = high ? 1.4 : 0.95;
     }
-    if (this.hemi) this.hemi.intensity = high ? 0.8 : 0.95;
+    if (this.hemi) this.hemi.intensity = high ? 1.25 : 1.45;
   }
 
   // Cambia el estado de la electricidad. live = animar el encendido
@@ -200,13 +200,13 @@ export class Lighting {
     // Terminal: cálida y titilante sin luz, fría y estable con luz
     const tf = 0.75 + 0.25 * flickerNoise(t * 1.3, 2.2);
     pts[L.TERMINAL].color.copy(C_WARM).lerp(C_COLD, P);
-    pts[L.TERMINAL].intensity = THREE.MathUtils.lerp(18 * tf, 34, P);
-    pts[L.BAR].intensity = 22 * (0.9 + 0.1 * flickerNoise(t * 0.8, 5));
+    pts[L.TERMINAL].intensity = THREE.MathUtils.lerp(28 * tf, 40, P);
+    pts[L.BAR].intensity = 42 * (0.9 + 0.1 * flickerNoise(t * 0.8, 5));
     pts[L.ALMACEN].color.copy(C_SODIUM).lerp(C_COLD, P);
-    pts[L.ALMACEN].intensity = THREE.MathUtils.lerp(22, 30, P);
+    pts[L.ALMACEN].intensity = THREE.MathUtils.lerp(30, 38, P);
     pts[L.PLANTA].color.copy(C_RED).lerp(C_COLD, P);
-    pts[L.PLANTA].intensity = THREE.MathUtils.lerp(3 + 12 * pulse, 34, P);
-    pts[L.STREET].intensity = 42 * this.streetFlick * (0.95 + 0.05 * flick);
+    pts[L.PLANTA].intensity = THREE.MathUtils.lerp(9 + 12 * pulse, 40, P);
+    pts[L.STREET].intensity = 52 * this.streetFlick * (0.95 + 0.05 * flick);
     pts[L.FIRE].intensity = 7 + 5 * flickerNoise(t * 2.2, 7.7);
     pts[L.FIRE].position.y = 1.5 + 0.1 * flickerNoise(t * 3, 1.1);
   }
