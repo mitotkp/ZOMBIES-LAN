@@ -73,17 +73,19 @@ partiendo de la posición de su evento `respawn`.
    debajo de los efectos. Se ajusta con `gain` en `SONGS` (`public/js/audio.js`).
 12. [x] Zombis especiales: corredor (ronda 3+), explosivo (ronda 5+, mecha y explosión en área) y tanque (ronda 8+,
    jefe con 1,5× de tamaño). Probabilidades y valores en `ZOMBIE_TYPES` (`shared/constants.js`).
-13. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
+13. [x] Daño de los zombis a 25 (4 golpes sin Juggernog). Jefes desde la ronda 5 (Carnicero, Madre Plaga, Nigromante,
+   Acorazado y Espectro) con barra de vida y escalado por ronda (`BOSS_RULES` y `ZOMBIE_TYPES` en `shared/constants.js`).
+14. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
    que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
-14. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
+15. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
    (el audio no se pudo oír en headless) y pointer lock.
-15. [ ] Partida completa a mano: comprar armas de pared y ventajas, beber, Mule Kick, escudo en la mano y en la espalda,
+16. [ ] Partida completa a mano: comprar armas de pared y ventajas, beber, Mule Kick, escudo en la mano y en la espalda,
    reanimar, liquidación y osito de la caja (con `/points` y `--dev` es rápido).
-16. [ ] Probar con 2 o más PCs reales en la misma red (firewall de Windows y latencia).
-17. [ ] Probar el equilibrio en partidas reales: probabilidad de infección, límite de regeneración (60 %), precios de las
+17. [ ] Probar con 2 o más PCs reales en la misma red (firewall de Windows y latencia).
+18. [ ] Probar el equilibrio en partidas reales: probabilidad de infección, límite de regeneración (60 %), precios de las
     curas y daño de las armas cuerpo a cuerpo (todo está en `shared/constants.js` y `MELEE_WEAPONS` en `shared/weapons.js`).
-18. [ ] Opcional: que los demás jugadores vean el arma cuerpo a cuerpo y la animación de curarse en el modelo en tercera persona.
-19. [ ] Opcional: quitar `node_modules/` del repo y añadir `.gitignore` (`start-server.bat` ya ejecuta `npm install`).
+19. [ ] Opcional: que los demás jugadores vean el arma cuerpo a cuerpo y la animación de curarse en el modelo en tercera persona.
+20. [ ] Opcional: quitar `node_modules/` del repo y añadir `.gitignore` (`start-server.bat` ya ejecuta `npm install`).
    Se dejó dentro para poder jugar sin internet.
 
 ## Mapa procedural (propuesta para una próxima sesión: convivirá con "Pueblo Olvidado" como opción en la sala)
@@ -123,3 +125,4 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
 - **2026-09-25 (5)**: contador de ronda y de tiempo de preparación en el HUD.
 - **2026-09-25 (6)**: música del menú y de la partida.
 - **2026-09-25 (7)**: zombis especiales (corredor, explosivo y tanque).
+- **2026-09-25 (8)**: más aguante (4 golpes) y 5 jefes por ronda desde la ronda 5.

@@ -58,6 +58,8 @@ export class EntityManager {
       ev.on('ev:zatk', (e) => this._onZAtk(e));
       ev.on('ev:fuse', (e) => this._onFuse(e));
       ev.on('ev:tank', (e) => this._onTank(e));
+      ev.on('ev:boss', (e) => this._onTank(e));
+      ev.on('ev:bossAbility', (e) => this._onBossAbility(e));
       ev.on('ev:fire', (e) => this._onRemoteFire(e));
       ev.on('ev:proj', (e) => this._onRemoteFire(e));
     }
@@ -293,6 +295,48 @@ export class EntityManager {
   _onTank() {
     try { this.ctx.audio.play('zombie_groan', { volume: 1, rate: 0.42 }); } catch { /* sin sonido */ }
     setTimeout(() => { try { this.ctx.audio.play('zombie_attack', { volume: 1, rate: 0.5 }); } catch { /* nada */ } }, 450);
+  }
+
+  // Efectos de las habilidades de los jefes
+  _onBossAbility(e) {
+    const fx = this.ctx.effects, audio = this.ctx.audio;
+    const V = (x, y, z) => new THREE.Vector3(+x || 0, y, +z || 0);
+    const play = (name, o) => { try { if (audio) audio.play(name, o); } catch { /* sin sonido */ } };
+    const call = (fn) => { try { if (fx) fn(fx); } catch { /* nada */ } };
+    const pos = { x: +e.x || 0, y: 1.5, z: +e.z || 0 };
+    switch (e.a) {
+      case 'charge':
+        play('zombie_attack', { pos, volume: 1, rate: 0.55 });
+        play('zombie_groan', { pos, volume: 1, rate: 0.5 });
+        break;
+      case 'slamStart':
+        play('zombie_groan', { pos, volume: 1, rate: 0.45 });
+        break;
+      case 'slam': {
+        play('explosion', { pos, volume: 0.8, rate: 0.6 });
+        for (let i = 0; i < 10; i++) {
+          const a = (i / 10) * Math.PI * 2, r = (+e.r || 3) * 0.6;
+          call((f) => f.dust(V(e.x + Math.cos(a) * r, 0.1, e.z + Math.sin(a) * r), V(0, 1, 0)));
+        }
+        const pl = this.ctx.player;
+        if (pl && pl.position && typeof pl.shake === 'function') {
+          const d = Math.hypot(pl.position.x - e.x, pl.position.z - e.z);
+          if (d < 10) pl.shake(0.8 * (1 - d / 10), 0.5);
+        }
+        break;
+      }
+      case 'summon':
+        play('power_on', { pos, volume: 0.6, rate: 0.7 });
+        call((f) => f.flash(V(e.x, 2.2, e.z), 0xb050ff, 2.5));
+        for (const s of (Array.isArray(e.spots) ? e.spots : [])) call((f) => f.flash(V(s[0], 0.4, s[1]), 0xb050ff, 1.6));
+        break;
+      case 'cloak':
+      case 'uncloak':
+        play('box_whoosh', { pos, volume: 0.6, rate: e.a === 'cloak' ? 1.3 : 0.9 });
+        call((f) => f.flash(V(e.x, 1.5, e.z), 0x9ad8ff, 1.8));
+        break;
+      default: break;
+    }
   }
 
   _crawlerFx(rec) {

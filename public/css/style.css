@@ -964,3 +964,17 @@ kbd {
 .hud-timer.urgent .tm-main b { animation: hp-blink 0.5s ease-in-out infinite; }
 .tm-sub { font-size: 0.75em; letter-spacing: 0.06em; color: var(--chalk-dim); }
 .tm-sub:empty { display: none; }
+
+/* ---------------------------------------------------------------- Barras de vida de los jefes */
+.hud-bosses {
+  position: absolute; left: 50%; top: calc(var(--u) * 9.5); transform: translateX(-50%);
+  display: flex; flex-direction: column; gap: 0.5em; width: min(46vw, calc(var(--u) * 70));
+}
+.boss-row { display: flex; flex-direction: column; gap: 0.2em; }
+.boss-name {
+  text-align: center; font: 1.05em/1 var(--f-display); letter-spacing: 0.1em; text-transform: uppercase;
+  color: #ff5a4a; text-shadow: 0 0 6px rgba(0, 0, 0, 0.9), 0 0 12px rgba(160, 0, 0, 0.6);
+}
+.boss-name span { font: 0.7em var(--f-ui); letter-spacing: 0.08em; color: var(--chalk-dim); margin-left: 0.4em; }
+.boss-bar { height: calc(var(--u) * 1.2); background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(255, 80, 60, 0.5); overflow: hidden; }
+.boss-bar i { display: block; height: 100%; transform-origin: 0 50%; background: linear-gradient(90deg, #7a0a08, #e0302a); transition: transform 0.15s linear; }

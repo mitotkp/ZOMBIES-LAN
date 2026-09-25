@@ -53,6 +53,7 @@ que la red wifi esté configurada como **privada** y no como pública.
 
 ### Salud, infección y curas
 
+- Un golpe de zombi normal quita 25 de salud: aguantas 4 golpes (10 con Juggernog).
 - La barra de **salud** está abajo a la izquierda. Sin curas solo se regenera hasta el 60 % (la marca blanca de la barra).
 - Un golpe de zombi puede **infectarte**: la barra se pone verde y pierdes vida poco a poco hasta curarte o caer.
 - Pulsa **H** para curarte. Se usa la cura más adecuada: el antídoto si estás infectado, el botiquín si te queda poca vida
@@ -71,6 +72,20 @@ Según avanzan las rondas aparecen, cada vez con más frecuencia:
   a los zombis de alrededor.
 - **Tanque** (desde la ronda 8): enorme, con mucha vida y golpes brutales. Se anuncia con un rugido. No se deja empujar
   y destroza las barricadas en un momento. Da 500 puntos extra y siempre suelta un potenciador.
+
+### Jefes
+
+Desde la **ronda 5** cada ronda trae un jefe (dos desde la ronda 20). Cuanto más alta es la ronda, más vida y más daño
+tienen. Su barra de vida aparece arriba. La Muerte Instantánea no les afecta. Al derrotarlo, el que lo remata gana
+1000 puntos, el resto del equipo 300, y siempre suelta un potenciador y un botiquín.
+
+| Jefe | Cómo es | Consejo |
+|---|---|---|
+| **El Carnicero** | Enorme, con delantal y cuchilla | Carga en línea recta si estás lejos: apártate y dispárale cuando se estampe |
+| **La Madre Plaga** | Hinchada y verde | Su aura tóxica daña e infecta: no te acerques y lleva antídotos |
+| **El Nigromante** | Alto, encapuchado, con bastón | Invoca zombis cada pocos segundos: mátalo primero |
+| **El Acorazado** | Placas de acero | Solo la cabeza recibe todo el daño; golpea el suelo en área |
+| **El Espectro** | Pálido y translúcido | A ratos se vuelve casi invisible, más rápido y resistente |
 
 ### Armas cuerpo a cuerpo
 
@@ -100,7 +115,7 @@ Si lo ves muy oscuro, sube el **Brillo** en *Ajustes* (menú de pausa con Esc) o
 - `plan.md`: estado actual del proyecto y tareas pendientes.
 - `node server/index.js --dev`: modo desarrollo. En el chat puedes usar `/help`, `/points N`, `/round N`,
   `/power`, `/give ARMA [up]`, `/god`, `/killall`, `/pu TIPO`, `/parts`, `/doors`, `/perk VENTAJA`,
-  `/meds`, `/infect`, `/item TIPO` y `/spawn TIPO` (runner, bomber, tank).
+  `/meds`, `/infect`, `/item TIPO` y `/spawn TIPO` (runner, bomber, tank, butcher, plague, necro, armored, specter).
 - `http://localhost:3000/?debug=1`: permite jugar sin capturar el ratón y muestra los FPS.
 - `npm run validate-map`: comprueba el mapa.
 - `npm run bots -- --bots 2 --seconds 120 --url ws://localhost:3000`: prueba automática del servidor con bots.

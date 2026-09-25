@@ -3,7 +3,7 @@
 
 import * as THREE from 'three';
 import { PERKS } from '/shared/perks.js';
-import { POWERUP_INFO, PLAYER, MEDS, MED_KEYS, angleDiff, yawTo, clamp } from '/shared/constants.js';
+import { POWERUP_INFO, PLAYER, MEDS, MED_KEYS, ZOMBIE_TYPES, angleDiff, yawTo, clamp } from '/shared/constants.js';
 import { weaponName, meleeStats } from '/shared/weapons.js';
 import { MAP_NAME, SHIELD_PARTS } from '/shared/map.js';
 import { esc, safeColor, mulberry32, serverNow, sfx, ensureChalkDefs, isDebugUrl } from './uiutil.js';
@@ -41,6 +41,7 @@ const TEMPLATE = `
 <div class="hud-hitmarker"><i></i><i></i><i></i><i></i></div>
 <div class="hud-downicons"></div>
 <div class="hud-timer"><div class="tm-main"></div><div class="tm-sub"></div></div>
+<div class="hud-bosses"></div>
 <div class="hud-banner"><div class="bn-title"></div><div class="bn-sub"></div></div>
 <div class="hud-puname"></div>
 <div class="hud-msg"></div>
@@ -158,6 +159,7 @@ export class HUD {
       ammo: q('.hud-ammo'), amName: q('.am-name'), amMag: q('.am-mag'), amRes: q('.am-res'), amSep: q('.am-sep'),
       amMelee: q('.am-melee'), amShield: q('.am-shield'), amShieldBar: q('.am-shield-bar i'), amNades: q('.am-nades'),
       powerups: q('.hud-powerups'), scoreboard: q('.hud-scoreboard'), dev: q('.hud-dev'),
+      bosses: q('.hud-bosses'),
       timer: q('.hud-timer'), tmMain: q('.tm-main'), tmSub: q('.tm-sub'),
       infect: q('.hud-infect'), health: q('.hud-health'), hpNum: q('.hp-num'), hpFill: q('.hp-fill'), hpCap: q('.hp-cap'),
       hpInf: q('.hp-inf'), hpHeal: q('.hp-heal'), hpHealT: q('.hp-heal-t'), hpHealBar: q('.hp-heal-bar i'), meds: q('.hud-meds'),
@@ -372,6 +374,15 @@ export class HUD {
     });
 
     this._on('ev:power', () => this.message('¡Electricidad activada!', 3));
+    this._on('ev:boss', (e) => {
+      const T = ZOMBIE_TYPES[e.key] || {};
+      this._flash('rgba(150,0,0,0.4)', 1);
+      this._banner(`Jefe: ${T.name || '???'}`, `Nivel ${e.level | 0} · ${T.desc || ''}`, '#ff3b30');
+    });
+    this._on('ev:bossDown', (e) => {
+      const T = ZOMBIE_TYPES[e.key] || {};
+      this._banner(`¡${T.name || 'El jefe'} ha caído!`, e.pid != null ? `Lo remató ${this._name(e.pid)} · Busca el botiquín y el potenciador` : '', '#ffd23f');
+    });
     this._on('ev:tank', () => {
       this._flash('rgba(120,0,0,0.35)', 0.8);
       this._banner('¡Un Tanque se acerca!', 'Mucha vida y golpes brutales · Mantén la distancia', '#ff3b30');
@@ -468,6 +479,7 @@ export class HUD {
     this._updateChatInput(menusOpen);
     this._updateRound(gs);
     this._updateTimer(gs, now);
+    this._updateBosses(gs);
     this._updateScores(gs);
     this._updatePerks(self);
     this._updateParts(gs);
@@ -750,6 +762,20 @@ export class HUD {
     // Latido con poca salud
     if (self && self.state === 'alive' && hpFrac < 0.35) this._startHeartbeat();
     else this._stopHeartbeat();
+  }
+
+  // Barras de vida de los jefes vivos (gs.bosses)
+  _updateBosses(gs) {
+    const list = Array.isArray(gs.bosses) ? gs.bosses : [];
+    const key = list.map((b) => `${b.id}:${b.hp}`).join(',');
+    if (this._cache.bosses === key) return;
+    this._cache.bosses = key;
+    this.el.bosses.innerHTML = list.map((b) => {
+      const T = ZOMBIE_TYPES[b.key] || {};
+      const f = clamp((+b.hp || 0) / Math.max(1, +b.maxHp || 1), 0, 1);
+      return `<div class="boss-row"><div class="boss-name">${esc(T.name || 'Jefe')} <span>Nivel ${b.level | 0}</span></div>`
+        + `<div class="boss-bar"><i style="transform:scaleX(${f.toFixed(3)})"></i></div></div>`;
+    }).join('');
   }
 
   // Contador de ronda: tiempo transcurrido en la ronda activa y cuenta atrás de la preparación

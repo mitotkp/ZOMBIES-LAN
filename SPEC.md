@@ -131,6 +131,17 @@ Import map (en index.html):
   - **Tanque** (desde la 8; 40 % de rondas y +6 % por ronda; dos desde la 16): 1,5× de tamaño y de caja de impacto, mucha vida
     (3000 + 12× la vida normal, +50 % por jugador extra), golpea 90, arranca tablas 4× más rápido y no se deja empujar.
     Aparece tras el 30 % de la ronda (evento `tank`: aviso y rugido). Da 500 puntos extra y deja siempre un potenciador.
+- **Daño de los zombis** (cambiado): un golpe normal quita 25 (4 golpes sin Juggernog, 10 con Juggernog).
+- **Jefes** (añadido, `ZOMBIE_TYPES` con `boss:true` y `BOSS_RULES`): desde la ronda 5 cada ronda trae un jefe al azar
+  (sin repetir el anterior; dos desde la 20), que aparece tras el 20 % de la ronda. Vida y daño crecen con la ronda
+  (`hpPerRound`, `dmgPerRound`) y la vida con los jugadores. Muerte Instantánea no les afecta y no se dejan empujar.
+  Al morir: 1000 puntos al que lo mata, 300 al resto, un potenciador y un botiquín. Estado en `gs.bosses`
+  (`[{ id, key, level, hp, maxHp }]`, barra en el HUD). Códigos de tipo 4–8:
+  - `butcher` El Carnicero: carga en línea recta (`ZF.CHARGE`) contra jugadores a 4–15 m; queda aturdido al chocar o golpear.
+  - `plague` La Madre Plaga: aura de 4,2 m que cada segundo daña y puede infectar.
+  - `necro` El Nigromante: invoca 3 zombis a su alrededor cada 11 s (máx. 8 vivos; no vuelven a la cola).
+  - `armored` El Acorazado: el cuerpo recibe el 25 % del daño de bala (la cabeza el 100 %); golpe al suelo en área.
+  - `specter` El Espectro: alterna 6 s visible / 4 s camuflado (`ZF.CLOAK`): más rápido y recibe la mitad de daño.
 - **Caer**: con 0 de salud el jugador cae ("última batalla": pistola, se arrastra). Pierde todas sus ventajas, la 3.ª arma
   y el 5% de sus puntos. Un compañero lo reanima manteniendo F (4 s; 2 s con Quick Revive). A los 45 s se desangra y
   espera a la siguiente ronda para reaparecer con la M1911. En solitario, Quick Revive (500) reanima solo (máx. 3 veces).
@@ -169,6 +180,7 @@ El servidor mantiene un objeto de estado y lo envía completo como `{ t:'gs', ..
   pap: { state: 'idle'|'working'|'ready', user: null|pid, weapon: null|key, until: 0 },
   shield: { parts: [false,false,false], built: false, builder: null|pid, buildUntil: 0 },
   powerups: [ { id: 1, type: 'maxammo', x: 10.2, z: 25.7, until: ms } ],
+  bosses: [ { id, key, level, hp, maxHp } ],   // jefes vivos (barra de vida)
   items: [ { id: 1, type: 'bandage'|'antidote'|'medkit', x, z, until: ms } ],   // curas en el suelo
   timers: { instakill: 0, doublepoints: 0, firesale: 0 },   // ms de fin (0 = inactivo)
   players: {
@@ -299,6 +311,9 @@ Los ids vienen de `INTERACTABLES` en `shared/map.js`, más `revive:PID`. El serv
 | `msg` | `text` | solo pid | aviso genérico |
 | `infected` | `pid` | todos | el jugador ha sido infectado |
 | `tank` | `id` | todos | aparece un tanque (aviso en el HUD y rugido) |
+| `boss` | `id, key, level` | todos | aparece un jefe (aviso en el HUD y rugido) |
+| `bossAbility` | `id, a, x, z, ...` | todos | habilidad de jefe: `charge`, `slamStart`, `slam` (`r`), `summon` (`spots`), `cloak`, `uncloak` |
+| `bossDown` | `id, key, pid` | todos | jefe derrotado |
 | `fuse` | `id` | todos | un explosivo enciende la mecha |
 | `healStart` | `pid, item` | todos | empieza a usar una cura |
 | `healed` | `pid, item` | todos | cura aplicada |
@@ -420,7 +435,7 @@ compran la puerta A cuando pueden, y registran rondas, bajas y errores. Debe pod
 `node tools/bot-test.js --bots 2 --seconds 120 --url ws://localhost:3000`.
 
 ### 5.5 Modo desarrollo (`--dev`)
-Comandos por chat: `/spawn TIPO` (runner, bomber, tank, normal), `/meds` (curas al máximo), `/infect`, `/item TIPO`, `/points N`, `/round N` (mata a todos y salta a la ronda N), `/power`, `/give KEY [up]`, `/god` (invulnerable),
+Comandos por chat: `/spawn TIPO` (runner, bomber, tank, normal, butcher, plague, necro, armored, specter), `/meds` (curas al máximo), `/infect`, `/item TIPO`, `/points N`, `/round N` (mata a todos y salta a la ronda N), `/power`, `/give KEY [up]`, `/god` (invulnerable),
 `/killall`, `/pu TYPE` (aparece delante del jugador), `/parts` (todas las piezas), `/doors` (abre todas), `/perk KEY`.
 El cliente muestra una marca "DEV" si `welcome.dev`.
 

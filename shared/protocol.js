@@ -63,6 +63,8 @@ export const ZF = {
   NOHEAD: 4,    // (reservado)
   OUTSIDE: 8,   // todavía está fuera, en el callejón
   FUSE: 16,     // zombi explosivo con la mecha encendida
+  CLOAK: 32,    // jefe Espectro camuflado
+  CHARGE: 64,   // jefe Carnicero cargando
 };
 
 // Partes del cuerpo en los impactos

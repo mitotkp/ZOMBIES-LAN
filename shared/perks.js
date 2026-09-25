@@ -11,7 +11,7 @@ export const PERKS = {
   juggernog: {
     key: 'juggernog', name: 'Juggernog', price: 2500,
     color: '#e0282e', glow: 0xff2a2a, icon: 'JG',
-    desc: 'Aumenta tu salud: aguantas 5 golpes en vez de 2.',
+    desc: 'Aumenta tu salud: aguantas 10 golpes en vez de 4.',
   },
   speedcola: {
     key: 'speedcola', name: 'Speed Cola', price: 3000,

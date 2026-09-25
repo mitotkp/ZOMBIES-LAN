@@ -57,7 +57,7 @@ export const ZOMBIE = {
   attackRange: 1.15,
   attackWindup: 0.45,       // segundos entre el inicio del golpe y el impacto
   attackCooldown: 1.3,
-  damage: 50,               // 2 golpes sin Juggernog, 5 con Juggernog
+  damage: 25,               // 4 golpes sin Juggernog, 10 con Juggernog
   walkSpeed: 1.35,
   runSpeed: 3.6,
   sprintSpeed: 5.0,
@@ -77,25 +77,63 @@ export const ZOMBIE_TYPES = {
   normal: { code: 0, name: 'Zombi' },
   runner: {
     code: 1, name: 'Corredor', from: 3, base: 0.06, perRound: 0.02, max: 0.3,
-    hpMult: 0.6, speed: 5.7, damage: 40, scale: 0.95,
+    hpMult: 0.6, speed: 5.7, damage: 20, scale: 0.95,
   },
   bomber: {
     code: 2, name: 'Explosivo', from: 5, base: 0.04, perRound: 0.012, max: 0.15,
-    hpMult: 0.8, speed: 1.55, damage: 50, scale: 1,
+    hpMult: 0.8, speed: 1.55, damage: 25, scale: 1,
     trigger: 1.7,          // m: a esta distancia de un jugador enciende la mecha
     fuse: 1.2,             // s de mecha antes de estallar
     radius: 3.6,           // radio de la explosión (al morir o al estallar)
-    playerDamage: 80,      // daño máximo a los jugadores (baja con la distancia)
+    playerDamage: 55,      // daño máximo a los jugadores (baja con la distancia)
     zombieDamage: 1500,    // daño a otros zombis en el radio
   },
   tank: {
     code: 3, name: 'Tanque', from: 8, chance: 0.4, perRound: 0.06,   // probabilidad de que la ronda traiga un tanque
     hpBase: 3000, hpRoundMult: 12, hpPerExtraPlayer: 0.5,           // vida = (hpBase + vida normal · hpRoundMult) · (1 + 0.5 por jugador extra)
-    speed: 4.0, damage: 90, attackRange: 1.8, windup: 0.6, cooldown: 1.8, tearMult: 0.25, scale: 1.5,
+    speed: 4.0, damage: 60, attackRange: 1.8, windup: 0.6, cooldown: 1.8, tearMult: 0.25, scale: 1.5,
     points: 500,           // puntos extra al que lo mata (y deja siempre un potenciador)
     twoFrom: 16,           // desde esta ronda pueden venir dos tanques
   },
 };
+// Jefes: uno por ronda desde BOSS_RULES.from (dos desde twoFrom), elegidos al azar sin repetir el anterior.
+// Vida = (hpBase + vida normal · hpMult) · (1 + hpPerRound·(ronda − from)) · (1 + 0.5 por jugador extra)
+// Daño = damage · min(dmgMax, 1 + dmgPerRound·(ronda − from))
+export const BOSS_RULES = {
+  from: 5, twoFrom: 20, spawnAt: 0.2,        // aparece tras el 20 % de la ronda
+  hpPerRound: 0.12, hpPerExtraPlayer: 0.5, dmgPerRound: 0.07, dmgMax: 3,
+  killPoints: 1000, teamPoints: 300,         // al que lo mata / al resto del equipo
+};
+Object.assign(ZOMBIE_TYPES, {
+  butcher: {
+    code: 4, boss: true, name: 'El Carnicero', desc: 'Carga contra ti desde lejos: ¡apártate de su camino!',
+    hpBase: 6000, hpMult: 14, damage: 40, speed: 2.6, scale: 1.7, attackRange: 2.0, windup: 0.55, cooldown: 1.5, tearMult: 0.2,
+    charge: { min: 4, max: 15, speed: 10, time: 1.3, every: 7, dmgMult: 1.5 },
+  },
+  plague: {
+    code: 5, boss: true, name: 'La Madre Plaga', desc: 'Su aura tóxica daña e infecta a quien se acerque.',
+    hpBase: 5200, hpMult: 12, damage: 30, speed: 1.9, scale: 1.45, attackRange: 1.8, windup: 0.5, cooldown: 1.4, tearMult: 0.3,
+    aura: { radius: 4.2, every: 1.0, damage: 4, infect: 0.35 },
+  },
+  necro: {
+    code: 6, boss: true, name: 'El Nigromante', desc: 'Invoca zombis a su alrededor. Acaba con él cuanto antes.',
+    hpBase: 4500, hpMult: 10, damage: 30, speed: 1.8, scale: 1.3, attackRange: 1.7, windup: 0.5, cooldown: 1.4, tearMult: 0.4,
+    summon: { every: 11, count: 3, maxAlive: 8, radius: 3 },
+  },
+  armored: {
+    code: 7, boss: true, name: 'El Acorazado', desc: 'Su armadura para casi todo: apunta a la cabeza.',
+    hpBase: 5200, hpMult: 12, damage: 45, speed: 1.7, scale: 1.6, attackRange: 2.0, windup: 0.6, cooldown: 1.7, tearMult: 0.2,
+    armor: { body: 0.25, explosion: 0.5, melee: 0.5 },
+    slam: { range: 2.6, radius: 3.4, windup: 0.8, every: 6, dmgMult: 1.2 },
+  },
+  specter: {
+    code: 8, boss: true, name: 'El Espectro', desc: 'A ratos se vuelve casi invisible, más rápido y resistente.',
+    hpBase: 4200, hpMult: 10, damage: 35, speed: 3.6, scale: 1.2, attackRange: 1.8, windup: 0.4, cooldown: 1.2, tearMult: 0.4,
+    cloak: { visible: 6, hidden: 4, speedMult: 1.6, damageTaken: 0.5 },
+  },
+});
+export const BOSS_KEYS = Object.keys(ZOMBIE_TYPES).filter((k) => ZOMBIE_TYPES[k].boss);
+
 export const ZOMBIE_TYPE_BY_CODE = Object.fromEntries(Object.entries(ZOMBIE_TYPES).map(([k, v]) => [v.code, k]));
 
 // Vida de los zombis según la ronda (fórmula de Black Ops)

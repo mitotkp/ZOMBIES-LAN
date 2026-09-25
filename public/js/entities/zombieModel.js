@@ -668,6 +668,29 @@ function typeAssets() {
     tankSkin: new THREE.MeshStandardMaterial({ color: 0x6f7560, roughness: 0.85, metalness: 0 }),
     sphere: new THREE.SphereGeometry(1, 14, 10),
     lump: new THREE.SphereGeometry(1, 8, 6),
+    box: new THREE.BoxGeometry(1, 1, 1),
+    cyl: new THREE.CylinderGeometry(1, 1, 1, 10),
+    cone: new THREE.ConeGeometry(1, 1, 12, 1, true),
+    // jefes
+    eyesPurple: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.8, 0.3, 1.0), toneMapped: false }),
+    eyesYellow: new THREE.MeshBasicMaterial({ color: new THREE.Color(1.0, 0.85, 0.1), toneMapped: false }),
+    eyesCyan: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.6, 1.0, 1.0), toneMapped: false }),
+    apron: new THREE.MeshStandardMaterial({ color: 0xc9c2b0, roughness: 0.9 }),
+    blood: new THREE.MeshStandardMaterial({ color: 0x5a0808, roughness: 0.6 }),
+    steel: new THREE.MeshStandardMaterial({ color: 0x6a7078, roughness: 0.35, metalness: 0.85 }),
+    darkSteel: new THREE.MeshStandardMaterial({ color: 0x33363b, roughness: 0.45, metalness: 0.8 }),
+    wood: new THREE.MeshStandardMaterial({ color: 0x4a3222, roughness: 0.8 }),
+    plague: new THREE.MeshStandardMaterial({ color: 0x5f7a2a, emissive: 0x2a5a08, emissiveIntensity: 0.5, roughness: 0.5 }),
+    plagueSpot: new THREE.MeshStandardMaterial({ color: 0x3a5a10, emissive: 0x7aff3a, emissiveIntensity: 1.4, roughness: 0.4 }),
+    robe: new THREE.MeshStandardMaterial({ color: 0x1e1426, roughness: 0.95, side: THREE.DoubleSide }),
+    orb: new THREE.MeshBasicMaterial({ color: 0xc070ff, toneMapped: false }),
+    glowTex: (() => {
+      const c = document.createElement('canvas'); c.width = c.height = 64;
+      const g = c.getContext('2d'); const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+      gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.4, 'rgba(255,255,255,0.35)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+      const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+    })(),
   };
   return TYPE_ASSETS;
 }
@@ -806,6 +829,16 @@ export class ZombieModel {
     this._apply();
   }
 
+  // Halo luminoso (sprite aditivo) pegado al modelo o a una pieza
+  _aura(color, size, opacity, parent = null) {
+    const T = typeAssets();
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: T.glowTex, color, transparent: true, opacity, depthWrite: false, blending: THREE.AdditiveBlending }));
+    s.scale.set(size, size, 1);
+    if (parent) parent.add(s); else { s.position.y = 1.0; this.group.add(s); }
+    this.auraSprite = s;
+    this.auraBase = opacity;
+  }
+
   // Aspecto de los tipos especiales: corredor (delgado, ojos rojos), explosivo (hinchado con pústulas brillantes)
   // y tanque (enorme, hombros y antebrazos de gorila, joroba)
   _decorateType(type, r) {
@@ -835,6 +868,71 @@ export class ZombieModel {
       // material propio para poder hacerlo parpadear con la mecha sin afectar a los demás
       this.pustMat = T.pustule.clone();
       for (const p of this.pustules) p.material = this.pustMat;
+    } else if (type === 'butcher') {
+      // El Carnicero: enorme, delantal ensangrentado y cuchilla de carnicero
+      this.eyes.material = T.eyesRed;
+      this.group.scale.set(1.7, 1.7, 1.7);
+      add(this.spine, T.box, T.apron, 0, 0.18, -0.16, 0.36, 0.52, 0.03);
+      add(this.spine, T.box, T.blood, 0.05, 0.1, -0.178, 0.2, 0.22, 0.01);
+      add(this.spine, T.sphere, T.tankSkin, 0, 0.5, 0.08, 0.24, 0.18, 0.2);
+      for (const side of [this.armL, this.armR]) add(side.sh, T.sphere, T.tankSkin, 0, -0.05, 0, 0.12, 0.14, 0.12);
+      add(this.armR.hand, T.cyl, T.wood, 0, 0, 0, 0.018, 0.12, 0.018);
+      add(this.armR.hand, T.box, T.steel, 0, -0.16, -0.07, 0.012, 0.22, 0.16);
+    } else if (type === 'plague') {
+      // La Madre Plaga: hinchada, verde, con pústulas y un aura tóxica
+      this.group.scale.set(1.55, 1.4, 1.55);
+      add(this.spine, T.sphere, T.plague, 0, 0.22, -0.06, 0.3, 0.32, 0.27);
+      add(this.spine, T.sphere, T.plague, 0, 0.46, 0.08, 0.22, 0.18, 0.18);
+      this.pustMat = T.plagueSpot.clone();
+      this.pustules = [];
+      for (let i = 0; i < 12; i++) {
+        const a = r() * Math.PI * 2, y = 0.05 + r() * 0.5;
+        this.pustules.push(add(this.spine, T.lump, this.pustMat, Math.cos(a) * 0.27, y, Math.sin(a) * 0.25, 0.03 + r() * 0.03));
+      }
+      this._aura(0x7aff3a, 3.2, 0.35);
+    } else if (type === 'necro') {
+      // El Nigromante: alto, túnica y capucha, bastón con un orbe morado
+      this.eyes.material = T.eyesPurple;
+      this.group.scale.set(1.2, 1.4, 1.2);
+      const hood = add(this.neck, T.cone, T.robe, 0, 0.26, 0.02, 0.17, 0.34, 0.17);
+      hood.rotation.x = 0.15;
+      add(this.hips, T.cone, T.robe, 0, -0.38, 0, 0.3, 0.9, 0.3);
+      add(this.spine, T.cyl, T.robe, 0, 0.3, 0, 0.19, 0.6, 0.15);
+      add(this.armR.hand, T.cyl, T.wood, 0, 0.1, 0, 0.015, 1.3, 0.015);
+      this.orb = add(this.armR.hand, T.sphere, T.orb, 0, 0.78, 0, 0.06);
+      this._aura(0xb050ff, 1.3, 0.8, this.orb);
+    } else if (type === 'armored') {
+      // El Acorazado: placas de acero; la cara queda al descubierto (punto débil)
+      this.eyes.material = T.eyesYellow;
+      this.group.scale.set(1.6, 1.6, 1.6);
+      add(this.spine, T.box, T.steel, 0, 0.28, -0.13, 0.42, 0.48, 0.08);
+      add(this.spine, T.box, T.steel, 0, 0.3, 0.12, 0.42, 0.5, 0.08);
+      add(this.hips, T.box, T.darkSteel, 0, -0.08, -0.12, 0.36, 0.2, 0.06);
+      for (const side of [this.armL, this.armR]) {
+        add(side.sh, T.box, T.steel, 0, 0.0, 0, 0.2, 0.1, 0.22);
+        add(side.el, T.box, T.darkSteel, 0, -0.12, 0, 0.1, 0.2, 0.1);
+      }
+      for (const leg of [this.legL, this.legR]) add(leg.kn, T.box, T.darkSteel, 0, -0.14, -0.05, 0.12, 0.26, 0.05);
+      add(this.neck, T.sphere, T.darkSteel, 0, 0.25, 0.02, 0.13, 0.09, 0.14);       // casco (sin visera)
+    } else if (type === 'specter') {
+      // El Espectro: pálido y translúcido; casi invisible cuando se camufla (ZF.CLOAK)
+      this.eyes.material = T.eyesCyan;
+      this.group.scale.set(1.15, 1.3, 1.15);
+      this._ghostMats = new Map();
+      this.group.traverse((o) => {
+        if (!o.isMesh || o === this.eyes) return;
+        let g = this._ghostMats.get(o.material);
+        if (!g) {
+          g = o.material.clone();
+          g.transparent = true;
+          g.depthWrite = false;
+          if (g.color) g.color.lerp(new THREE.Color(0xcfe8ff), 0.55);
+          if (g.emissive) { g.emissive.setHex(0x3a6a8a); g.emissiveIntensity = 0.6; }
+          this._ghostMats.set(o.material, g);
+        }
+        o.material = g;
+      });
+      this._aura(0x9ad8ff, 2.2, 0.25);
     } else if (type === 'tank') {
       this.group.scale.set(1.5, 1.5, 1.5);
       add(this.spine, T.sphere, T.tankSkin, 0, 0.5, 0.1, 0.28, 0.22, 0.22);         // joroba
@@ -859,7 +957,18 @@ export class ZombieModel {
     const headless = !!(flags & ZF.NOHEAD);
     if (headless && this.neck.visible) this._removeHead(null);
     this._pose(dt, st, crawler);
-    if (this.pustMat) {
+    if (this.auraSprite) this.auraSprite.material.opacity = this.auraBase * (0.75 + 0.25 * Math.sin(this.time * 3));
+    if (this._ghostMats) {
+      const cloak = !!(flags & ZF.CLOAK);
+      this._ghost = (this._ghost == null ? 0.8 : this._ghost) + ((cloak ? 0.08 : 0.8) - (this._ghost == null ? 0.8 : this._ghost)) * Math.min(1, dt * 5);
+      const o = this._ghost * (cloak ? 0.7 + 0.3 * Math.sin(this.time * 17) : 1);
+      for (const m of this._ghostMats.values()) m.opacity = o;
+      this.eyes.visible = !cloak || Math.sin(this.time * 9) > 0.6;
+      if (this.auraSprite) this.auraSprite.visible = !cloak;
+    }
+    if (this.type === 'plague' && this.pustMat) {
+      this.pustMat.emissiveIntensity = 1.0 + 0.6 * Math.sin(this.time * 2);
+    } else if (this.pustMat) {
       // pústulas: latido lento; con la mecha encendida, parpadeo rápido y más fuerte
       const fuse = !!(flags & ZF.FUSE);
       this.pustMat.emissiveIntensity = fuse ? (Math.sin(this.time * 28) > 0 ? 4 : 0.4) : 0.9 + 0.5 * Math.sin(this.time * 2.5);
@@ -1640,6 +1749,8 @@ export class ZombieModel {
     this.pieces.length = 0;
     if (this._fadeMats) { for (const m of this._fadeMats.values()) m.dispose(); this._fadeMats = null; }
     if (this.pustMat) { this.pustMat.dispose(); this.pustMat = null; }
+    if (this._ghostMats) { for (const m of this._ghostMats.values()) m.dispose(); this._ghostMats = null; }
+    if (this.auraSprite) { this.auraSprite.material.dispose(); this.auraSprite = null; }
   }
 }
 

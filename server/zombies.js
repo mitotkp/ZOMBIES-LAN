@@ -3,7 +3,7 @@
 // API usada por Game (SPEC.md 5.3).
 
 import {
-  ZOMBIE, ROUND, ZOMBIE_TYPES, zombieHealth, zombiesForRound, zombieSpeedChances, angleDiff, yawTo,
+  ZOMBIE, ROUND, ZOMBIE_TYPES, BOSS_RULES, BOSS_KEYS, zombieHealth, zombiesForRound, zombieSpeedChances, angleDiff, yawTo,
 } from '../shared/constants.js';
 import { WINDOW_INFO, DIRS } from '../shared/map.js';
 import { moveCircle, resolveCircle, solidForZombieInside, solidForZombieOutside } from '../shared/collision.js';
@@ -138,7 +138,8 @@ export class ZombieManager {
     const inf = info || {};
     let amt = Number(amount);
     if (!Number.isFinite(amt) || amt < 0) amt = 0;
-    if (inf.instakill) amt = Math.max(amt, z.hp);
+    if (inf.instakill && !z.boss) amt = Math.max(amt, z.hp);   // Muerte Instantánea no afecta a los jefes
+    if (z.boss) amt *= this._bossDamageFactor(z, inf);
     const now = Date.now();
     if (inf.special === 'fire' && inf.kind !== 'fire') {
       z.burnUntil = now + BURN_TIME * 1000;
@@ -147,11 +148,12 @@ export class ZombieManager {
     }
     if (amt <= 0) return { killed: false, existed: true };
     z.hp -= amt;
+    if (z.boss) this._syncBosses();
     if (z.hp <= 0) {
       this._kill(z, pid || null, inf);
       return { killed: true, existed: true };
     }
-    if (inf.kind === 'explosion' && !z.crawler && z.type !== 'tank' && z.type !== 'bomber' && Math.random() < 0.3) this._makeCrawler(z);
+    if (inf.kind === 'explosion' && !z.crawler && z.type !== 'tank' && z.type !== 'bomber' && !z.boss && Math.random() < 0.3) this._makeCrawler(z);
     return { killed: false, existed: true };
   }
 
@@ -178,7 +180,7 @@ export class ZombieManager {
     const z = this.byId.get(zid);
     if (!z || z.dead || z.dieAt) return false;
     if (!INSIDE_STATES.has(z.state)) return false;
-    if (z.type === 'tank' || z.fuseAt) return false;
+    if (z.type === 'tank' || z.boss || z.fuseAt) return false;
     const now = Date.now();
     let dx = z.x - fromX, dz = z.z - fromZ;
     let len = Math.hypot(dx, dz);
@@ -246,6 +248,7 @@ export class ZombieManager {
           this._syncZLeft();
         } else {
           if (type === 'tank') this.pendingTanks++;
+          else if (ZOMBIE_TYPES[type] && ZOMBIE_TYPES[type].boss) this.pendingBosses++;
           this.spawnTimer = 0.4; // no hay ventana disponible ahora mismo: reintentar pronto
         }
       }
@@ -271,6 +274,8 @@ export class ZombieManager {
       if (r >= T.twoFrom && Math.random() < ch * 0.5) this.pendingTanks++;
     }
     this.queue += this.pendingTanks;
+    this.pendingBosses = r >= BOSS_RULES.from ? 1 + (r >= BOSS_RULES.twoFrom ? 1 : 0) : 0;
+    this.queue += this.pendingBosses;
     this.roundTotal = this.queue;
     this.spawnedThisRound = 0;
     this.players = players;
@@ -296,17 +301,30 @@ export class ZombieManager {
   // Tipo del siguiente zombi de la cola
   _pickType() {
     const r = this.gs.round | 0;
+    if (this.pendingBosses > 0 && (this.spawnedThisRound >= (this.roundTotal || 0) * BOSS_RULES.spawnAt
+        || this.queue <= this.pendingBosses + (this.pendingTanks || 0))) {
+      this.pendingBosses--;
+      return this._nextBossKey();
+    }
     if (this.pendingTanks > 0 && this.spawnedThisRound >= (this.roundTotal || 0) * 0.3) {
       const alive = this.zombies.filter((z) => z.type === 'tank').length;
       if (alive < (r >= ZOMBIE_TYPES.tank.twoFrom ? 2 : 1)) { this.pendingTanks--; return 'tank'; }
     }
     // no dejar que la cola se quede sin sitio para los tanques pendientes
-    if (this.pendingTanks > 0 && this.queue <= this.pendingTanks) { this.pendingTanks--; return 'tank'; }
+    if (this.pendingTanks > 0 && this.queue <= this.pendingTanks + (this.pendingBosses || 0)) { this.pendingTanks--; return 'tank'; }
     const x = Math.random();
     const pr = typeChance(ZOMBIE_TYPES.runner, r), pb = typeChance(ZOMBIE_TYPES.bomber, r);
     if (x < pb) return 'bomber';
     if (x < pb + pr) return 'runner';
     return 'normal';
+  }
+
+  // Jefe al azar, distinto del último
+  _nextBossKey() {
+    const opts = BOSS_KEYS.filter((k) => k !== this.lastBoss);
+    const k = opts[Math.floor(Math.random() * opts.length)] || BOSS_KEYS[0];
+    this.lastBoss = k;
+    return k;
   }
 
   // Modo desarrollo: hace aparecer ya un zombi del tipo indicado
@@ -340,22 +358,35 @@ export class ZombieManager {
     const x = w.x + 0.5 + d.dx * depth - d.dz * side;
     const zz = w.z + 0.5 + d.dz * depth + d.dx * side;
 
+    const z = this._newZombie(x, zz, w, 'outside');
+    this._applyType(z, type);
+    this.zombies.push(z);
+    this.byId.set(z.id, z);
+    this.spawnedThisRound = (this.spawnedThisRound || 0) + 1;
+    if (z.type === 'tank') this._call('broadcastEvent', { e: 'tank', id: z.id });
+    if (z.boss) { this._call('broadcastEvent', { e: 'boss', id: z.id, key: z.type, level: z.level }); this._syncBosses(); }
+    return true;
+  }
+
+  // Objeto zombi base (normal). state: 'outside' (en un callejón de la ventana w) o 'inside'
+  _newZombie(x, zz, w, state) {
     const { run, sprint } = this.speedChances;
     const rnd = Math.random();
     const cls = rnd < sprint ? 'sprint' : rnd < run ? 'run' : 'walk';
-    const z = {
+    const inside = state === 'inside';
+    return {
       id: this.nextId++,
       x, z: zz,
-      rot: yawTo(x, zz, w.cx, w.cz),
+      rot: w ? yawTo(x, zz, w.cx, w.cz) : Math.random() * Math.PI * 2,
       hp: this.health, maxHp: this.health,
       cls,
       speed: baseSpeed(cls) * (0.92 + Math.random() * 0.16),
       crawler: false,
-      state: 'outside',
-      win: w.id,
+      state: inside ? 'inside' : 'outside',
+      win: w ? w.id : 0,
       waitSpot: WAIT_SPOTS[this.nextId % WAIT_SPOTS.length],
       anim: ZA.WALK,
-      flags: ZF.OUTSIDE,
+      flags: inside ? 0 : ZF.OUTSIDE,
       atk: null,
       nextAttackAt: 0,
       tearAcc: 0,
@@ -368,13 +399,8 @@ export class ZombieManager {
       dead: false,
       type: 'normal', tcode: 0, dmg: ZOMBIE.damage, range: ZOMBIE.attackRange,
       windup: ZOMBIE.attackWindup, cooldown: ZOMBIE.attackCooldown, tearMult: 1, fuseAt: 0,
+      boss: null, level: 0,
     };
-    this._applyType(z, type);
-    this.zombies.push(z);
-    this.byId.set(z.id, z);
-    this.spawnedThisRound = (this.spawnedThisRound || 0) + 1;
-    if (z.type === 'tank') this._call('broadcastEvent', { e: 'tank', id: z.id });
-    return true;
   }
 
   _applyType(z, type) {
@@ -402,7 +428,151 @@ export class ZombieManager {
       z.windup = T.windup;
       z.cooldown = T.cooldown;
       z.tearMult = T.tearMult;
+    } else if (T.boss) {
+      const r = Math.max(BOSS_RULES.from, this.gs.round | 0);
+      const lv = r - BOSS_RULES.from;
+      const extra = Math.max(0, (this.players || 1) - 1);
+      z.boss = type;
+      z.level = r;
+      z.hp = z.maxHp = Math.round((T.hpBase + this.health * T.hpMult) * (1 + BOSS_RULES.hpPerRound * lv) * (1 + BOSS_RULES.hpPerExtraPlayer * extra));
+      z.dmg = Math.round(T.damage * Math.min(BOSS_RULES.dmgMax, 1 + BOSS_RULES.dmgPerRound * lv));
+      z.cls = T.speed >= 3.4 ? 'run' : 'walk';
+      z.speed = z.baseSpeed = T.speed;
+      z.range = T.attackRange;
+      z.windup = T.windup;
+      z.cooldown = T.cooldown;
+      z.tearMult = T.tearMult;
+      const now = Date.now();
+      z.nextAbility = now + 4000 + Math.random() * 2000;    // carga / invocación / golpe al suelo
+      z.nextAura = now + 1000;
+      z.cloakAt = now + (T.cloak ? T.cloak.visible * 1000 : 0);
+      z.cloaked = false;
     }
+  }
+
+  // Multiplicador del daño que recibe un jefe (armadura del Acorazado, camuflaje del Espectro)
+  _bossDamageFactor(z, inf) {
+    const T = ZOMBIE_TYPES[z.boss];
+    let k = 1;
+    if (T.armor) {
+      if (inf.kind === 'explosion') k = T.armor.explosion;
+      else if (inf.kind === 'melee' || inf.kind === 'shield') k = T.armor.melee;
+      else if (inf.kind === 'bullet' && inf.part !== 'h') k = T.armor.body;
+    }
+    if (T.cloak && z.cloaked) k *= T.cloak.damageTaken;
+    return k;
+  }
+
+  // Estado de los jefes vivos para el HUD (gs.bosses)
+  _syncBosses() {
+    const gs = this.gs;
+    if (!gs) return;
+    gs.bosses = this.zombies.filter((z) => z.boss && !z.dead)
+      .map((z) => ({ id: z.id, key: z.boss, level: z.level, hp: Math.max(0, Math.round(z.hp)), maxHp: z.maxHp }));
+    this._markDirty();
+  }
+
+  // Habilidades de los jefes que funcionan en cualquier estado (camuflaje, aura, invocación)
+  _bossPassive(z, dt, now) {
+    const T = ZOMBIE_TYPES[z.boss];
+    if (T.cloak && now >= z.cloakAt) {
+      z.cloaked = !z.cloaked;
+      z.cloakAt = now + (z.cloaked ? T.cloak.hidden : T.cloak.visible) * 1000;
+      z.speed = z.baseSpeed * (z.cloaked ? T.cloak.speedMult : 1);
+      if (z.cloaked) z.flags |= ZF.CLOAK; else z.flags &= ~ZF.CLOAK;
+      this._call('broadcastEvent', { e: 'bossAbility', id: z.id, a: z.cloaked ? 'cloak' : 'uncloak', x: r2(z.x), z: r2(z.z) });
+    }
+    if (!INSIDE_STATES.has(z.state)) return;
+    if (T.aura && now >= z.nextAura) {
+      z.nextAura = now + T.aura.every * 1000;
+      for (const t of this._targets) {
+        if (Math.hypot(t.x - z.x, t.z - z.z) > T.aura.radius) continue;
+        this._call('damagePlayer', t.pid, Math.round(T.aura.damage * z.dmg / T.damage), z);
+        if (Math.random() < T.aura.infect) this._call('infectPlayer', t.pid);
+      }
+    }
+    if (T.summon && now >= z.nextAbility && this._targets.length) {
+      z.nextAbility = now + T.summon.every * 1000;
+      const alive = this.zombies.filter((o) => o.summonedBy === z.id).length;
+      const n = Math.min(T.summon.count, T.summon.maxAlive - alive);
+      const spots = [];
+      for (let i = 0; i < n; i++) {
+        const p = randomPointNear(this.field, z.x, z.z, T.summon.radius, ZOMBIE.radius, this._solidIn);
+        if (!p) continue;
+        const s = this._newZombie(p.x, p.z, null, 'inside');
+        s.summoned = true;
+        s.summonedBy = z.id;
+        this.zombies.push(s);
+        this.byId.set(s.id, s);
+        spots.push([r2(p.x), r2(p.z)]);
+      }
+      if (spots.length) {
+        this._syncZLeft();
+        this._call('broadcastEvent', { e: 'bossAbility', id: z.id, a: 'summon', x: r2(z.x), z: r2(z.z), spots });
+      }
+    }
+  }
+
+  // Habilidades activas al perseguir (carga del Carnicero, golpe al suelo del Acorazado). true = ya actuó
+  _bossActive(z, best, bd, dt, now) {
+    const T = ZOMBIE_TYPES[z.boss];
+    if (T.charge && now >= z.nextAbility && bd >= T.charge.min && bd <= T.charge.max
+        && clearPath(z.x, z.z, best.x, best.z, ZOMBIE.radius, this._solidIn)) {
+      const dx = best.x - z.x, dz = best.z - z.z, d = Math.hypot(dx, dz) || 1;
+      z.charge = { dx: dx / d, dz: dz / d, until: now + T.charge.time * 1000, hit: false };
+      z.nextAbility = now + T.charge.every * 1000;
+      z.flags |= ZF.CHARGE;
+      z.rot = yawTo(0, 0, dx, dz);
+      this._call('broadcastEvent', { e: 'bossAbility', id: z.id, a: 'charge', x: r2(z.x), z: r2(z.z) });
+      return true;
+    }
+    if (T.slam && now >= z.nextAbility && bd <= T.slam.range) {
+      z.slam = { at: now + T.slam.windup * 1000 };
+      z.nextAbility = now + T.slam.every * 1000;
+      z.anim = ZA.ATTACK;
+      this._call('broadcastEvent', { e: 'bossAbility', id: z.id, a: 'slamStart', x: r2(z.x), z: r2(z.z) });
+      return true;
+    }
+    return false;
+  }
+
+  _updCharge(z, dt, now) {
+    const T = ZOMBIE_TYPES[z.boss];
+    const c = z.charge;
+    z.anim = ZA.SPRINT;
+    const step = T.charge.speed * dt;
+    const r = moveCircle(z.x, z.z, c.dx * step, c.dz * step, ZOMBIE.radius, this._solidIn);
+    const moved = Math.hypot(r.x - z.x, r.z - z.z);
+    z.x = r.x; z.z = r.z;
+    if (!c.hit) {
+      for (const t of this._targets) {
+        if (Math.hypot(t.x - z.x, t.z - z.z) > 1.4) continue;
+        c.hit = true;
+        const res = this._call('damagePlayer', t.pid, Math.round(z.dmg * T.charge.dmgMult), z);
+        const hit = res && typeof res === 'object' ? !!res.hit : !!res;
+        this._call('broadcastEvent', { e: 'zatk', id: z.id, pid: t.pid, hit, blocked: !!(res && res.blocked) });
+      }
+    }
+    // termina al acabar el tiempo, al golpear o al chocar con una pared (queda aturdido un momento)
+    if (now >= c.until || c.hit || moved < step * 0.3) {
+      z.charge = null;
+      z.flags &= ~ZF.CHARGE;
+      if (moved < step * 0.3 || c.hit) { z.state = 'stunned'; z.stunUntil = now + 900; z.knockUntil = 0; z.anim = ZA.STUN; }
+    }
+  }
+
+  _updSlam(z, now) {
+    const T = ZOMBIE_TYPES[z.boss];
+    z.anim = ZA.ATTACK;
+    if (now < z.slam.at) return;
+    z.slam = null;
+    for (const t of this._targets) {
+      const d = Math.hypot(t.x - z.x, t.z - z.z);
+      if (d > T.slam.radius) continue;
+      this._call('damagePlayer', t.pid, Math.round(z.dmg * T.slam.dmgMult * (1 - 0.4 * d / T.slam.radius)), z);
+    }
+    this._call('broadcastEvent', { e: 'bossAbility', id: z.id, a: 'slam', x: r2(z.x), z: r2(z.z), r: T.slam.radius });
+    z.nextAttackAt = now + 600;
   }
 
   _syncZLeft() {
@@ -456,6 +626,13 @@ export class ZombieManager {
       z.burnAcc = 0;
     }
 
+    // Jefes: habilidades
+    if (z.boss) {
+      this._bossPassive(z, dt, now);
+      if (z.dead) return;
+      if (z.charge) { this._updCharge(z, dt, now); return; }
+      if (z.slam) { this._updSlam(z, now); return; }
+    }
     // Explosivo con la mecha encendida: tiembla quieto y estalla
     if (z.fuseAt) {
       z.anim = ZA.STUN;
@@ -642,6 +819,7 @@ export class ZombieManager {
       if (d < bd) { bd = d; best = t; }
     }
     z.nearD = bd;
+    if (z.boss && this._bossActive(z, best, bd, dt, now)) return;
     // Explosivo: al acercarse enciende la mecha
     if (z.type === 'bomber' && bd <= ZOMBIE_TYPES.bomber.trigger && !z.crawler) {
       z.fuseAt = now + ZOMBIE_TYPES.bomber.fuse * 1000;
@@ -818,6 +996,7 @@ export class ZombieManager {
     if (i >= 0) this.zombies.splice(i, 1);
     this.byId.delete(z.id);
     if (this.winOcc[z.win] === z.id) this.winOcc[z.win] = null;
+    if (z.boss) this._syncBosses();
   }
 
   // Elimina al zombi sin contarlo como baja y lo devuelve a la cola de aparición
@@ -825,6 +1004,8 @@ export class ZombieManager {
     if (z.dead) return;
     this._remove(z);
     if (z.type === 'tank') this.pendingTanks = (this.pendingTanks || 0) + 1;
+    if (z.boss && !z.summoned) this.pendingBosses = (this.pendingBosses || 0) + 1;
+    if (z.summoned) { this._syncZLeft(); return; }   // los invocados no vuelven a la cola
     this.queue++;
     this._syncZLeft();
   }

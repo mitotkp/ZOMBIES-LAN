@@ -5,7 +5,7 @@
 import {
   MAX_PLAYERS, TICK_RATE, GS_MAX_RATE, SNAPSHOT_RATE, PLAYER, POINTS, BOARDS_PER_WINDOW, REPAIR_TIME,
   BOX, PAP, SHIELD, MELEE, GRENADE, POWERUPS, PLAYER_COLORS, clamp, angleDiff, yawTo, forwardXZ,
-  MEDS, MED_KEYS, MED_DROPS, INFECTION, ZOMBIE_TYPES,
+  MEDS, MED_KEYS, MED_DROPS, INFECTION, ZOMBIE_TYPES, BOSS_RULES,
 } from '../shared/constants.js';
 import {
   W, H, DOORS, WINDOW_INFO, INTERACTABLE_BY_ID, BOX_LOCATIONS, BOX_START, SHIELD_PARTS,
@@ -122,6 +122,7 @@ export class Game {
       shield: { parts: SHIELD_PARTS.map(() => false), built: false, builder: null, buildUntil: 0 },
       powerups: [],
       items: [],                     // curas en el suelo: { id, type, x, z, until }
+      bosses: [],                    // jefes vivos: { id, key, level, hp, maxHp }
       timers: { instakill: 0, doublepoints: 0, firesale: 0 },
       players: {},
     };
@@ -1538,6 +1539,17 @@ export class Game {
       if (z.type === 'tank') this._addPoints(p, ZOMBIE_TYPES.tank.points, true);
       this.markDirty();
     }
+    // Jefes: puntos para el que lo mata y para el resto del equipo, potenciador y botiquín asegurados
+    if (z.boss && kind !== 'dev') {
+      if (p && scoring) {
+        this._addPoints(p, BOSS_RULES.killPoints, true);
+        for (const q of this._players()) if (q !== p && q.state !== 'dead') this._addPoints(q, BOSS_RULES.teamPoints, true);
+      }
+      const t = this._randomPowerupType(Date.now());
+      if (t) this.spawnPowerup(t, z.x, z.z);
+      this.spawnItem('medkit', z.x + 0.8, z.z + 0.4);
+      this._ev({ e: 'bossDown', id: z.id, key: z.boss, pid: p ? p.id : null });
+    }
     // El tanque deja siempre un potenciador
     if (z.type === 'tank' && kind !== 'dev') {
       const t = this._randomPowerupType(Date.now());
@@ -1563,6 +1575,17 @@ export class Game {
       }
       if (this.spawnItem(pickWeighted(MED_DROPS.weights), x, zz)) this.medDropsThisRound++;
     }
+  }
+
+  // Infección directa (aura de la Madre Plaga)
+  infectPlayer(pid) {
+    const p = this.gs.players[pid];
+    const d = this.pd.get(pid);
+    if (!p || !d || p.state !== 'alive' || p.infected || d.god) return;
+    p.infected = true;
+    d.infT = 0; d.infAcc = 0;
+    this.markDirty();
+    this._ev({ e: 'infected', pid: p.id });
   }
 
   // Explosión de un zombi explosivo: daña a los jugadores y a los zombis cercanos
@@ -1775,6 +1798,7 @@ export class Game {
         if (!needPlay()) break;
         const type = (args[0] || '').toLowerCase();
         if (!ZOMBIE_TYPES[type]) { say(`Tipos: ${Object.keys(ZOMBIE_TYPES).join(', ')}`); break; }
+        if (ZOMBIE_TYPES[type].boss && !this.gs.round) { say('Espera a que empiece la ronda 1.'); break; }
         say(this.zombies.spawnSpecial(type) ? `Aparece: ${ZOMBIE_TYPES[type].name}.` : 'No hay ventana libre.');
         break;
       }
