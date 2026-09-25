@@ -694,6 +694,10 @@ knife_hit, bash, hit_flesh, headshot, hitmarker, kill, door_open, debris, board_
 box_whoosh, perk_drink, perk_burp, pap_work, pap_ready, power_on, powerup_spawn, powerup_grab, powerup_loop, nuke,
 zombie_groan, zombie_attack, zombie_die, zombie_step, explosion, grenade_throw, grenade_bounce, pin, shield_hit, shield_break,
 part_pickup, build, chat, ui_click, ui_hover, round_tick`.
+Canciones en bucle (`SONGS` en `audio.js`, programadas compás a compás desde `update`): `menu` (suena con `music('lobby')`,
+tranquila y amenazante, re menor a 64 BPM) y `combat` (agresiva, 138 BPM, volumen moderado). `combat` la gestiona Audio sola: empieza
+6 s después de que la ronda pase a 'active', se apaga entre rondas, al morir o fuera de la partida, y baja de volumen mientras suena
+otra pieza de `music()`. Todas van por el bus de música (ajuste "Volumen de la música").
 Los sonidos con `pos` se espacializan (PannerNode HRTF, distancia 1–40 m). Las melodías son **originales** (no copiar música de BO).
 
 ---------------------------------------------------------------------------------------------------

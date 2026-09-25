@@ -970,6 +970,77 @@ const MUSIC = {
 };
 
 // ---------------------------------------------------------------------------------------------
+// Canciones en bucle (originales). Se programan compás a compás con antelación desde Audio.update.
+// render(s, bar, loop) dibuja el compás 'bar' (0..bars-1) de la vuelta 'loop' empezando en s.t0.
+// ---------------------------------------------------------------------------------------------
+const SONGS = {
+  // Menú: re menor lento. Caja de música sobre acordes graves con giros inquietantes (Mib = II rebajado),
+  // latido de corazón y un coro que crece al final: tranquila, pero anuncia lo que viene.
+  menu: {
+    bpm: 64, beats: 4, bars: 16, gain: 0.7,
+    chords: ['D2+A2+F3', 'D2+A2+F3', 'Bb1+F2+D3', 'A1+E2+C#3', 'D2+A2+F3', 'G1+D2+Bb2', 'Eb2+Bb2+G3', 'A1+E2+C#3',
+      'D2+A2+F3', 'D2+A2+F3', 'Bb1+F2+D3', 'G1+D2+Bb2', 'Eb2+Bb2+G3', 'Eb2+Bb2+G3', 'A1+E2+G3', 'A1+E2+C#3'],
+    melody: ['A4:1 D5:1 F5:1 E5:1', 'D5:2 -:1 A4:1', 'Bb4:1 D5:1 F5:1 A5:1', 'E5:1.5 C#5:0.5 A4:2',
+      'A4:1 D5:1 F5:1 A5:1', 'Bb5:2 A5:1 G5:1', 'G5:1 Eb5:1 D5:1 Bb4:1', 'C#5:3 -:1',
+      'D6:3 C6:1', 'A5:4', 'Bb5:2 A5:1 F5:1', 'G5:4',
+      'Eb5:2 D5:2', 'Eb5:1 F5:1 G5:2', 'A5:2 G5:1 E5:1', 'C#5:2 -:2'],
+    render(s, bar, loop) {
+      const o = { bpm: this.bpm };
+      seq(s, INST.pad, `${this.chords[bar]}:4`, { ...o, vel: 0.8 });
+      const root = this.chords[bar].split('+')[0];
+      seq(s, INST.bass, `${root}:4`, { ...o, vel: 0.35 });
+      // latido: "lub-dub" al inicio de cada compás
+      INST.kick(s, 0, 0, 0, 0.22);
+      INST.kick(s, 0.26, 0, 0, 0.14);
+      // la melodía descansa en la primera mitad de cada vuelta alterna para no cansar
+      if (!(loop % 2 === 1 && bar < 4)) seq(s, INST.tine, this.melody[bar], { ...o, vel: 0.75 });
+      if (bar === 6 || bar === 7 || bar >= 12) seq(s, INST.choir, `${this.chords[bar].split('+').slice(1).join('+')}:4`, { ...o, vel: bar >= 12 ? 0.55 : 0.4 });
+      if (bar === 12) INST.timp(s, 0, hz('D1'), 1, 0.35);
+      if (bar === 15) INST.timp(s, 2 * 60 / this.bpm, hz('A1'), 1, 0.3);
+    },
+  },
+  // Partida: re frigio, 138 BPM. Batería, riff de bajo, golpes de metales y arpegio en la 2.ª mitad.
+  combat: {
+    bpm: 138, beats: 4, bars: 16, gain: 0.68,
+    roots: ['D', 'D', 'Bb', 'A', 'D', 'D', 'Eb', 'C', 'D', 'D', 'Bb', 'A', 'G', 'G', 'Eb', 'A'],
+    render(s, bar, loop) {
+      const b = 60 / this.bpm;
+      const o = { bpm: this.bpm };
+      const r = this.roots[bar];
+      const lastBar = bar === 7 || bar === 15;
+      // batería
+      for (let i = 0; i < 8; i++) INST.hat(s, i * b / 2, 0, 0, i % 2 ? 0.45 : 0.7);
+      INST.kick(s, 0, 0, 0, 0.8);
+      INST.kick(s, 1.5 * b, 0, 0, 0.6);
+      INST.kick(s, 2 * b, 0, 0, 0.8);
+      INST.snare(s, b, 0, 0, 0.7);
+      if (lastBar) { for (let i = 0; i < 4; i++) INST.snare(s, 3 * b + i * b / 4, 0, 0, 0.35 + i * 0.12); }
+      else INST.snare(s, 3 * b, 0, 0, 0.7);
+      // riff de bajo (corcheas con la 2.ª menor como tensión)
+      const low = `${r}2`, oct = `${r}3`;
+      const riff = r === 'D'
+        ? `${low}:0.5 ${low}:0.5 ${oct}:0.5 ${low}:0.5 Eb2:0.5 ${low}:0.5 C3:0.5 ${low}:0.5`
+        : `${low}:0.5 ${low}:0.5 ${oct}:0.5 ${low}:0.5 ${low}:0.5 ${oct}:0.5 ${low}:0.5 ${oct}:0.5`;
+      seq(s, INST.pluck, riff, { ...o, vel: 0.9 });
+      seq(s, INST.bass, `${low}:4`, { ...o, vel: 0.5 });
+      // golpes de metales cada dos compases
+      if (bar % 2 === 0) {
+        const ch = { D: 'D3+A3+D4', Bb: 'Bb2+F3+Bb3', A: 'A2+E3+A3', Eb: 'Eb3+Bb3+Eb4', C: 'C3+G3+C4', G: 'G2+D3+G3' }[r];
+        seq(s, INST.brass, `${ch}:0.5 -:1 ${ch}:0.5`, { ...o, vel: 0.55 });
+      }
+      // arpegio inquieto en la segunda mitad (y en vueltas alternas también en la primera)
+      if (bar >= 8 || loop % 2 === 1) {
+        const arp = { D: 'D4 F4 A4 Eb5', Bb: 'Bb3 D4 F4 A4', A: 'A3 C#4 E4 G4', Eb: 'Eb4 G4 Bb4 D5', C: 'C4 Eb4 G4 Bb4', G: 'G3 Bb3 D4 F4' }[r].split(' ');
+        const notes = [];
+        for (let i = 0; i < 8; i++) notes.push(`${arp[i % 4]}:0.5`);
+        seq(s, INST.lead, notes.join(' '), { ...o, vel: 0.35 });
+      }
+      if (bar === 0 || bar === 8) seq(s, INST.choir, `${r}3+A3:4`, { ...o, vel: 0.3 });
+    },
+  },
+};
+
+// ---------------------------------------------------------------------------------------------
 // Clase Audio
 // ---------------------------------------------------------------------------------------------
 export class Audio {
@@ -983,6 +1054,7 @@ export class Audio {
     this._recent = new Map();
     this._lp = { x: 0, y: 1.6, z: 0 };
     this.lobby = null;
+    this.song = null;          // canción en bucle en curso (menú o partida)
     this.amb = null;
     this.pendingMusic = null;
     this._voices = [];
@@ -1331,6 +1403,8 @@ export class Audio {
     // Evita repetir la misma pieza si ya se pidió hace un instante
     for (const v of this.musicVoices) if (v.tag === name && !v.dead && now - v.born < 0.3) return this._handle(v);
     if (name === 'round_start' || name === 'round_end' || name === 'game_over' || name === 'power') this._stopLobby(2);
+    if (name === 'game_over') this._stopSong(1.5);
+    else this._duckSong(name.startsWith('perk:') ? 4 : name === 'box' ? 4.5 : 6);
     if (name === 'game_over') for (const v of this.musicVoices) this._kill(v, 0.8);
     const v = this._voice({ bus: this.musicBus, verb: 0.3, music: true });
     v.tag = name;
@@ -1394,6 +1468,9 @@ export class Audio {
         v.nodes = v.nodes.filter(([, e]) => e > now);
       }
     }
+
+    // Canciones en bucle (menú y partida)
+    this._updateSongs(now);
 
     // Campanas del lobby
     if (this.lobby && now >= this.lobby.nextBell) {
@@ -1493,7 +1570,7 @@ export class Audio {
     const t = ac.currentTime;
     const out = ac.createGain();
     out.gain.setValueAtTime(0.0001, t);
-    out.gain.exponentialRampToValueAtTime(0.5, t + 5);
+    out.gain.exponentialRampToValueAtTime(0.22, t + 5);
     out.connect(this.musicBus);
     const send = ac.createGain();
     send.gain.value = 0.6;
@@ -1552,10 +1629,12 @@ export class Audio {
     ng.connect(out);
     n.start(t);
     nodes.push(n);
-    this.lobby = { out, send, nodes, nextBell: t + 2.5 };
+    this.lobby = { out, send, nodes, nextBell: Infinity };   // la melodía la pone la canción del menú
+    this._startSong('menu', 4);
   }
 
   _stopLobby(fade = 1.5) {
+    if (this.song && this.song.name === 'menu') this._stopSong(fade);
     const L = this.lobby;
     if (!L || !this.ac) return;
     this.lobby = null;
@@ -1568,6 +1647,76 @@ export class Audio {
     for (const n of L.nodes) { try { n.stop(t + fade + 0.1); } catch { /* nada */ } }
     setTimeout(() => { try { L.out.disconnect(); L.send.disconnect(); } catch { /* nada */ } }, (fade + 0.4) * 1000);
     for (const v of this.musicVoices) if (v.tag === 'lobby_bell') this._kill(v, fade);
+  }
+
+  // ------------------------------------------------------------------ canciones en bucle
+  _startSong(name, fadeIn = 3) {
+    const def = SONGS[name];
+    if (!def || !this._ready()) return;
+    if (this.song && this.song.name === name) return;
+    if (this.song) this._stopSong(1.5);
+    const ac = this.ac;
+    const t = ac.currentTime;
+    const out = ac.createGain();
+    out.gain.setValueAtTime(0.0001, t);
+    out.gain.exponentialRampToValueAtTime(def.gain, t + fadeIn);
+    out.connect(this.musicBus);
+    this.song = { name, def, out, bar: 0, loop: 0, nextAt: t + 0.1, barDur: def.beats * 60 / def.bpm, voices: [], duckUntil: 0 };
+  }
+
+  _stopSong(fade = 2) {
+    const S = this.song;
+    if (!S || !this.ac) return;
+    this.song = null;
+    const t = this.ac.currentTime;
+    try {
+      S.out.gain.cancelScheduledValues(t);
+      S.out.gain.setValueAtTime(Math.max(0.0001, S.out.gain.value), t);
+      S.out.gain.exponentialRampToValueAtTime(0.0001, t + fade);
+    } catch { /* nada */ }
+    setTimeout(() => {
+      for (const v of S.voices) this._kill(v, 0.05);
+      try { S.out.disconnect(); } catch { /* nada */ }
+    }, (fade + 0.3) * 1000);
+  }
+
+  // Baja la canción mientras suena otra pieza (jingles, caja, inicio de ronda...)
+  _duckSong(seconds = 4, level = 0.25) {
+    const S = this.song;
+    if (!S || !this.ac) return;
+    const t = this.ac.currentTime;
+    S.out.gain.cancelScheduledValues(t);
+    S.out.gain.setTargetAtTime(S.def.gain * level, t, 0.15);
+    S.out.gain.setTargetAtTime(S.def.gain, t + seconds, 1.2);
+  }
+
+  _updateSongs(now) {
+    // Música de la partida: suena durante las rondas y se apaga entre ellas
+    const gs = this.ctx.gs;
+    const self = this.ctx.self;
+    const playing = !!(gs && gs.phase === 'playing');
+    const active = playing && gs.roundState === 'active' && !(self && self.state === 'dead');
+    if (active && !this._wasActive) this._combatAt = now + 6;      // deja sonar primero el aviso de ronda
+    this._wasActive = active;
+    if (active) {
+      if ((!this.song || this.song.name !== 'combat') && now >= (this._combatAt || 0)) this._startSong('combat', 5);
+    } else if (this.song && this.song.name === 'combat') {
+      this._stopSong(playing ? 4 : 1.5);
+    }
+    // Programar compases con antelación
+    const S = this.song;
+    if (!S) return;
+    S.voices = S.voices.filter((v) => !v.dead);
+    while (S.nextAt - now < 0.8) {
+      if (S.nextAt < now - 0.2) S.nextAt = now + 0.05;             // la pestaña estuvo en segundo plano
+      const v = this._voice({ bus: S.out, verb: S.name === 'menu' ? 0.55 : 0.18, music: true });
+      v.tag = 'song_' + S.name;
+      try { S.def.render(new Synth(this, v, S.nextAt, 1), S.bar, S.loop); } catch (e) { console.warn('[Audio] Error en la canción', S.name, e); }
+      S.voices.push(v);
+      S.nextAt += S.barDur;
+      S.bar++;
+      if (S.bar >= S.def.bars) { S.bar = 0; S.loop++; }
+    }
   }
 
   // Viento nocturno suave en bucle
