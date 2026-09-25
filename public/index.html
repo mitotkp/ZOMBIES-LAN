@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Shooter cooperativo de zombis por LAN (1 a 4 jugadores) inspirado en el modo Zombies de Black Ops 2.">
+  <title>ZOMBIES LAN</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%23120505'/%3E%3Cpath d='M14 14h36v8L26 44h24v8H14v-8l24-22H14z' fill='%23c01515'/%3E%3C/svg%3E">
+
+  <!-- Estilos mínimos de respaldo por si /css/style.css no carga (van antes para que style.css los sobrescriba) -->
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; color: #ddd;
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif; user-select: none; -webkit-user-select: none; }
+    #app { position: fixed; inset: 0; z-index: 0; background: #000; }
+    #app canvas { display: block; width: 100%; height: 100%; outline: none; }
+    #hud { position: fixed; inset: 0; z-index: 10; pointer-events: none; }
+    #menus { position: fixed; inset: 0; z-index: 20; pointer-events: none; }
+    #menus > * { pointer-events: auto; }
+    #boot-error { display: none; position: fixed; inset: 0; z-index: 3000; align-items: center; justify-content: center;
+      padding: 24px; background: #000; color: #ddd; text-align: center; line-height: 1.6; font-size: 16px; }
+    #boot-error b { color: #d22; font: bold 34px Impact, "Arial Black", sans-serif; letter-spacing: 3px; display: block; margin-bottom: 10px; }
+  </style>
+  <link rel="stylesheet" href="/css/style.css">
+
+  <script type="importmap">
+  { "imports": { "three": "/vendor/three/build/three.module.js", "three/addons/": "/vendor/three/examples/jsm/" } }
+  </script>
+</head>
+<body>
+  <div id="app"></div>      <!-- main.js añade aquí el canvas del renderer -->
+  <div id="hud"></div>      <!-- HUD lo rellena; pointer-events: none salvo el chat -->
+  <div id="menus"></div>    <!-- Menus lo rellena -->
+
+  <noscript>
+    <div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000;color:#ddd;font-size:18px;">
+      ZOMBIES LAN necesita JavaScript activado.
+    </div>
+  </noscript>
+  <div id="boot-error"><div><b>ZOMBIES LAN</b><span id="boot-error-text"></span></div></div>
+
+  <script type="module" src="/js/main.js"></script>
+
+  <!-- Aviso si el módulo principal no llega a arrancar (navegador antiguo, archivos que faltan...) -->
+  <script>
+    (function () {
+      function fail(msg) {
+        if (window.__zlanBooted) return;
+        var box = document.getElementById('boot-error');
+        var txt = document.getElementById('boot-error-text');
+        if (!box || !txt) return;
+        txt.textContent = msg;
+        box.style.display = 'flex';
+      }
+      if (!('noModule' in HTMLScriptElement.prototype) || !(HTMLScriptElement.supports && HTMLScriptElement.supports('importmap'))) {
+        fail('Tu navegador es demasiado antiguo. Usa una versión reciente de Chrome, Edge o Firefox.');
+        return;
+      }
+      window.addEventListener('error', function (e) {
+        if (window.__zlanBooted) return;
+        // Solo los scripts son fatales (una hoja de estilos o una imagen que falte no lo es)
+        var t = e && e.target;
+        if (t && t !== window && t.tagName && t.tagName !== 'SCRIPT') return;
+        var src = e && e.filename ? ' (' + e.filename.replace(location.origin, '') + ')' : '';
+        fail('No se pudo cargar el juego' + src + '. Recarga la página; si el problema continúa, revisa la consola (F12).');
+      }, true);
+      setTimeout(function () {
+        fail('El juego tarda demasiado en cargar. Comprueba que el servidor siga abierto y recarga la página.');
+      }, 15000);
+    })();
+  </script>
+</body>
+</html>
