@@ -106,6 +106,8 @@ export class Game {
       round: 0,
       roundState: 'pre',
       roundUntil: 0,
+      roundStartAt: 0,              // ms: cuándo empezó la ronda actual (en 'active')
+      lastRoundTime: 0,             // ms que duró la última ronda superada
       zLeft: 0,
       power: false,
       doors: {},

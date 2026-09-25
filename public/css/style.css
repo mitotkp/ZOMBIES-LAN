@@ -196,7 +196,7 @@ kbd {
 
 /* ---------- textos centrales ---------- */
 .hud-banner {
-  position: absolute; left: 50%; top: 14%; transform: translateX(-50%);
+  position: absolute; left: 50%; top: 22%; transform: translateX(-50%);
   width: max-content; max-width: 90vw; text-align: center; opacity: 0;
 }
 .hud-banner.on { animation: hud-banner 3.5s ease-out forwards; }
@@ -949,3 +949,18 @@ kbd {
   font-size: 0.9em; color: var(--chalk-dim);
 }
 @keyframes hp-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+
+/* ---------------------------------------------------------------- Contador de ronda */
+.hud-timer {
+  position: absolute; left: 50%; top: calc(var(--u) * 1.6); transform: translateX(-50%);
+  display: none; flex-direction: column; align-items: center; gap: 0.15em;
+  padding: 0.25em 0.9em; background: rgba(0, 0, 0, 0.38); border-bottom: 2px solid rgba(184, 20, 15, 0.7);
+  font-family: var(--f-ui); color: var(--chalk); text-shadow: 0 1px 3px #000; white-space: nowrap;
+}
+.hud-timer.on { display: flex; }
+.tm-main { font: 1.15em/1.1 var(--f-display); letter-spacing: 0.08em; text-transform: uppercase; }
+.tm-main b { font-weight: normal; color: #ff4a3a; font-size: 1.35em; }
+.hud-timer.count .tm-main { font-size: 1.35em; }
+.hud-timer.urgent .tm-main b { animation: hp-blink 0.5s ease-in-out infinite; }
+.tm-sub { font-size: 0.75em; letter-spacing: 0.06em; color: var(--chalk-dim); }
+.tm-sub:empty { display: none; }

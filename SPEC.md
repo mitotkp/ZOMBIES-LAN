@@ -142,6 +142,8 @@ El servidor mantiene un objeto de estado y lo envía completo como `{ t:'gs', ..
   round: 0,                      // 0 antes de la primera ronda
   roundState: 'pre' | 'active' | 'intermission',
   roundUntil: 0,                 // ms: cuándo empieza la siguiente ronda (en 'pre' e 'intermission')
+  roundStartAt: 0,               // ms: cuándo empezó la ronda actual (contador del HUD)
+  lastRoundTime: 0,              // ms que duró la última ronda superada
   zLeft: 0,                      // zombis que faltan por matar en la ronda (por aparecer + vivos)
   power: false,
   doors: { A: true },            // solo puertas ABIERTAS

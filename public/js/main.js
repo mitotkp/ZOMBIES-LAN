@@ -123,7 +123,7 @@ class CoreOverlays {
     this.click = mk(`position:fixed;left:50%;top:58%;transform:translateX(-50%);z-index:30;display:none;pointer-events:none;padding:10px 22px;background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:18px;letter-spacing:1px;${font}`);
     this.click.textContent = 'Haz clic para jugar';
 
-    this.spectate = mk(`position:fixed;left:50%;top:10px;transform:translateX(-50%);z-index:30;display:none;pointer-events:none;text-align:center;color:#eee;text-shadow:0 1px 4px #000;${font}`);
+    this.spectate = mk(`position:fixed;left:50%;top:11vh;transform:translateX(-50%);z-index:30;display:none;pointer-events:none;text-align:center;color:#eee;text-shadow:0 1px 4px #000;${font}`);
 
     this.dev = mk(`position:fixed;right:10px;top:8px;z-index:31;display:none;pointer-events:none;padding:2px 8px;background:#a00;color:#fff;font:bold 12px Consolas,monospace;letter-spacing:2px;`);
     this.dev.textContent = 'DEV';

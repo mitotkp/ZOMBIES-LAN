@@ -250,6 +250,7 @@ export class ZombieManager {
     gs.round = r;
     gs.roundState = 'active';
     gs.roundUntil = 0;
+    gs.roundStartAt = now;
     let players = 1;
     try { players = Math.max(1, Object.keys(gs.players || {}).length); } catch { players = 1; }
     this.queue = zombiesForRound(r, players);
@@ -266,6 +267,7 @@ export class ZombieManager {
     const gs = this.gs;
     gs.roundState = 'intermission';
     gs.roundUntil = now + ROUND.intermission * 1000;
+    if (gs.roundStartAt) gs.lastRoundTime = now - gs.roundStartAt;
     this._syncZLeft();
     this._markDirty();
     this._call('onRoundEnd', gs.round);

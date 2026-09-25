@@ -40,6 +40,7 @@ const TEMPLATE = `
 <div class="hud-crosshair"><i class="ch ch-t"></i><i class="ch ch-b"></i><i class="ch ch-l"></i><i class="ch ch-r"></i><i class="ch-dot"></i></div>
 <div class="hud-hitmarker"><i></i><i></i><i></i><i></i></div>
 <div class="hud-downicons"></div>
+<div class="hud-timer"><div class="tm-main"></div><div class="tm-sub"></div></div>
 <div class="hud-banner"><div class="bn-title"></div><div class="bn-sub"></div></div>
 <div class="hud-puname"></div>
 <div class="hud-msg"></div>
@@ -157,6 +158,7 @@ export class HUD {
       ammo: q('.hud-ammo'), amName: q('.am-name'), amMag: q('.am-mag'), amRes: q('.am-res'), amSep: q('.am-sep'),
       amMelee: q('.am-melee'), amShield: q('.am-shield'), amShieldBar: q('.am-shield-bar i'), amNades: q('.am-nades'),
       powerups: q('.hud-powerups'), scoreboard: q('.hud-scoreboard'), dev: q('.hud-dev'),
+      timer: q('.hud-timer'), tmMain: q('.tm-main'), tmSub: q('.tm-sub'),
       infect: q('.hud-infect'), health: q('.hud-health'), hpNum: q('.hp-num'), hpFill: q('.hp-fill'), hpCap: q('.hp-cap'),
       hpInf: q('.hp-inf'), hpHeal: q('.hp-heal'), hpHealT: q('.hp-heal-t'), hpHealBar: q('.hp-heal-bar i'), meds: q('.hud-meds'),
     };
@@ -461,6 +463,7 @@ export class HUD {
 
     this._updateChatInput(menusOpen);
     this._updateRound(gs);
+    this._updateTimer(gs, now);
     this._updateScores(gs);
     this._updatePerks(self);
     this._updateParts(gs);
@@ -743,6 +746,38 @@ export class HUD {
     // Latido con poca salud
     if (self && self.state === 'alive' && hpFrac < 0.35) this._startHeartbeat();
     else this._stopHeartbeat();
+  }
+
+  // Contador de ronda: tiempo transcurrido en la ronda activa y cuenta atrás de la preparación
+  _updateTimer(gs, now) {
+    const el = this.el;
+    const fmt = (ms) => {
+      const s = Math.max(0, Math.floor(ms / 1000));
+      return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    };
+    let main = '', sub = '', mode = '';
+    if (gs.roundState === 'active' && gs.roundStartAt) {
+      mode = 'active';
+      main = `Ronda ${gs.round} · ${fmt(now - gs.roundStartAt)}`;
+    } else if ((gs.roundState === 'pre' || gs.roundState === 'intermission') && gs.roundUntil) {
+      mode = 'count';
+      const left = gs.roundUntil - now;
+      const secs = Math.max(0, Math.ceil(left / 1000));
+      main = `${gs.round > 0 ? 'Siguiente ronda' : 'La partida empieza'} en <b>${secs}</b>`;
+      if (gs.round > 0 && gs.lastRoundTime) sub = `Ronda ${gs.round} superada en ${fmt(gs.lastRoundTime)}`;
+      // aviso sonoro en los últimos 3 segundos
+      if (secs > 0 && secs <= 3 && this._lastTick !== secs) { this._lastTick = secs; sfx(this.ctx, 'round_tick'); }
+      if (secs > 3) this._lastTick = null;
+      el.timer.classList.toggle('urgent', secs <= 3);
+    }
+    const key = `${mode}|${main}|${sub}`;
+    if (this._cache.timer === key) return;
+    this._cache.timer = key;
+    el.timer.classList.toggle('on', !!mode);
+    el.timer.classList.toggle('count', mode === 'count');
+    if (mode !== 'count') el.timer.classList.remove('urgent');
+    el.tmMain.innerHTML = main;
+    el.tmSub.textContent = sub;
   }
 
   // Barra de salud, infección, curas en el inventario y progreso de la cura en uso
