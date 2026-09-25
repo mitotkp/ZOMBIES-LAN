@@ -241,7 +241,7 @@ function counter(B, p, r) {
   P.box('chrome', lx - 0.2, 0.05, 0.05, 0, 0.16, 0.5, { color: 0xc8a860 });
   for (let x = -lx / 2 + 0.3; x < lx / 2; x += 1.6) P.box('chrome', 0.04, 0.14, 0.04, x, 0.09, 0.47, { color: 0xc8a860 });
   // botellas, vasos, grifos y caja registradora
-  for (let i = 0; i < 12; i++) bottle(P, -lx / 2 + 0.5 + r() * (lx - 1), 1.065, -0.2 + r() * 0.3, r(), 1);
+  for (let i = 0; i < 12; i++) bottle(P, -lx / 2 + 0.5 + r() * (lx - 1), 1.065, -0.2 + r() * 0.3, r, 1);
   for (let i = 0; i < 6; i++) P.cyl('glass', 0.035, 0.03, 0.1, -lx / 2 + 0.6 + r() * (lx - 1.2), 1.115, 0.1 + r() * 0.25, { color: 0x9ab0b8, seg: 8 });
   for (let k = 0; k < 3; k++) {
     P.box('chrome', 0.06, 0.28, 0.06, 1.2 + k * 0.22, 1.2, -0.3, { color: 0xc0c4c8 });
