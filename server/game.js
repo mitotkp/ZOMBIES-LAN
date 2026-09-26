@@ -17,6 +17,7 @@ import { WEAPONS, weaponDef, weaponName, BOX_POOL, ammoPrice, partMult, falloff,
 import { PERKS, PERK_LIMIT, perkPrice } from '../shared/perks.js';
 import { PF, r2, safeParse } from '../shared/protocol.js';
 import { ZombieManager } from './zombies.js';
+import crypto from 'node:crypto';
 
 const DEG = Math.PI / 180;
 
@@ -34,8 +35,11 @@ function pickWeighted(weights) {
 }
 const GAMEOVER_TIME = 15000;          // ms en la pantalla final antes de volver al lobby
 const TELEPORT_GRACE = 3000;          // ms tras reaparecer en los que se acepta cualquier salto de posición
-const MAX_JUMP = 3;                   // m máximos por mensaje 'st'
+const MAX_SPEED_MPS = PLAYER.sprintSpeed * 1.5; // margen sobre la velocidad real máxima (sprint)
+const MAX_JUMP_MARGIN = 0.75;         // m de tolerancia fija (redondeo/ráfagas de mensajes)
+const MAX_STATE_GAP_MS = 2000;        // tope de "crédito" de tiempo tras una pausa larga entre mensajes 'st'
 const RESYNC_AFTER = 30;              // mensajes rechazados seguidos antes de aceptar la posición igualmente
+const RECONNECT_GRACE_MS = 25000;     // ventana para recuperar el mismo jugador tras una desconexión no voluntaria
 const REVIVE_INVULN = 1500;           // ms de invulnerabilidad tras ser reanimado
 const SPAWN_INVULN = 2000;            // ms de invulnerabilidad tras reaparecer
 const NADE_WINDOW = 6000;             // ms de validez de una granada lanzada
@@ -77,9 +81,16 @@ export class Game {
     this.dev = !!opts.dev;
     this.lan = Array.isArray(opts.lan) ? opts.lan.slice() : [];
     this.quiet = !!opts.quiet;
+    this.maxPlayers = opts.maxPlayers || MAX_PLAYERS;
+    this.roomCode = opts.roomCode || null;
+    this.roomName = opts.roomName || '';
+    this.roomPassword = opts.roomPassword || null;
+    this.onEmpty = typeof opts.onEmpty === 'function' ? opts.onEmpty : null;
     this.conns = new Set();
     this.byPid = new Map();        // pid -> conexión
     this.pd = new Map();           // pid -> datos privados (posición, sostener, temporizadores...)
+    this.sessions = new Map();     // token -> pid (para reconexión)
+    this.reconnectTimers = new Map(); // pid -> temporizador de limpieza tras desconexión
     this.nextPid = 1;
     this.gs = this._freshState();
     this.dirty = true;
@@ -166,7 +177,7 @@ export class Game {
     const sp = PLAYER_SPAWNS[spawn % PLAYER_SPAWNS.length];
     return {
       x: sp.x, y: 0, z: sp.z, yaw: PLAYER_SPAWN_YAW, pitch: 0, flags: 0,
-      hasPos: false, teleportUntil: 0, badPos: 0,
+      hasPos: false, teleportUntil: 0, badPos: 0, lastMoveAt: 0,
       lastDamageAt: 0, invulnUntil: 0,
       hold: null, nades: [], lastMeleeAt: 0, boomTimes: [], fireTimes: [],
       repairPts: 0, god: false, chatTimes: [], bleedRemain: 0,
@@ -192,7 +203,7 @@ export class Game {
       rateStart: Date.now(), rateCount: 0,
     };
     this.conns.add(conn);
-    if (this.playerCount() >= MAX_PLAYERS) {
+    if (this.playerCount() >= this.maxPlayers) {
       this._kick(conn, 'La partida está llena (máximo 4 jugadores).');
       return conn;
     }
@@ -212,8 +223,8 @@ export class Game {
         if (p && Math.abs((p.ping || 0) - rtt) >= 2) { p.ping = rtt; this.markDirty(); }
       }
     });
-    ws.on('close', () => {
-      try { this._onClose(conn); } catch (e) { this._logError('desconexión', e); }
+    ws.on('close', (code, reason) => {
+      try { this._onClose(conn, code, String(reason || '')); } catch (e) { this._logError('desconexión', e); }
     });
     ws.on('error', () => { /* el cierre se gestiona en 'close' */ });
     return conn;
@@ -226,14 +237,55 @@ export class Game {
     } catch { /* nada */ }
   }
 
-  _onClose(conn) {
+  _onClose(conn, code, reason) {
     this.conns.delete(conn);
-    if (conn.pid) {
-      const pid = conn.pid;
-      conn.pid = null;
-      if (this.byPid.get(pid) === conn) this.byPid.delete(pid);
-      this._removePlayer(pid);
+    if (!conn.pid) return;
+    const pid = conn.pid;
+    conn.pid = null;
+    if (this.byPid.get(pid) === conn) this.byPid.delete(pid);
+    const voluntary = code === 1000 && reason === 'bye';
+    const gracePhase = this.gs.phase === 'playing' || this.gs.phase === 'gameover';
+    if (voluntary || !gracePhase) { this._removePlayer(pid); return; }
+    this._disconnectPlayer(pid);
+  }
+
+  // Corte no voluntario durante la partida: no se borra, se marca 'disconnected' y se
+  // le da una ventana para reconectar con el mismo pid (ver RECONNECT_GRACE_MS y _onHello).
+  _disconnectPlayer(pid) {
+    const gs = this.gs;
+    const p = gs.players[pid];
+    if (!p) return;
+    const d = this.pd.get(pid);
+    const now = Date.now();
+    if (d) this._cancelHold(p, d, now);
+    this._cancelHoldsTargeting(pid, now);
+    gs.box.slots.forEach((s, i) => {
+      if (s.user === pid && (s.state === 'spinning' || s.state === 'ready')) this._closeBoxSlot(i);
+      else if (s.user === pid) s.user = null;
+    });
+    if (gs.pap.user === pid) Object.assign(gs.pap, { state: 'idle', user: null, weapon: null, until: 0 });
+    if (gs.shield.builder === pid) { gs.shield.builder = null; gs.shield.buildUntil = 0; }
+
+    if (p.state === 'down' && d) {
+      d.bleedRemain = Math.max(0, p.bleedUntil - now); // el desangrado queda en pausa
+      p.bleedUntil = 0;
     }
+    p._prevState = p.state;
+    p.state = 'disconnected';
+    if (p.host) {
+      const next = this._players().filter((q) => q.id !== pid).sort((a, b) => a.id - b.id)[0];
+      if (next) { next.host = true; p.host = false; }
+    }
+    this.markDirty();
+    this._log(`${p.name} (#${pid}) se desconectó (puede reconectar). Jugadores: ${this.playerCount()}`);
+    this._system(`${p.name} se desconectó. Tiene ${Math.round(RECONNECT_GRACE_MS / 1000)}s para volver.`);
+    if (gs.phase === 'playing') this._checkGameOver(now);
+
+    const t = setTimeout(() => {
+      this.reconnectTimers.delete(pid);
+      this._removePlayer(pid);
+    }, RECONNECT_GRACE_MS);
+    this.reconnectTimers.set(pid, t);
   }
 
   _removePlayer(pid) {
@@ -242,34 +294,41 @@ export class Game {
     if (!p) return;
     const d = this.pd.get(pid);
     const now = Date.now();
-    if (d) this._cancelHold(p, d, now);
-    // Otros que lo estaban reanimando
-    this._cancelHoldsTargeting(pid, now);
-    // Caja: sus giros/armas pendientes se liberan
-    gs.box.slots.forEach((s, i) => {
-      if (s.user === pid && (s.state === 'spinning' || s.state === 'ready')) this._closeBoxSlot(i);
-      else if (s.user === pid) s.user = null;
-    });
-    // Pack-a-Punch: el arma se pierde
-    if (gs.pap.user === pid) Object.assign(gs.pap, { state: 'idle', user: null, weapon: null, until: 0 });
-    // Construcción del escudo
-    if (gs.shield.builder === pid) { gs.shield.builder = null; gs.shield.buildUntil = 0; }
+    const wasConnected = p.state !== 'disconnected';
+    if (wasConnected) {
+      if (d) this._cancelHold(p, d, now);
+      // Otros que lo estaban reanimando
+      this._cancelHoldsTargeting(pid, now);
+      // Caja: sus giros/armas pendientes se liberan
+      gs.box.slots.forEach((s, i) => {
+        if (s.user === pid && (s.state === 'spinning' || s.state === 'ready')) this._closeBoxSlot(i);
+        else if (s.user === pid) s.user = null;
+      });
+      // Pack-a-Punch: el arma se pierde
+      if (gs.pap.user === pid) Object.assign(gs.pap, { state: 'idle', user: null, weapon: null, until: 0 });
+      // Construcción del escudo
+      if (gs.shield.builder === pid) { gs.shield.builder = null; gs.shield.buildUntil = 0; }
+    }
 
     const name = p.name;
     const wasHost = p.host;
     delete gs.players[pid];
     this.pd.delete(pid);
+    const t = this.reconnectTimers.get(pid);
+    if (t) { clearTimeout(t); this.reconnectTimers.delete(pid); }
+    for (const [token, spid] of this.sessions) if (spid === pid) this.sessions.delete(token);
     if (wasHost) {
       const next = this._players().sort((a, b) => a.id - b.id)[0];
       if (next) next.host = true;
     }
     this.markDirty();
-    this._log(`${name} (#${pid}) se desconectó. Jugadores: ${this.playerCount()}`);
+    this._log(`${name} (#${pid}) salió de la partida. Jugadores: ${this.playerCount()}`);
     if (this.playerCount() === 0) {
+      if (this.onEmpty) this.onEmpty();
       if (gs.phase !== 'lobby') this._returnToLobby();
       return;
     }
-    this._system(`${name} salió de la partida.`);
+    if (wasConnected) this._system(`${name} salió de la partida.`);
     if (gs.phase === 'playing') this._checkGameOver(now);
   }
 
@@ -433,6 +492,39 @@ export class Game {
     }
   }
 
+  _roomInfo() {
+    return this.roomCode ? { code: this.roomCode, name: this.roomName, locked: !!this.roomPassword } : null;
+  }
+
+  // Intenta recuperar una sesión previa (reconexión tras un corte no voluntario). true si se resolvió.
+  _tryResume(conn, m) {
+    const token = m.room && typeof m.room.token === 'string' ? m.room.token : null;
+    if (!token) return false;
+    const pid = this.sessions.get(token);
+    if (pid == null || !this.reconnectTimers.has(pid)) return false;
+    const p = this.gs.players[pid];
+    if (!p) return false;
+    clearTimeout(this.reconnectTimers.get(pid));
+    this.reconnectTimers.delete(pid);
+    const d = this.pd.get(pid);
+    if (p.state === 'disconnected') {
+      p.state = p._prevState || 'alive';
+      if (p.state === 'down' && d) p.bleedUntil = Date.now() + (d.bleedRemain || 0);
+    }
+    conn.pid = pid;
+    this.byPid.set(pid, conn);
+    this.markDirty();
+    this._log(`${p.name} (#${pid}) reconectó desde ${conn.ip}.`);
+    this._system(`${p.name} reconectó.`);
+    try {
+      conn.ws.send(JSON.stringify({
+        t: 'welcome', id: pid, host: p.host, gs: this._gsPayload(Date.now()),
+        lan: this.lan, dev: this.dev, session: token, room: this._roomInfo(),
+      }));
+    } catch { /* nada */ }
+    return true;
+  }
+
   _onHello(conn, m) {
     const gs = this.gs;
     if (conn.pid) {
@@ -446,7 +538,8 @@ export class Game {
       }
       return;
     }
-    if (this.playerCount() >= MAX_PLAYERS) {
+    if (this._tryResume(conn, m)) return;
+    if (this.playerCount() >= this.maxPlayers) {
       this._kick(conn, 'La partida está llena (máximo 4 jugadores).');
       return;
     }
@@ -467,8 +560,13 @@ export class Game {
     conn.pid = pid;
     this.byPid.set(pid, conn);
     const now = Date.now();
+    const token = crypto.randomBytes(16).toString('hex');
+    this.sessions.set(token, pid);
     try {
-      conn.ws.send(JSON.stringify({ t: 'welcome', id: pid, host: p.host, gs: this._gsPayload(now), lan: this.lan, dev: this.dev }));
+      conn.ws.send(JSON.stringify({
+        t: 'welcome', id: pid, host: p.host, gs: this._gsPayload(now),
+        lan: this.lan, dev: this.dev, session: token, room: this._roomInfo(),
+      }));
     } catch { /* nada */ }
     this.markDirty();
     this._log(`${name} (#${pid}) se unió desde ${conn.ip}. Jugadores: ${this.playerCount()}`);
@@ -498,10 +596,15 @@ export class Game {
     if (!pos) return;
     const x = clamp(pos[0], 0, W), y = clamp(pos[1], -1, 10), z = clamp(pos[2], 0, H);
     const jump = Math.hypot(x - d.x, z - d.z);
-    if (d.hasPos && jump > MAX_JUMP && now > d.teleportUntil) {
-      if (++d.badPos < RESYNC_AFTER) return;
+    if (d.hasPos && now > d.teleportUntil) {
+      // Presupuesto de velocidad real (no una distancia fija por mensaje): tolera jitter/ráfagas
+      // de internet, ya que compara contra el tiempo real transcurrido desde el último 'st' aceptado.
+      const dtMs = clamp(now - d.lastMoveAt, 0, MAX_STATE_GAP_MS);
+      const allowed = MAX_JUMP_MARGIN + MAX_SPEED_MPS * (dtMs / 1000);
+      if (jump > allowed) { if (++d.badPos < RESYNC_AFTER) return; }
     }
     d.badPos = 0;
+    d.lastMoveAt = now;
     d.x = x; d.y = y; d.z = z;
     d.hasPos = true;
   }
@@ -1380,7 +1483,7 @@ export class Game {
     });
     d.infT = 0; d.infAcc = 0;
     d.x = sp.x; d.y = 0; d.z = sp.z; d.yaw = PLAYER_SPAWN_YAW; d.pitch = 0; d.flags = 0;
-    d.hasPos = true; d.teleportUntil = now + TELEPORT_GRACE; d.badPos = 0;
+    d.hasPos = true; d.teleportUntil = now + TELEPORT_GRACE; d.badPos = 0; d.lastMoveAt = now;
     d.lastDamageAt = 0; d.invulnUntil = now + SPAWN_INVULN; d.hold = null; d.nades = [];
     this.markDirty();
     return { pid: p.id, x: sp.x, z: sp.z, yaw: PLAYER_SPAWN_YAW };
@@ -1872,6 +1975,8 @@ export class Game {
   // Para pruebas y apagado limpio
   close() {
     clearInterval(this.timer);
+    for (const t of this.reconnectTimers.values()) clearTimeout(t);
+    this.reconnectTimers.clear();
     for (const c of this.conns) { try { c.ws.close(1001, 'Servidor detenido'); } catch { /* nada */ } }
   }
 

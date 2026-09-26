@@ -2,7 +2,8 @@
 
 // Cliente -> Servidor
 export const C2S = {
-  HELLO: 'hello',     // { name, color }
+  LIST_ROOMS: 'listRooms', // {}  (antes de 'hello': pide la lista de salas públicas)
+  HELLO: 'hello',     // { name, color, room?: {mode:'create'|'join', code?, name?, password?, token?} }
   READY: 'ready',     // { v: bool }
   START: 'start',     // {}  (solo anfitrión)
   STATE: 'st',        // { p:[x,y,z], yaw, pitch, f: flags, cur: slot }
@@ -20,7 +21,9 @@ export const C2S = {
 
 // Servidor -> Cliente
 export const S2C = {
-  WELCOME: 'welcome', // { id, host: bool, gs }
+  ROOMS: 'rooms',       // { list: [{code,name,players,max,round,phase,locked}] }  (respuesta a 'listRooms')
+  ROOM_DENY: 'roomDeny', // { reason: 'notfound'|'password'|'full'|'bad' }          (rechazo de 'hello' con room)
+  WELCOME: 'welcome',   // { id, host: bool, gs, session, room: {code,name,locked}|null }
   GS: 'gs',           // estado de juego completo (ver SPEC.md 3)
   SNAP: 'snap',       // { now, z:[[id,x,z,rot,anim,flags,yOff]...], p:[[id,x,y,z,yaw,pitch,flags,w,up]...] }
   EV: 'ev',           // { e: nombre, ...datos }

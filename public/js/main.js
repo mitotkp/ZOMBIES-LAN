@@ -14,11 +14,25 @@ import { r2, r3 } from '/shared/protocol.js';
 import { tr } from './i18n.js';
 
 const SETTINGS_KEY = 'zlan.settings';
+const ROOM_SESSION_KEY = 'zlan.room-session';
 const PARAMS = new URLSearchParams(location.search);
 const DEBUG = PARAMS.get('debug') === '1';
+let pendingRoomCode = (PARAMS.get('room') || '').toUpperCase().slice(0, 8) || null;
 const SEND_INTERVAL = 1 / CLIENT_SEND_RATE;
 const PING_INTERVAL_MS = 2000;
 const WELCOME_TIMEOUT_MS = 7000;
+
+// Sesión de sala (código de sala + token) para poder reconectar al mismo jugador tras un
+// corte breve o al recargar la pestaña dentro de la ventana de gracia del servidor (~25s).
+function loadRoomSession() {
+  try { return JSON.parse(sessionStorage.getItem(ROOM_SESSION_KEY) || 'null'); } catch { return null; }
+}
+function saveRoomSession(s) {
+  try {
+    if (s) sessionStorage.setItem(ROOM_SESSION_KEY, JSON.stringify(s));
+    else sessionStorage.removeItem(ROOM_SESSION_KEY);
+  } catch { /* nada */ }
+}
 const BASE_EXPOSURE = 1.3;            // exposición base (el ajuste 'Brillo' la multiplica)
 
 // Cámara de fondo (título / sala / fin): órbita lenta sobre la calle
@@ -395,6 +409,8 @@ async function boot() {
     lastPauseAt: 0,
     kickReason: null,
     scoreboard: false,
+    room: null,               // {code,name,locked} de la sala actual, si hay una
+    reconnecting: false,      // intento automático de recuperar la sesión tras un corte
   };
   const isPlaying = () => !!(ctx.gs && ctx.gs.phase === 'playing');
 
@@ -404,22 +420,31 @@ async function boot() {
     if (app.scoreboard) { app.scoreboard = false; call('hud', 'showScoreboard', false); }
   }
 
-  // ------------------------------------------------------------ conexión
+  // ------------------------------------------------------------ conexión y salas
   const KICK_TEXT = {
     full: tr('La partida está llena (máximo 4 jugadores).'),
     busy: tr('La partida no admite jugadores en este momento.'),
   };
+  const ROOM_DENY_TEXT = {
+    notfound: tr('Esa sala ya no existe.'),
+    password: tr('Contraseña incorrecta.'),
+    full: tr('Esa sala está llena.'),
+    bad: tr('No se pudo unir a la sala.'),
+  };
+  const LOST_CONNECTION_TEXT = tr('Se perdió la conexión con el servidor.\nPuede que el anfitrión haya cerrado la partida o que la red se haya caído.');
 
   function showConnectError(title, text) {
     app.stage = 'disconnected';
+    app.reconnecting = false;
     overlays.showStatus(title, text, [
-      { label: tr('Reintentar'), onClick: () => connectAndHello() },
+      { label: tr('Reintentar'), onClick: () => openRoomBrowser() },
       { label: tr('Volver al título'), onClick: () => location.reload() },
     ]);
   }
 
-  async function connectAndHello() {
-    if (app.connecting) return;
+  // Abre el socket, sin mandar 'hello' todavía (eso decide a qué sala entrar).
+  async function connectSocket() {
+    if (app.connecting) return false;
     app.connecting = true;
     app.stage = 'connecting';
     app.kickReason = null;
@@ -431,22 +456,44 @@ async function boot() {
     if (prevGs && prevGs.phase === 'playing') safe('entities.reset', () => ctx.entities.reset && ctx.entities.reset());
     try {
       await net.connect();
-      net.send({ t: 'hello', name: app.joinName, color: app.joinColor });
-      clearTimeout(app.welcomeTimer);
-      app.welcomeTimer = setTimeout(() => {
-        if (ctx.selfId === null && net.connected) {
-          net.close();
-          showConnectError(tr('SIN RESPUESTA'), tr('El servidor aceptó la conexión pero no respondió.\nComprueba que sea un servidor de ZOMBIES LAN.'));
-        }
-      }, WELCOME_TIMEOUT_MS);
+      return true;
     } catch (err) {
       showConnectError(tr('NO SE PUDO CONECTAR'),
         tr('No se pudo conectar con el servidor ({0}).\n', location.host || 'desconocido') +
         tr('Comprueba que el anfitrión tenga el servidor abierto, que estés en la misma red\n') +
         tr('y que el firewall de Windows permita Node.js en redes privadas (puerto 3000).'));
+      return false;
     } finally {
       app.connecting = false;
     }
+  }
+
+  function sendHello(room) {
+    net.send({ t: 'hello', name: app.joinName, color: app.joinColor, room });
+    clearTimeout(app.welcomeTimer);
+    app.welcomeTimer = setTimeout(() => {
+      if (ctx.selfId === null && net.connected) {
+        net.close();
+        showConnectError(tr('SIN RESPUESTA'), tr('El servidor aceptó la conexión pero no respondió.\nComprueba que sea un servidor de ZOMBIES LAN.'));
+      }
+    }, WELCOME_TIMEOUT_MS);
+  }
+
+  function onRefreshRooms() { net.send({ t: 'listRooms' }); }
+  function onCreateRoom(opts) { sendHello({ mode: 'create', name: opts && opts.name, password: (opts && opts.password) || null }); }
+  function onJoinRoomAction(opts) { sendHello({ mode: 'join', code: opts && opts.code, password: (opts && opts.password) || null }); }
+  function backToTitle() {
+    net.close();
+    app.room = null;
+    saveRoomSession(null);
+    menus('showMain', onJoin);
+  }
+
+  async function openRoomBrowser() {
+    if (!(await connectSocket())) return;
+    overlays.hideStatus();
+    net.send({ t: 'listRooms' });
+    menus('showRooms', { onRefresh: onRefreshRooms, onCreate: onCreateRoom, onJoin: onJoinRoomAction, onBack: backToTitle });
   }
 
   function onJoin(name, color) {
@@ -459,17 +506,51 @@ async function boot() {
     saveSettings(settings);
     events.emit('settings', settings);
     call('audio', 'unlock');
-    connectAndHello();
+    const code = pendingRoomCode;
+    pendingRoomCode = null;
+    if (code) {
+      connectSocket().then((ok) => { if (ok) { overlays.hideStatus(); sendHello({ mode: 'join', code }); } });
+    } else {
+      openRoomBrowser();
+    }
+  }
+
+  // Intenta recuperar la sesión de sala guardada (corte breve o recarga de la pestaña
+  // dentro de la ventana de gracia del servidor) antes de mostrar la pantalla de título.
+  function tryAutoReconnect() {
+    const saved = loadRoomSession();
+    if (!saved || !saved.token || !saved.code) return false;
+    app.reconnecting = true;
+    app.joinName = saved.name || app.joinName;
+    app.joinColor = saved.color || app.joinColor;
+    overlays.showStatus(tr('RECONECTANDO'), tr('Intentando volver a tu partida…'), [], true);
+    connectSocket().then((ok) => {
+      if (!ok) { app.reconnecting = false; return; } // connectSocket ya mostró el error
+      overlays.hideStatus();
+      sendHello({ mode: 'join', code: saved.code, token: saved.token });
+    });
+    return true;
   }
 
   events.on('welcome', (w) => {
     clearTimeout(app.welcomeTimer);
     app.stage = 'online';
+    app.reconnecting = false;
+    app.room = (w && w.room) || null;
     overlays.hideStatus();
     overlays.toggle('dev', !!(w && w.dev));
+    if (w && w.room && w.session) saveRoomSession({ code: w.room.code, token: w.session, name: app.joinName, color: app.joinColor });
   });
 
   events.on('net:kick', (k) => { app.kickReason = k && k.reason ? String(k.reason) : 'desconocido'; });
+
+  events.on('net:roomDeny', (d) => {
+    if (!app.reconnecting) return; // un rechazo al crear/unirse manualmente lo muestra la pantalla de salas
+    app.reconnecting = false;
+    saveRoomSession(null);
+    const reason = d && d.reason;
+    showConnectError(tr('SESIÓN PERDIDA'), tr('No se pudo recuperar tu partida ({0}).', ROOM_DENY_TEXT[reason] || reason || '?'));
+  });
 
   events.on('net:close', (c) => {
     if (c && c.intentional) return;
@@ -477,10 +558,12 @@ async function boot() {
     releaseGameplay();
     if (app.kickReason) {
       const r = app.kickReason;
+      saveRoomSession(null);
       showConnectError(tr('DESCONECTADO'), KICK_TEXT[r] || tr('El servidor cerró la conexión: {0}', r));
-    } else {
-      showConnectError(tr('CONEXIÓN PERDIDA'), tr('Se perdió la conexión con el servidor.\nPuede que el anfitrión haya cerrado la partida o que la red se haya caído.'));
+      return;
     }
+    if (!app.reconnecting && tryAutoReconnect()) return;
+    showConnectError(tr('CONEXIÓN PERDIDA'), LOST_CONNECTION_TEXT);
   });
 
   // ------------------------------------------------------------ fases
@@ -748,7 +831,7 @@ async function boot() {
   onResize();
   overlays.hideLoading();
   requestAnimationFrame(frame);
-  menus('showMain', onJoin);
+  if (!tryAutoReconnect()) menus('showMain', onJoin);
   console.info(`[${GAME_TITLE}] Cliente listo. Mapa: ${MAP_NAME}.${DEBUG ? ' Modo debug activo.' : ''}`);
 }
 

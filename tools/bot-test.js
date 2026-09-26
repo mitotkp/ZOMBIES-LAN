@@ -24,6 +24,7 @@ function arg(name, def) {
 const NBOTS = Math.max(1, Math.min(4, parseInt(arg('bots', 2), 10) || 2));
 const SECONDS = Math.max(5, parseFloat(arg('seconds', 120)) || 120);
 const URL = String(arg('url', 'ws://localhost:3000'));
+const ROOM_CODE = String(arg('room', 'BOTS1')).toUpperCase().slice(0, 8);
 const SCENARIO = !!arg('scenario', false);
 const GOD = !!arg('god', false);
 const VERBOSE = !!arg('verbose', false);
@@ -84,7 +85,10 @@ class Bot {
   connect() {
     this.ws = new WebSocket(URL);
     this.ws.on('open', () => {
-      this.send({ t: 'hello', name: this.name, color: PLAYER_COLORS[this.index % PLAYER_COLORS.length] });
+      const room = this.index === 0
+        ? { mode: 'create', code: ROOM_CODE, name: 'Bots' }
+        : { mode: 'join', code: ROOM_CODE };
+      this.send({ t: 'hello', name: this.name, color: PLAYER_COLORS[this.index % PLAYER_COLORS.length], room });
     });
     this.ws.on('message', (data) => {
       let m;

@@ -239,12 +239,16 @@ export class Net {
     const ctx = this.ctx;
     const gs = this._normalizeGs(m.gs);
     if (gs && gs.now) this._onServerStamp(gs.now);
+    const room = m.room && typeof m.room === 'object' ? { code: String(m.room.code || ''), name: String(m.room.name || ''), locked: !!m.room.locked } : null;
+    const session = typeof m.session === 'string' ? m.session : null;
     if (ctx) {
       ctx.selfId = m.id;
       ctx.dev = !!m.dev;
       ctx.lan = Array.isArray(m.lan) ? m.lan : [];
+      ctx.room = room;
+      ctx.session = session;
     }
-    this._emit('welcome', { id: m.id, host: !!m.host, gs, lan: Array.isArray(m.lan) ? m.lan : [], dev: !!m.dev });
+    this._emit('welcome', { id: m.id, host: !!m.host, gs, lan: Array.isArray(m.lan) ? m.lan : [], dev: !!m.dev, room, session });
     if (gs) this._setGs(gs);
   }
 

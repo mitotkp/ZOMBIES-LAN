@@ -103,6 +103,33 @@ const TEMPLATE = `
     <div class="mn-foot"><span class="mn-server"></span><span class="mn-foot-sep">·</span><span>${tr('1 a {0} jugadores en red local', MAX_PLAYERS)}</span></div>
   </section>
 
+  <section class="mn-screen mn-rooms" data-screen="rooms" aria-label="${tr('Salas')}">
+    <header class="mn-head">
+      <h2 class="mn-h2">${tr('Salas')}</h2>
+    </header>
+    <div class="mn-rooms-grid">
+      <div class="mn-card rm-browser">
+        <h3 class="mn-card-title">${tr('Salas públicas')}<button type="button" class="mn-btn small ghost rm-refresh">${tr('Actualizar')}</button></h3>
+        <div class="rm-list"></div>
+        <div class="rm-empty">${tr('No hay salas abiertas todavía. ¡Creá una!')}</div>
+      </div>
+      <div class="mn-card rm-create">
+        <h3 class="mn-card-title">${tr('Crear sala')}</h3>
+        <label class="mn-label" for="zl-room-name">${tr('Nombre de la sala')}</label>
+        <input id="zl-room-name" class="mn-input rm-name" type="text" maxlength="24" autocomplete="off" spellcheck="false" placeholder="${tr('Mi sala')}">
+        <label class="st-toggle-row rm-pw-toggle"><input type="checkbox" class="rm-pw-on"><span>${tr('Proteger con contraseña')}</span></label>
+        <input class="mn-input rm-pw-input" type="password" maxlength="32" autocomplete="off" spellcheck="false" placeholder="${tr('Contraseña')}" hidden>
+        <div class="mn-actions">
+          <button type="button" class="mn-btn primary rm-create-btn">${tr('Crear sala')}</button>
+        </div>
+      </div>
+    </div>
+    <div class="rm-status" aria-live="polite"></div>
+    <div class="mn-actions mn-actions-row">
+      <button type="button" class="mn-btn small ghost rm-back">${tr('Volver')}</button>
+    </div>
+  </section>
+
   <section class="mn-screen mn-lobby" data-screen="lobby" aria-label="${tr('Sala de espera')}">
     <header class="mn-head">
       <h2 class="mn-h2">${tr('Sala de espera')}</h2>
@@ -126,7 +153,7 @@ const TEMPLATE = `
       </div>
       <div class="mn-lobby-right">
         <div class="mn-card lb-lan">
-          <h3 class="mn-card-title">${tr('Invita a tus amigos')}</h3>
+          <h3 class="mn-card-title lb-lan-title">${tr('Invita a tus amigos')}</h3>
           <div class="lb-lan-text">${tr('Comparte esta dirección con tus amigos (misma red):')}</div>
           <div class="lb-urls"></div>
         </div>
@@ -219,6 +246,7 @@ const TEMPLATE = `
     <div class="mn-confirm-box">
       <div class="mn-confirm-title"></div>
       <div class="mn-confirm-text"></div>
+      <input class="mn-input cf-pw" type="password" maxlength="32" autocomplete="off" spellcheck="false" placeholder="${tr('Contraseña')}" hidden>
       <div class="mn-actions mn-actions-row">
         <button type="button" class="mn-btn small ghost cf-no">${tr('Cancelar')}</button>
         <button type="button" class="mn-btn small danger cf-yes">${tr('Salir')}</button>
@@ -298,13 +326,16 @@ export class Menus {
       name: q('.mn-name'), swatches: q('.mn-swatches'), joinBtn: q('.mn-join-btn'), joinStatus: q('.mn-join-status'),
       server: q('.mn-server'),
       lbCount: q('.lb-count'), lbSlots: q('.lb-slots'), lbStatus: q('.lb-status'), lbReady: q('.lb-ready'), lbStart: q('.lb-start'),
-      lbWait: q('.lb-wait'), lbUrls: q('.lb-urls'), lbFeed: q('.lb-feed'), lbEntry: q('.lb-entry'), lbInput: q('.lb-input'),
+      lbWait: q('.lb-wait'), lbUrls: q('.lb-urls'), lbLanTitle: q('.lb-lan-title'), lbLanText: q('.lb-lan-text'),
+      lbFeed: q('.lb-feed'), lbEntry: q('.lb-entry'), lbInput: q('.lb-input'),
       lbTip: q('.lb-tip-text'), devTag: q('.mn-dev-tag'),
       pauseInfo: q('.mn-pause-info'),
       stRanges: Array.from(this.root.querySelectorAll('.st-range')), stVals: Array.from(this.root.querySelectorAll('[data-val]')),
       stSeg: Array.from(this.root.querySelectorAll('.st-seg-btn[data-quality]')), stInv: q('#zl-st-inv'),
       goSub: q('.go-sub'), goBody: q('.go-table tbody'), goFoot: q('.go-table tfoot'), goCount: q('.go-count'),
-      confirm: q('.mn-confirm'), cfTitle: q('.mn-confirm-title'), cfText: q('.mn-confirm-text'), cfYes: q('.cf-yes'), cfNo: q('.cf-no'),
+      confirm: q('.mn-confirm'), cfTitle: q('.mn-confirm-title'), cfText: q('.mn-confirm-text'), cfPw: q('.cf-pw'), cfYes: q('.cf-yes'), cfNo: q('.cf-no'),
+      rmList: q('.rm-list'), rmEmpty: q('.rm-empty'), rmRefresh: q('.rm-refresh'), rmName: q('.rm-name'),
+      rmPwOn: q('.rm-pw-on'), rmPwInput: q('.rm-pw-input'), rmCreateBtn: q('.rm-create-btn'), rmStatus: q('.rm-status'), rmBack: q('.rm-back'),
     };
 
     this.mode = null;                 // 'main' | 'lobby' | 'pause' | 'settings' | 'controls' | 'gameover' | null
@@ -327,6 +358,9 @@ export class Menus {
     this._emitting = false;
     this._confirmYes = null;
     this._lastHover = 0;
+    this._roomCb = null;
+    this._roomsList = [];
+    this._pendingJoinCode = null;
     this.color = PLAYER_COLORS.includes((this.ctx.settings || {}).color) ? this.ctx.settings.color : PLAYER_COLORS[0];
 
     this._buildSwatches();
@@ -356,6 +390,18 @@ export class Menus {
         try { this.el.name.focus({ preventScroll: true }); } catch { /* nada */ }
       }
     }, 60);
+  }
+
+  // cb: { onRefresh, onCreate({name,password}), onJoin({code,password}), onBack }
+  showRooms(cb) {
+    this._roomCb = cb || null;
+    this.el.rmName.value = '';
+    this.el.rmPwOn.checked = false;
+    this.el.rmPwInput.hidden = true;
+    this.el.rmPwInput.value = '';
+    this.el.rmStatus.textContent = '';
+    this._renderRoomList(this._roomsList);
+    this._open('rooms');
   }
 
   showLobby() {
@@ -497,6 +543,7 @@ export class Menus {
 
   _leave() {
     try { if (this.ctx.net && typeof this.ctx.net.close === 'function') this.ctx.net.close(); } catch { /* nada */ }
+    try { sessionStorage.removeItem('zlan.room-session'); } catch { /* nada */ }
     setTimeout(() => location.reload(), 60);
   }
 
@@ -539,6 +586,64 @@ export class Menus {
     this.el.joinStatus.textContent = this.joining ? tr('Conectando con {0}…', location.host || 'el servidor') : '';
     // Si no hay respuesta, se vuelve a habilitar el botón
     if (this.joining) this._joinTimer = setTimeout(() => this._setJoining(false), 9000);
+  }
+
+  // ------------------------------------------------------------------ buscador de salas
+  _renderRoomList(list) {
+    this._roomsList = Array.isArray(list) ? list : [];
+    if (!this.el.rmList) return;
+    const rooms = this._roomsList;
+    this.el.rmEmpty.style.display = rooms.length ? 'none' : '';
+    this.el.rmList.innerHTML = rooms.map((r) => {
+      const code = esc(String(r.code || ''));
+      const name = esc(r.name || r.code || '');
+      const n = Math.max(0, +r.players || 0), max = Math.max(1, +r.max || 4);
+      const full = n >= max;
+      const playing = r.phase === 'playing';
+      const badge = playing ? tr('Ronda {0}', Math.max(1, +r.round || 1)) : (r.phase === 'gameover' ? tr('Fin de la partida') : tr('En sala de espera'));
+      return `<div class="rm-row${full ? ' full' : ''}" data-code="${code}" data-locked="${r.locked ? '1' : '0'}">
+        <span class="rm-lock" aria-hidden="true">${r.locked ? '🔒' : ''}</span>
+        <span class="rm-info"><span class="rm-name2">${name}</span><span class="rm-sub">${tr('Código')}: ${code} · ${badge}</span></span>
+        <span class="rm-count">${n}/${max}</span>
+        <button type="button" class="mn-btn small primary rm-join-btn" ${full ? 'disabled' : ''}>${tr('Entrar')}</button>
+      </div>`;
+    }).join('');
+  }
+
+  _roomStatus(text, isError) {
+    this.el.rmStatus.textContent = text || '';
+    this.el.rmStatus.classList.toggle('error', !!isError);
+  }
+
+  // Llamado desde main.js cuando llega 'rooms' o 'roomDeny' del servidor
+  onRoomsList(list) { this._renderRoomList(list); }
+  onRoomDeny(reason, text) {
+    if (this.mode !== 'rooms') return;
+    this._roomStatus(text || tr('No se pudo unir a la sala.'), true);
+    if (this.el.rmCreateBtn) this.el.rmCreateBtn.disabled = false;
+  }
+
+  _startJoinRoom(code, locked) {
+    if (!locked) { this._doJoinRoom(code, ''); return; }
+    this._pendingJoinCode = code;
+    this._askConfirm(tr('Sala protegida'), tr('Esta sala tiene contraseña.'), tr('Entrar'), (pw) => {
+      this._doJoinRoom(this._pendingJoinCode, pw);
+    }, { password: true });
+  }
+
+  _doJoinRoom(code, password) {
+    if (!this._roomCb || typeof this._roomCb.onJoin !== 'function') return;
+    this._roomStatus(tr('Uniéndose…'));
+    this._roomCb.onJoin({ code, password });
+  }
+
+  _createRoomFromForm() {
+    if (!this._roomCb || typeof this._roomCb.onCreate !== 'function') return;
+    const name = (this.el.rmName.value || '').replace(/\s+/g, ' ').trim().slice(0, 24);
+    const password = this.el.rmPwOn.checked ? (this.el.rmPwInput.value || '').slice(0, 32) : '';
+    if (this.el.rmPwOn.checked && !password) { this._roomStatus(tr('Escribe una contraseña o desmarca la casilla.'), true); return; }
+    this._roomStatus(tr('Creando sala…'));
+    this._roomCb.onCreate({ name, password });
   }
 
   // ------------------------------------------------------------------ sala de espera
@@ -599,11 +704,23 @@ export class Menus {
     this.el.lbWait.textContent = host ? '' : tr('El anfitrión iniciará la partida cuando todos estén listos.');
     this.el.devTag.style.display = ctx.dev ? '' : 'none';
 
-    // Direcciones LAN
-    let urls = Array.isArray(ctx.lan) ? ctx.lan.filter((u) => typeof u === 'string' && u) : [];
-    if (!urls.length) urls = [location.origin];
-    this.el.lbUrls.innerHTML = urls.map((u) =>
-      `<div class="lb-url"><code>${esc(u)}</code><button type="button" class="mn-btn small lb-copy" data-url="${esc(u)}">${tr('Copiar')}</button></div>`).join('');
+    // Invitación: si hay una sala (server público), un código/link; si no, las IPs LAN del anfitrión
+    const room = ctx.room;
+    if (room && room.code) {
+      const link = `${location.origin}${location.pathname}?room=${encodeURIComponent(room.code)}`;
+      this.el.lbLanTitle.textContent = tr('Invita a tus amigos');
+      this.el.lbLanText.textContent = tr('Comparte el código o el link de la sala:');
+      this.el.lbUrls.innerHTML =
+        `<div class="lb-url"><code>${esc(room.code)}</code><button type="button" class="mn-btn small lb-copy" data-url="${esc(room.code)}">${tr('Copiar')}</button></div>` +
+        `<div class="lb-url"><code>${esc(link)}</code><button type="button" class="mn-btn small lb-copy" data-url="${esc(link)}">${tr('Copiar')}</button></div>`;
+    } else {
+      let urls = Array.isArray(ctx.lan) ? ctx.lan.filter((u) => typeof u === 'string' && u) : [];
+      if (!urls.length) urls = [location.origin];
+      this.el.lbLanTitle.textContent = tr('Invita a tus amigos');
+      this.el.lbLanText.textContent = tr('Comparte esta dirección con tus amigos (misma red):');
+      this.el.lbUrls.innerHTML = urls.map((u) =>
+        `<div class="lb-url"><code>${esc(u)}</code><button type="button" class="mn-btn small lb-copy" data-url="${esc(u)}">${tr('Copiar')}</button></div>`).join('');
+    }
   }
 
   _sendReady() {
@@ -831,17 +948,27 @@ export class Menus {
   }
 
   // ------------------------------------------------------------------ confirmación
-  _askConfirm(title, text, yesLabel, onYes) {
+  // opts.password: true muestra un campo de contraseña; onYes recibe su valor (o undefined si no aplica)
+  _askConfirm(title, text, yesLabel, onYes, opts = {}) {
     this.el.cfTitle.textContent = title;
     this.el.cfText.textContent = text;
     this.el.cfYes.textContent = yesLabel || tr('Aceptar');
+    this.el.cfYes.classList.toggle('danger', !opts.password);
+    this.el.cfYes.classList.toggle('primary', !!opts.password);
     this._confirmYes = onYes;
+    this._confirmPw = !!opts.password;
+    this.el.cfPw.value = '';
+    this.el.cfPw.hidden = !opts.password;
     this.el.confirm.classList.add('on');
-    try { this.el.cfNo.focus({ preventScroll: true }); } catch { /* nada */ }
+    const toFocus = opts.password ? this.el.cfPw : this.el.cfNo;
+    try { toFocus.focus({ preventScroll: true }); } catch { /* nada */ }
   }
 
   _closeConfirm() {
     this._confirmYes = null;
+    this._confirmPw = false;
+    this.el.cfPw.value = '';
+    this.el.cfPw.hidden = true;
     this.el.confirm.classList.remove('on');
   }
 
@@ -875,6 +1002,19 @@ export class Menus {
       if (!b) return;
       this.color = b.dataset.color;
       this._paintSwatches();
+    });
+
+    // Salas
+    this.el.rmRefresh.addEventListener('click', () => { if (this._roomCb && this._roomCb.onRefresh) this._roomCb.onRefresh(); });
+    this.el.rmBack.addEventListener('click', () => { if (this._roomCb && this._roomCb.onBack) this._roomCb.onBack(); });
+    this.el.rmCreateBtn.addEventListener('click', () => this._createRoomFromForm());
+    this.el.rmPwOn.addEventListener('change', () => { this.el.rmPwInput.hidden = !this.el.rmPwOn.checked; });
+    this.el.rmList.addEventListener('click', (e) => {
+      const b = e.target.closest('.rm-join-btn');
+      if (!b || b.disabled) return;
+      const row = b.closest('.rm-row');
+      if (!row) return;
+      this._startJoinRoom(row.dataset.code, row.dataset.locked === '1');
     });
 
     // Botones compartidos
@@ -944,8 +1084,12 @@ export class Menus {
     this.el.cfNo.addEventListener('click', () => this._closeConfirm());
     this.el.cfYes.addEventListener('click', () => {
       const fn = this._confirmYes;
+      const pw = this.el.cfPw.value;
       this._closeConfirm();
-      if (typeof fn === 'function') fn();
+      if (typeof fn === 'function') fn(pw);
+    });
+    this.el.cfPw.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); this.el.cfYes.click(); }
     });
     this.el.confirm.addEventListener('click', (e) => { if (e.target === this.el.confirm) this._closeConfirm(); });
 
@@ -996,6 +1140,16 @@ export class Menus {
     });
     on('ev:chat', (e) => this._addChat(e));
     on('net:close', () => this._setJoining(false));
+    on('net:rooms', (m) => this.onRoomsList(m.list));
+    on('net:roomDeny', (m) => {
+      const TEXT = {
+        notfound: tr('Esa sala ya no existe.'),
+        password: tr('Contraseña incorrecta.'),
+        full: tr('Esa sala está llena.'),
+        bad: tr('No se pudo unir a la sala.'),
+      };
+      this.onRoomDeny(m.reason, TEXT[m.reason] || tr('No se pudo unir a la sala.'));
+    });
     on('settings', (s) => {
       // Otro módulo cambió los ajustes: refrescar controles si la pantalla está abierta
       if (this.mode === 'settings' && s && !this._emitting) this._syncSettingsUI();

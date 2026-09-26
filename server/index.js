@@ -10,7 +10,7 @@ import { createRequire } from 'node:module';
 import { WebSocketServer } from 'ws';
 import { DEFAULT_PORT, GAME_TITLE, MAX_PLAYERS } from '../shared/constants.js';
 import { MAP_NAME } from '../shared/map.js';
-import { Game } from './game.js';
+import { RoomManager } from './rooms.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -207,14 +207,18 @@ function lanAddresses(port) {
 const server = http.createServer(handleRequest);
 server.keepAliveTimeout = 5000;
 const lan = lanAddresses(PORT);
-const game = new Game({ dev: DEV, lan, quiet: args.quiet });
+const rooms = new RoomManager({
+  dev: DEV, lan, quiet: args.quiet,
+  allowedOrigins: process.env.ALLOWED_ORIGINS || '',
+  maxConnPerIp: process.env.MAX_CONN_PER_IP,
+});
 
 const wss = new WebSocketServer({ server, maxPayload: 64 * 1024, perMessageDeflate: false });
 wss.on('connection', (ws, req) => {
   try {
     if (typeof ws.setNoDelay === 'function') ws.setNoDelay(true);
     if (req.socket && typeof req.socket.setNoDelay === 'function') req.socket.setNoDelay(true);
-    game.addConnection(ws, req);
+    rooms.handleConnection(ws, req);
   } catch (e) {
     console.error('[ws] error al aceptar la conexión:', e);
     try { ws.close(); } catch { /* nada */ }
@@ -261,7 +265,7 @@ function shutdown() {
   if (stopping) return;
   stopping = true;
   console.log('\nDeteniendo el servidor...');
-  try { game.close(); } catch { /* nada */ }
+  try { rooms.close(); } catch { /* nada */ }
   try { wss.close(); } catch { /* nada */ }
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 1500).unref();
@@ -275,4 +279,4 @@ process.on('unhandledRejection', (e) => {
   console.error('[fatal] promesa rechazada sin manejar:', e);
 });
 
-export { server, game, wss };
+export { server, rooms, wss };
