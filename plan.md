@@ -104,6 +104,10 @@ partiendo de la posición de su evento `respawn`.
 21. [x] Equilibrio de golpes fuertes (`BALANCE` en constants): un golpe de jefe/tanque quita como mucho el 40 % de la
    salud máxima, 0,7 s de invulnerabilidad tras un golpe fuerte, y en solitario −30 % de daño y −20 % de vida.
    El crecimiento de daño de los jefes baja (`dmgPerRound` 0,05, `dmgMax` 2,2).
+22. [x] Mano del arma en primera persona: la mano derecha se orienta del todo según la empuñadura (`GUN_BACK`, dorso
+   hacia fuera y atrás, k = 1) para que la palma la envuelva por detrás y no quede el lomo a la vista; hombros más
+   atrás y fuera, brazo más largo y polos de codo abiertos para que los brazos entren desde las esquinas.
+   Guantes marrones en lugar de negros para que la mano no se confunda con el arma a oscuras.
 16. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
    que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
 17. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
@@ -161,3 +165,4 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
 - **2026-09-26 (12)**: agarre real de todas las armas (empuñadura en el puño, mano izquierda bajo el guardamanos).
 - **2026-09-26 (13)**: sala de pruebas en `/test/`.
 - **2026-09-26 (14)**: codo con IK, linterna táctica en el modelo del jugador y equilibrio de jefes en solitario.
+- **2026-09-26 (15)**: mano del arma envolviendo la empuñadura, brazos desde las esquinas y guantes marrones.

@@ -36,9 +36,9 @@ const HIP = {
   sniper: [0.145, -0.175, -0.23], launcher: [0.15, -0.19, -0.25], knife: [0.15, -0.2, -0.3],
 };
 const ONE_HANDED = new Set(['pistol', 'revolver', 'raygun']);
-const RIGHT_ELBOW = V(0.26, -0.66, 0.0);
-const LEFT_ELBOW_LONG = V(-0.2, -0.66, -0.1);
-const LEFT_ELBOW_SHORT = V(-0.15, -0.64, 0.0);
+const RIGHT_ELBOW = V(0.75, -0.7, 0.1);
+const LEFT_ELBOW_LONG = V(-0.7, -0.65, -0.1);
+const LEFT_ELBOW_SHORT = V(-0.65, -0.65, 0.0);
 
 // Animaciones por fotogramas clave: [{ t, p:[x,y,z], r:[x,y,z] }]
 function sampleKeys(keys, u, outP, outR) {
@@ -90,18 +90,19 @@ const HEAL_REST_R = V(0.2, -0.58, -0.3);     // manos fuera de la vista
 const HEAL_REST_L = V(-0.18, -0.6, -0.3);
 const HEAL_ARM_L = V(0.04, -0.14, -0.5);      // antebrazo izquierdo cruzado delante (para vendar / inyectar)
 const HEAL_CASE_L = V(-0.04, -0.2, -0.5);    // maletín sujeto delante
-const HEAL_ELBOW_R = V(0.3, -0.6, -0.1);    // codo derecho bajo: el antebrazo no tapa la vista
-const HEAL_ELBOW_L = V(-0.32, -0.3, -0.38);   // codo a la izquierda: el antebrazo queda cruzado en horizontal
+const HEAL_ELBOW_R = V(0.9, -0.9, 0.1);      // codo derecho bajo: el antebrazo no tapa la vista
+const HEAL_ELBOW_L = V(-0.8, -0.7, -0.2);   // codo a la izquierda: el antebrazo queda cruzado en horizontal
 const lerpV = (out, a, b, k) => out.copy(a).lerp(b, clamp01(k));
 // Agarres (espacio local de la mano: dorso +Y, dedos -Z, meñique de la derecha +X)
 // Brazo con codo: el hombro es fijo y el codo sale por cinemática inversa (2 huesos). Las antiguas posiciones de
 // codo se usan como "polo": indican hacia dónde se dobla el brazo.
-const SHOULDER_R = V(0.19, -0.33, 0.02);
-const SHOULDER_L = V(-0.19, -0.33, 0.02);
-const FORE_LEN = 0.33;                               // del centro de la mano al codo (incluye la muñeca)
-const UPPER_LEN = 0.34;                              // del codo al hombro
+const SHOULDER_R = V(0.26, -0.4, 0.28);
+const SHOULDER_L = V(-0.26, -0.4, 0.12);
+const FORE_LEN = 0.36;                               // del centro de la mano al codo (incluye la muñeca)
+const UPPER_LEN = 0.5;                               // del codo al hombro
 const GRIP_GUN = V(0, -0.033, -0.004);                // empuñadura de pistola (3 x 5 cm) rodeada por el puño
 const GRIP_FIST = V(0, -0.03, -0.018);                // mango redondo (cuchillo, bate...) dentro del puño cerrado
+const GUN_BACK = V(1, 0, 1.1);                        // dorso derecho hacia fuera y atrás: la palma envuelve la empuñadura
 const SIDE_R = V(1, 0, 0), SIDE_L = V(-1, 0, 0), FWD = V(0, 0, -1), BACK = V(0, 0, 1);
 const LEFT_BACK = V(-0.35, -1, 0);                    // dorso izquierdo bajo el guardamanos (palma arriba y a la derecha)
 const PISTOL_LEFT_BACK = V(-1, -0.2, 0.3);            // mano de apoyo que envuelve la derecha desde la izquierda
@@ -806,7 +807,7 @@ export class ViewModel {
       else if (this.mounted) {
         // el puño rodea la empuñadura: meñique hacia la base, índice arriba junto al gatillo, dorso a la derecha
         this.mounted.localToWorld(rightW.copy(ud.grip));
-        orientR = this._orient(this._oR, this.mounted, ud.gripDir, SIDE_R, 0.55);
+        orientR = this._orient(this._oR, this.mounted, ud.gripDir, GUN_BACK, 1);
         gripR = GRIP_GUN;
         hasRight = true;
       }

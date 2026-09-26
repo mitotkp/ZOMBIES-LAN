@@ -1227,8 +1227,9 @@ export function getArmMaterials() {
   return {
     sleeve: MAT('arm_sleeve', () => new THREE.MeshStandardMaterial({ color: 0xffffff, map: fabricTexture(), roughness: 0.95, metalness: 0 })),
     sleeveDark: MAT('arm_sleeve_dark', () => new THREE.MeshStandardMaterial({ color: 0x2c3122, roughness: 0.95, metalness: 0 })),
-    glove: MAT('arm_glove', () => new THREE.MeshStandardMaterial({ color: 0x1e1e1f, roughness: 0.8, metalness: 0.05 })),
-    gloveDetail: MAT('arm_glove_detail', () => new THREE.MeshStandardMaterial({ color: 0x3a3a3c, roughness: 0.7, metalness: 0.1 })),
+    // guante táctico marrón (se distingue de las armas negras) con refuerzos más oscuros
+    glove: MAT('arm_glove', () => new THREE.MeshStandardMaterial({ color: 0x5a4a38, roughness: 0.75, metalness: 0.05 })),
+    gloveDetail: MAT('arm_glove_detail', () => new THREE.MeshStandardMaterial({ color: 0x2c2620, roughness: 0.6, metalness: 0.1 })),
   };
 }
 
