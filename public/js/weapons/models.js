@@ -439,7 +439,14 @@ function palette(color, upgraded) {
 
 // ------------------------------------------------------------------ Piezas comunes
 // Empuñadura inclinada (la base va hacia atrás)
+// La primera empuñadura que se añade queda como agarre de la mano derecha (userData.grip / gripDir):
+// un punto algo por encima del centro (la mano va alta, bajo la corredera) y el eje hacia la base.
+let _gripInfo = null;
 function addGrip(g, mat, x = 0, y = -0.005, z = 0.018, h = 0.1, tilt = -0.28, w = 0.03, d = 0.046) {
+  if (!_gripInfo) {
+    const dir = V(0, -Math.cos(tilt), -Math.sin(tilt));
+    _gripInfo = { grip: V(x, y, z).addScaledVector(dir, -0.012), gripDir: dir };
+  }
   return add(g, B(w, h, d), mat, x, y, z, tilt);
 }
 function addTriggerGuard(g, P, y, zFront, zBack) {
@@ -1042,7 +1049,7 @@ function buildLauncher(g, def, P) {
   addTriggerGuard(g, P, y - 0.01, -0.06, -0.01);
   return {
     muzzle: V(0, by, -0.51), sight: V(0, y + 0.118, 0.0), eyeRelief: 0.2,
-    leftHand: V(0, y - 0.07, -0.36), drum, magPoint: V(-0.06, y, -0.15),
+    leftHand: V(0, y - 0.03, -0.36), leftGripDir: V(0, -1, 0), drum, magPoint: V(-0.06, y, -0.15),
   };
 }
 
@@ -1057,7 +1064,7 @@ function buildKnife(g, bowie) {
     add(g, B(0.005, 0.042, 0.2), blade, 0, 0.002, -0.145);
     add(g, B(0.0052, 0.008, 0.18), metalMat(0x6a6e75), 0, 0.02, -0.135);
     add(g, B(0.005, 0.03, 0.05), blade, 0, -0.004, -0.262, 0.55);
-    return { muzzle: V(0, 0, -0.29), sight: V(0, 0.04, 0), leftHand: V(0, 0, 0) };
+    return { muzzle: V(0, 0, -0.29), sight: V(0, 0.04, 0), leftHand: V(0, 0, 0), grip: V(0, 0, 0.03), gripDir: V(0, 0, 1) };
   }
   add(g, CZ(0.012, 0.014, 0.1, 10), rubberMat(), 0, 0, 0.02);
   for (let i = 0; i < 4; i++) add(g, CZ(0.0135, 0.0135, 0.004, 10), darkMat(), 0, 0, -0.01 + i * 0.022);
@@ -1065,7 +1072,7 @@ function buildKnife(g, bowie) {
   add(g, B(0.004, 0.028, 0.15), blade, 0, 0.003, -0.115);
   add(g, B(0.0042, 0.006, 0.13), metalMat(0x55595f), 0, 0.015, -0.105);
   add(g, B(0.004, 0.02, 0.035), blade, 0, -0.002, -0.2, 0.5);
-  return { muzzle: V(0, 0, -0.22), sight: V(0, 0.04, 0), leftHand: V(0, 0, 0) };
+  return { muzzle: V(0, 0, -0.22), sight: V(0, 0.04, 0), leftHand: V(0, 0, 0), grip: V(0, 0, 0.025), gripDir: V(0, 0, 1) };
 }
 
 // ------------------------------------------------------------------ Armas cuerpo a cuerpo pesadas
@@ -1083,7 +1090,7 @@ function buildBat(g) {
     const a = i * 2.3, z = -0.48 - (i % 3) * 0.07;
     add(g, CY(0.0025, 0.0025, 0.05, 4), nail, Math.cos(a) * 0.045, Math.sin(a) * 0.045, z, 0, 0, a - PI / 2);
   }
-  return { muzzle: V(0, 0, -0.72), sight: V(0, 0.05, 0), leftHand: V(0, 0, 0.07), grip2: V(0, 0, 0.07) };
+  return { muzzle: V(0, 0, -0.72), sight: V(0, 0.05, 0), leftHand: V(0, 0, 0.07), grip2: V(0, 0, 0.065), grip: V(0, 0, -0.01), gripDir: V(0, 0, 1) };
 }
 
 function buildMachete(g) {
@@ -1093,7 +1100,7 @@ function buildMachete(g) {
   add(g, B(0.004, 0.05, 0.42), steel, 0, 0.006, -0.28);
   add(g, B(0.0042, 0.02, 0.38), metalMat(0x5a5e64), 0, 0.028, -0.27);       // lomo
   add(g, B(0.004, 0.035, 0.08), steel, 0, 0.0, -0.5, 0.35);                  // punta
-  return { muzzle: V(0, 0, -0.54), sight: V(0, 0.05, 0), leftHand: V(0, 0, 0) };
+  return { muzzle: V(0, 0, -0.54), sight: V(0, 0.05, 0), leftHand: V(0, 0, 0), grip: V(0, 0, 0.01), gripDir: V(0, 0, 1) };
 }
 
 function buildAxe(g) {
@@ -1105,7 +1112,7 @@ function buildAxe(g) {
   add(g, B(0.012, 0.16, 0.11), red, 0, 0.08, -0.6);                          // hoja
   add(g, B(0.008, 0.03, 0.115), chromeMat(), 0, 0.165, -0.6);                // filo
   add(g, CONEZ(0.02, 0.1, 6), red, 0, -0.08, -0.6, PI / 2, 0, 0);            // pico
-  return { muzzle: V(0, 0, -0.65), sight: V(0, 0.05, 0), leftHand: V(0, 0, 0.05), grip2: V(0, 0, 0.05) };
+  return { muzzle: V(0, 0, -0.65), sight: V(0, 0.05, 0), leftHand: V(0, 0, 0.05), grip2: V(0, 0, 0.055), grip: V(0, 0, -0.025), gripDir: V(0, 0, 1) };
 }
 
 // Modelo del arma cuerpo a cuerpo equipada: 'knife' | 'bowie' | 'bat' | 'machete' | 'axe'
@@ -1126,6 +1133,9 @@ export function createMeleeMesh(key) {
 const DEFAULT_UD = () => ({
   muzzle: V(0, 0.06, -0.5), sight: V(0, 0.1, 0), eyeRelief: 0.16,
   leftHand: V(0, 0.03, -0.3), leftHandParent: null,
+  // agarres: grip/gripDir = mano derecha (punto y eje de la empuñadura, hacia la base);
+  // leftGripDir = eje del puño izquierdo si sujeta una empuñadura vertical (lanzagranadas); si no, guardamanos
+  grip: V(0, 0.005, 0.015), gripDir: V(0, -0.9, 0.436), leftGripDir: null,
   mag: null, magDir: V(0, -1, 0), magPoint: null,
   slide: null, slideTravel: 0.03, pump: null, pumpTravel: 0.07, bolt: null,
   barrels: null, shells: null, cylinder: null, cylSpin: null, drum: null, cover: null, scope: false,
@@ -1142,6 +1152,7 @@ export function createWeaponMesh(key, upgraded = false) {
   g.name = `weapon_${key || 'none'}${up ? '_pap' : ''}`;
   const P = palette(def ? def.color : 0x3a3b3e, up);
   let ud = {};
+  _gripInfo = null;
   switch (model) {
     case 'pistol': ud = buildPistol(g, def, P, key); break;
     case 'revolver': ud = buildRevolver(g, def, P, key); break;
@@ -1160,6 +1171,7 @@ export function createWeaponMesh(key, upgraded = false) {
     case 'axe': ud = buildAxe(g); break;
     default: break;
   }
+  if (_gripInfo && !ud.grip) Object.assign(ud, _gripInfo);
   g.userData = Object.assign(DEFAULT_UD(), ud, { key: key || null, upgraded: up, model });
   return g;
 }

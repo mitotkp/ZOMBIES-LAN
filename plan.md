@@ -86,7 +86,12 @@ partiendo de la posición de su evento `respawn`.
    mano gira libre). `_placeArm(arm, mano, codo, orient, grip)` orienta la mano con `{x: dir}` (eje del puño, p. ej. la
    aguja) o `{y: dir}` (dorso) y hace coincidir un punto de agarre de la mano con el objeto. El maletín va en la palma
    izquierda (palma arriba), la jeringuilla y la botella dentro del puño derecho y el rollo de venda entre los dedos;
-   la aguja entra justo en la muñeca izquierda. Las armas siguen con la orientación por defecto.
+   la aguja entra justo en la muñeca izquierda.
+17. [x] Agarre de las armas: cada modelo guarda su empuñadura (`userData.grip` / `gripDir`, que `addGrip` rellena
+   solo; las armas cuerpo a cuerpo lo definen a mano). El puño derecho la rodea con el meñique hacia la base y el
+   dorso hacia fuera; la izquierda sujeta el guardamanos desde abajo (palma arriba, dedos por el lado derecho),
+   envuelve la derecha en las pistolas o agarra la empuñadura vertical (`leftGripDir`, lanzagranadas).
+   `_orient(o, obj, x, y, k)` mezcla la orientación exacta respecto al objeto con la del antebrazo (k).
 16. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
    que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
 17. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
@@ -141,3 +146,4 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
 - **2026-09-26 (9)**: modelos de personajes y armas menos cuadrados.
 - **2026-09-26 (10)**: manos articuladas y animaciones de venda y botiquín.
 - **2026-09-26 (11)**: muñeca articulada y agarres reales en las curas (maletín en la palma, jeringuilla en el puño).
+- **2026-09-26 (12)**: agarre real de todas las armas (empuñadura en el puño, mano izquierda bajo el guardamanos).

@@ -94,6 +94,11 @@ const HEAL_ELBOW_R = V(0.3, -0.6, -0.1);    // codo derecho bajo: el antebrazo n
 const HEAL_ELBOW_L = V(-0.32, -0.3, -0.38);   // codo a la izquierda: el antebrazo queda cruzado en horizontal
 const lerpV = (out, a, b, k) => out.copy(a).lerp(b, clamp01(k));
 // Agarres (espacio local de la mano: dorso +Y, dedos -Z, meñique de la derecha +X)
+const GRIP_GUN = V(0, -0.033, -0.004);                // empuñadura de pistola (3 x 5 cm) rodeada por el puño
+const GRIP_FIST = V(0, -0.03, -0.018);                // mango redondo (cuchillo, bate...) dentro del puño cerrado
+const SIDE_R = V(1, 0, 0), SIDE_L = V(-1, 0, 0), FWD = V(0, 0, -1), BACK = V(0, 0, 1);
+const LEFT_BACK = V(-0.35, -1, 0);                    // dorso izquierdo bajo el guardamanos (palma arriba y a la derecha)
+const PISTOL_LEFT_BACK = V(-1, -0.2, 0.3);            // mano de apoyo que envuelve la derecha desde la izquierda
 const GRIP_BOTTLE = V(0, -0.048, -0.02);              // botella (r 3 cm) dentro del puño
 const GRIP_ROLL = V(0, -0.05, -0.03);                  // rollo de venda sujeto con los dedos contra la palma
 const SYR_GRIP = V(0.015, -0.03, -0.018);              // centro de la jeringuilla dentro del puño
@@ -286,8 +291,10 @@ export class ViewModel {
       inj: V(0, 0, 0), injN: V(0, 0, 0), slotP: V(0, 0, 0), slotN: V(0, 0, 0), slotQ: Q(), q: Q(), q2: Q(),
     };
     this._drinkN = V(0, 0, 0);
+    this._oR = { x: V(0, 0, 0), y: V(0, 0, 0), k: 0 };
+    this._oL = { x: V(0, 0, 0), y: V(0, 0, 0), k: 0 };
     this._arm = { p: V(0, 0, 0), e: V(0, 0, 0), pos: V(0, 0, 0), f: V(0, 0, 0), v: V(0, 0, 0), g: V(0, 0, 0),
-      x: V(0, 0, 0), y: V(0, 0, 0), z: V(0, 0, 0), m: new THREE.Matrix4() };
+      x: V(0, 0, 0), y: V(0, 0, 0), z: V(0, 0, 0), m: new THREE.Matrix4(), q: new THREE.Quaternion() };
 
     // Accesorios de las acciones
     this.knifeHolder = new THREE.Group();
@@ -351,6 +358,7 @@ export class ViewModel {
     this._v1 = V(0, 0, 0);
     this._v2 = V(0, 0, 0);
     this._v3 = V(0, 0, 0);
+    this._v4 = V(0, 0, 0);
     this._R = {
       px: 0, py: 0, pz: 0, rx: 0, ry: 0, rz: 0, magOff: 0, magVisible: true, leftToMag: 0, leftOff: V(0, 0, 0),
       slideBack: 0, pumpBack: 0, boltLift: 0, boltBack: 0, barrelsOpen: 0, shellsVisible: true, cylOut: 0,
@@ -758,9 +766,17 @@ export class ViewModel {
       const H = this.heal;
       H.roll.visible = H.syr.visible = H.kit.visible = H.wrap.visible = false;
       const fistBob = this._v3.set(bx, by - 0.32 * smooth(this.switchLower), 0);
-      let orientR = null, gripR = null;
+      let orientR = null, gripR = null, orientL = null, gripL = null;
       // mano derecha
-      if (knifeU >= 0) { this.knifeHolder.getWorldPosition(rightW); hasRight = true; }
+      const melee = this.meleeMeshes[this.knifeKey];
+      if (knifeU >= 0 && melee) {
+        // mango dentro del puño, meñique hacia el pomo y dorso hacia fuera
+        melee.localToWorld(rightW.copy(melee.userData.grip));
+        orientR = this._orient(this._oR, melee, melee.userData.gripDir, SIDE_R, 0.6);
+        gripR = GRIP_FIST;
+        hasRight = true;
+      }
+      else if (knifeU >= 0) { this.knifeHolder.getWorldPosition(rightW); hasRight = true; }
       else if (throwU >= 0) { this.throwHolder.getWorldPosition(rightW); hasRight = true; }
       else if (drinkU >= 0) {
         // la botella queda dentro del puño, con el meñique hacia el culo de la botella
@@ -770,13 +786,30 @@ export class ViewModel {
         hasRight = true;
       }
       else if (this.shieldBlend > 0.5) { this.shield.localToWorld(rightW.copy(this.shield.userData.handleR)); hasRight = true; }
-      else if (this.mounted) { this.mounted.localToWorld(rightW.set(0, 0, 0.012)); hasRight = true; }
+      else if (this.mounted) {
+        // el puño rodea la empuñadura: meñique hacia la base, índice arriba junto al gatillo, dorso a la derecha
+        this.mounted.localToWorld(rightW.copy(ud.grip));
+        orientR = this._orient(this._oR, this.mounted, ud.gripDir, SIDE_R, 0.55);
+        gripR = GRIP_GUN;
+        hasRight = true;
+      }
       else { this.sway.localToWorld(rightW.set(0.15, -0.2, -0.34).add(fistBob)); hasRight = true; }
       // mano izquierda
       if (this.shieldBlend > 0.5) { this.shield.localToWorld(leftW.copy(this.shield.userData.handleL)); hasLeft = true; }
       else if (this.mounted) {
         const lhp = ud.leftHandParent || this.mounted;
         lhp.localToWorld(leftW.copy(ud.leftHand));
+        if (ud.leftGripDir) {
+          // empuñadura delantera vertical: el puño la rodea con el meñique abajo
+          orientL = this._orient(this._oL, this.mounted, this._v4.copy(ud.leftGripDir).negate(), SIDE_L, 0.55);
+          gripL = GRIP_FIST;
+        } else if (oneHand) {
+          // pistola: la mano de apoyo envuelve la derecha desde la izquierda
+          orientL = this._orient(this._oL, this.mounted, this._v4.copy(ud.gripDir).negate(), PISTOL_LEFT_BACK, 0.5);
+        } else {
+          // guardamanos: pulgar hacia delante y palma hacia arriba sujetándolo desde abajo
+          orientL = this._orient(this._oL, this.mounted, FWD, LEFT_BACK, 0.5);
+        }
         if (R.leftToMag > 0) {
           const mp = this._tmpP;
           if (ud.mag && !ud.magPoint) ud.mag.localToWorld(mp.set(0, -0.02, 0));
@@ -793,6 +826,8 @@ export class ViewModel {
       } else if (knifeU >= 0 && this.meleeMeshes[this.knifeKey] && this.meleeMeshes[this.knifeKey].userData.grip2) {
         // armas a dos manos: la izquierda agarra el mango por detrás de la derecha
         this.meleeMeshes[this.knifeKey].localToWorld(leftW.copy(this.meleeMeshes[this.knifeKey].userData.grip2));
+        orientL = this._orient(this._oL, melee, FWD, SIDE_L, 0.6);
+        gripL = GRIP_FIST;
         hasLeft = true;
       } else if (knifeU < 0 && throwU < 0) {
         this.sway.localToWorld(leftW.set(-0.15, -0.21, -0.36).add(fistBob));
@@ -803,7 +838,7 @@ export class ViewModel {
       }
       const oneH = oneHand && !(this.shieldBlend > 0.5);
       this._placeArm(this.armR, hasRight ? rightW : null, RIGHT_ELBOW, orientR, gripR);
-      this._placeArm(this.armL, hasLeft ? leftW : null, oneH ? LEFT_ELBOW_SHORT : LEFT_ELBOW_LONG);
+      this._placeArm(this.armL, hasLeft ? leftW : null, oneH ? LEFT_ELBOW_SHORT : LEFT_ELBOW_LONG, orientL, gripL);
       // dedos: puño sobre la empuñadura, curvados al sujetar objetos, relajados con las manos vacías
       let cR = this.mounted ? 1 : 0.35, cL = this.mounted ? 0.92 : 0.4;
       if (knifeU >= 0 || throwU >= 0) cR = 0.9;
@@ -926,6 +961,15 @@ export class ViewModel {
     T.az.set(0, 0, 1).applyQuaternion(T.q);
   }
 
+  // Orientación de una mano respecto a un objeto: eje del puño (x) y dorso (y) en local de obj → espacio de sway
+  _orient(o, obj, x, y, k) {
+    this._toSway(obj, null, null, null, this._heal.q);
+    o.x.copy(x).applyQuaternion(this._heal.q);
+    o.y.copy(y).applyQuaternion(this._heal.q);
+    o.k = k;
+    return o;
+  }
+
   // Pasa una posición / rotación local de obj al espacio de sway
   _toSway(obj, p, q, outP, outQ) {
     if (outP) this.sway.worldToLocal(obj.localToWorld(outP.copy(p)));
@@ -963,6 +1007,14 @@ export class ViewModel {
         else { A.y.copy(A.v); A.x.crossVectors(A.y, A.z); }
         A.m.makeBasis(A.x, A.y, A.z);
         arm.root.quaternion.setFromRotationMatrix(A.m);
+        if (orient.x && orient.y && orient.k > 0) {
+          // orientación exacta respecto al objeto (X del puño e Y del dorso); la muñeca reparte la diferencia
+          A.x.copy(orient.x).normalize();
+          A.y.copy(orient.y).addScaledVector(A.x, -orient.y.dot(A.x)).normalize();
+          A.z.crossVectors(A.x, A.y);
+          A.m.makeBasis(A.x, A.y, A.z);
+          arm.root.quaternion.slerp(A.q.setFromRotationMatrix(A.m), orient.k);
+        }
         A.pos.copy(local);
         if (grip) A.pos.sub(A.g.copy(grip).applyQuaternion(arm.root.quaternion));
       }
