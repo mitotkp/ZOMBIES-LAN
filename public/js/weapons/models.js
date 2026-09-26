@@ -445,7 +445,7 @@ let _gripInfo = null;
 function addGrip(g, mat, x = 0, y = -0.005, z = 0.018, h = 0.1, tilt = -0.28, w = 0.03, d = 0.046) {
   if (!_gripInfo) {
     const dir = V(0, -Math.cos(tilt), -Math.sin(tilt));
-    _gripInfo = { grip: V(x, y, z).addScaledVector(dir, -0.012), gripDir: dir };
+    _gripInfo = { grip: V(x, y, z).addScaledVector(dir, -0.026), gripDir: dir };
   }
   return add(g, B(w, h, d), mat, x, y, z, tilt);
 }

@@ -100,7 +100,7 @@ const SHOULDER_R = V(0.26, -0.4, 0.28);
 const SHOULDER_L = V(-0.26, -0.4, 0.12);
 const FORE_LEN = 0.36;                               // del centro de la mano al codo (incluye la muñeca)
 const UPPER_LEN = 0.5;                               // del codo al hombro
-const GRIP_GUN = V(0, -0.024, -0.03);              // empuñadura de pistola (3 x 5 cm) rodeada por el puño
+const GRIP_GUN = V(0, -0.039, 0.022);               // empuñadura de pistola (3 x 5 cm) rodeada por el puño
 const GRIP_FIST = V(0, -0.03, -0.018);                // mango redondo (cuchillo, bate...) dentro del puño cerrado
 const GUN_BACK = V(1, 0, 0.25);                       // dorso derecho hacia fuera y atrás: la palma envuelve la empuñadura
 const SIDE_R = V(1, 0, 0), SIDE_L = V(-1, 0, 0), FWD = V(0, 0, -1), BACK = V(0, 0, 1);
@@ -216,11 +216,13 @@ function buildArm(mats, left) {
   thumb.add(thumbTip);
   thumbTip.add(new THREE.Mesh(seg(0.026, 0.009), mats.glove));
   // idx (opcional): cierre propio del índice (p. ej. estirado hacia el gatillo)
-  const setCurl = (c, idx = c) => {
+  // mid (opcional): cierre de las segundas falanges; menor que c para abrazar un objeto ancho (empuñaduras)
+  const setCurl = (c, idx = c, mid = null) => {
     c = Math.max(0, Math.min(1, c));
     fingers.forEach((f, i) => {
       const cc = i === 0 ? Math.max(0, Math.min(1, idx)) : c;
-      f.k.rotation.x = -(0.15 + 1.25 * cc) - f.bias * cc; f.m.rotation.x = -(0.1 + 1.35 * cc);
+      const mm = i === 0 || mid == null ? cc : Math.max(0, Math.min(1, mid));
+      f.k.rotation.x = -(0.15 + 1.25 * cc) - f.bias * cc; f.m.rotation.x = -(0.1 + 1.35 * mm);
     });
     thumb.rotation.x = -0.25 - 0.55 * c;
     thumbTip.rotation.x = -0.2 - 0.6 * c;
@@ -877,7 +879,8 @@ export class ViewModel {
       this.armR.curl = damp(this.armR.curl, cR, 14, dt);
       this.armR.idx = damp(this.armR.idx, iR, 14, dt);
       this.armL.curl = damp(this.armL.curl, cL, 14, dt);
-      this.armR.setCurl(this.armR.curl, this.armR.idx);
+      const gunGrip = this.mounted && knifeU < 0 && throwU < 0 && drinkU < 0 && !(this.shieldBlend > 0.5);
+      this.armR.setCurl(this.armR.curl, this.armR.idx, gunGrip ? this.armR.curl * 0.2 : null);
       this.armL.setCurl(this.armL.curl);
     }
     // cartucho en la mano izquierda
