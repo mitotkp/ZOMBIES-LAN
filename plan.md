@@ -108,6 +108,10 @@ partiendo de la posición de su evento `respawn`.
    hacia fuera y atrás, k = 1) para que la palma la envuelva por detrás y no quede el lomo a la vista; hombros más
    atrás y fuera, brazo más largo y polos de codo abiertos para que los brazos entren desde las esquinas.
    Guantes marrones en lugar de negros para que la mano no se confunda con el arma a oscuras.
+23. [x] Agarre de pistola legible: el hueco del puño (`GRIP_GUN`) está delante de la palma, en la curva de los dedos,
+   así la palma tapa la empuñadura por detrás y los dedos asoman rodeándola; índice estirado hacia el gatillo
+   (`setCurl(c, idx)`); pistolas a la cadera con una mano (la izquierda solo al recargar o apuntar), algo más
+   alejadas y giradas; muñeca del guante más fina.
 16. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
    que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
 17. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
@@ -166,3 +170,4 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
 - **2026-09-26 (13)**: sala de pruebas en `/test/`.
 - **2026-09-26 (14)**: codo con IK, linterna táctica en el modelo del jugador y equilibrio de jefes en solitario.
 - **2026-09-26 (15)**: mano del arma envolviendo la empuñadura, brazos desde las esquinas y guantes marrones.
+- **2026-09-26 (16)**: agarre de pistola legible (puño real, índice en el gatillo, una mano a la cadera).

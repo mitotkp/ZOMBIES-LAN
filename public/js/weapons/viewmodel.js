@@ -30,7 +30,7 @@ const damp = (cur, target, rate, dt) => cur + (target - cur) * (1 - Math.exp(-ra
 
 // Posición del arma desde la cadera (espacio de cámara) por arquetipo de modelo
 const HIP = {
-  pistol: [0.125, -0.13, -0.3], revolver: [0.125, -0.135, -0.3], raygun: [0.125, -0.135, -0.3],
+  pistol: [0.14, -0.125, -0.37], revolver: [0.14, -0.13, -0.37], raygun: [0.14, -0.13, -0.37],
   smg: [0.13, -0.155, -0.27], rifle: [0.14, -0.165, -0.25], raygun2: [0.13, -0.155, -0.27],
   lmg: [0.15, -0.185, -0.24], shotgun: [0.14, -0.165, -0.25], doublebarrel: [0.14, -0.165, -0.25],
   sniper: [0.145, -0.175, -0.23], launcher: [0.15, -0.19, -0.25], knife: [0.15, -0.2, -0.3],
@@ -100,9 +100,9 @@ const SHOULDER_R = V(0.26, -0.4, 0.28);
 const SHOULDER_L = V(-0.26, -0.4, 0.12);
 const FORE_LEN = 0.36;                               // del centro de la mano al codo (incluye la muñeca)
 const UPPER_LEN = 0.5;                               // del codo al hombro
-const GRIP_GUN = V(0, -0.033, -0.004);                // empuñadura de pistola (3 x 5 cm) rodeada por el puño
+const GRIP_GUN = V(0, -0.024, -0.03);              // empuñadura de pistola (3 x 5 cm) rodeada por el puño
 const GRIP_FIST = V(0, -0.03, -0.018);                // mango redondo (cuchillo, bate...) dentro del puño cerrado
-const GUN_BACK = V(1, 0, 1.1);                        // dorso derecho hacia fuera y atrás: la palma envuelve la empuñadura
+const GUN_BACK = V(1, 0, 0.25);                       // dorso derecho hacia fuera y atrás: la palma envuelve la empuñadura
 const SIDE_R = V(1, 0, 0), SIDE_L = V(-1, 0, 0), FWD = V(0, 0, -1), BACK = V(0, 0, 1);
 const LEFT_BACK = V(-0.35, -1, 0);                    // dorso izquierdo bajo el guardamanos (palma arriba y a la derecha)
 const PISTOL_LEFT_BACK = V(-1, -0.2, 0.3);            // mano de apoyo que envuelve la derecha desde la izquierda
@@ -189,7 +189,7 @@ function buildArm(mats, left) {
   // Mano enguantada articulada: palma, 4 dedos de dos falanges y pulgar. El dorso mira a +Y, los dedos a -Z
   // y se cierran hacia la palma (-Y) con setCurl(k): 0 = abierta, 1 = puño cerrado sobre una empuñadura.
   const RB = (w, h, d, r) => new RoundedBoxGeometry(w, h, d, 3, r);
-  add(RB(0.07, 0.034, 0.08, 0.014), mats.glove, 0, 0, 0.016);                 // palma
+  add(RB(0.07, 0.04, 0.08, 0.016), mats.glove, 0, -0.002, 0.016);            // palma
   add(RB(0.06, 0.01, 0.05, 0.004), mats.gloveDetail, 0, 0.018, 0.012);        // refuerzo del dorso
   const seg = (len, r) => { const g = new THREE.CapsuleGeometry(r, Math.max(0.001, len - 2 * r), 3, 8); g.rotateX(PI / 2); g.translate(0, 0, -len / 2 + r); return g; };
   const fingers = [];
@@ -215,9 +215,13 @@ function buildArm(mats, left) {
   thumbTip.position.z = -0.026;
   thumb.add(thumbTip);
   thumbTip.add(new THREE.Mesh(seg(0.026, 0.009), mats.glove));
-  const setCurl = (c) => {
+  // idx (opcional): cierre propio del índice (p. ej. estirado hacia el gatillo)
+  const setCurl = (c, idx = c) => {
     c = Math.max(0, Math.min(1, c));
-    for (const f of fingers) { f.k.rotation.x = -(0.15 + 1.25 * c) - f.bias * c; f.m.rotation.x = -(0.1 + 1.35 * c); }
+    fingers.forEach((f, i) => {
+      const cc = i === 0 ? Math.max(0, Math.min(1, idx)) : c;
+      f.k.rotation.x = -(0.15 + 1.25 * cc) - f.bias * cc; f.m.rotation.x = -(0.1 + 1.35 * cc);
+    });
     thumb.rotation.x = -0.25 - 0.55 * c;
     thumbTip.rotation.x = -0.2 - 0.6 * c;
   };
@@ -227,10 +231,10 @@ function buildArm(mats, left) {
   fore.position.z = 0.045;
   root.add(fore);
   const addF = (geo, mat, z) => { const m = new THREE.Mesh(geo, mat); m.position.z = z; fore.add(m); return m; };
-  const wrist = new THREE.CylinderGeometry(0.03, 0.033, 0.07, 18);
+  const wrist = new THREE.CylinderGeometry(0.024, 0.028, 0.07, 18);
   wrist.rotateX(-PI / 2);
   addF(wrist, mats.glove, 0.04);
-  const cuff = new THREE.CylinderGeometry(0.05, 0.05, 0.025, 20);
+  const cuff = new THREE.CylinderGeometry(0.042, 0.046, 0.025, 20);
   cuff.rotateX(-PI / 2);
   addF(cuff, mats.sleeveDark, 0.075);
   // manga que se estira hasta el codo (0..1 en Z, escalada cada frame)
@@ -249,7 +253,7 @@ function buildArm(mats, left) {
   upper.add(upperSleeve);
   root.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
   upper.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
-  return { root, fore, sleeve, upper, upperSleeve, shoulder: left ? SHOULDER_L : SHOULDER_R, setCurl, curl: 0.4 };
+  return { root, fore, sleeve, upper, upperSleeve, shoulder: left ? SHOULDER_L : SHOULDER_R, setCurl, curl: 0.4, idx: 0.4 };
 }
 
 export class ViewModel {
@@ -627,7 +631,8 @@ export class ViewModel {
 
     // ---------------- pose (cadera / apuntar / correr / caído)
     const hip = HIP[model] || HIP.rifle;
-    let px = hip[0], py = hip[1], pz = hip[2], rx = 0, ry = 0.035, rz = 0;
+    // las armas de una mano, algo giradas hacia dentro para ver su lateral y el dorso de la mano
+    let px = hip[0], py = hip[1], pz = hip[2], rx = 0, ry = oneHand ? 0.14 : 0.035, rz = 0;
     if (this.ud && adsE > 0) {
       const sg = this.ud.sight;
       const ax = -sg.x, ay = -sg.y, az = -this.ud.eyeRelief - sg.z;
@@ -814,7 +819,11 @@ export class ViewModel {
       else { this.sway.localToWorld(rightW.set(0.15, -0.2, -0.34).add(fistBob)); hasRight = true; }
       // mano izquierda
       if (this.shieldBlend > 0.5) { this.shield.localToWorld(leftW.copy(this.shield.userData.handleL)); hasLeft = true; }
-      else if (this.mounted) {
+      else if (this.mounted && oneHand && !(R.leftToMag > 0) && R.leftOff.lengthSq() === 0 && adsE < 0.5) {
+        // pistolas a la cadera: se sujetan con una mano (la izquierda solo aparece al recargar o apuntar)
+        this.sway.localToWorld(leftW.set(-0.22, -0.62, -0.3));
+        hasLeft = true;
+      } else if (this.mounted) {
         const lhp = ud.leftHandParent || this.mounted;
         lhp.localToWorld(leftW.copy(ud.leftHand));
         if (ud.leftGripDir) {
@@ -863,9 +872,12 @@ export class ViewModel {
       if (drinkU >= 0) cR = 0.6;
       if (knifeU >= 0 && this.meleeMeshes[this.knifeKey] && this.meleeMeshes[this.knifeKey].userData.grip2) cL = 0.95;
       if (this.shieldBlend > 0.5) { cR = 0.95; cL = 0.95; }
+      // con un arma de fuego el índice va estirado sobre el gatillo
+      const iR = this.mounted && knifeU < 0 && throwU < 0 && drinkU < 0 && !(this.shieldBlend > 0.5) ? 0.3 : cR;
       this.armR.curl = damp(this.armR.curl, cR, 14, dt);
+      this.armR.idx = damp(this.armR.idx, iR, 14, dt);
       this.armL.curl = damp(this.armL.curl, cL, 14, dt);
-      this.armR.setCurl(this.armR.curl);
+      this.armR.setCurl(this.armR.curl, this.armR.idx);
       this.armL.setCurl(this.armL.curl);
     }
     // cartucho en la mano izquierda
