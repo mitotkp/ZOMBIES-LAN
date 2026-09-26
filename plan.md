@@ -92,6 +92,10 @@ partiendo de la posición de su evento `respawn`.
    dorso hacia fuera; la izquierda sujeta el guardamanos desde abajo (palma arriba, dedos por el lado derecho),
    envuelve la derecha en las pistolas o agarra la empuñadura vertical (`leftGripDir`, lanzagranadas).
    `_orient(o, obj, x, y, k)` mezcla la orientación exacta respecto al objeto con la del antebrazo (k).
+18. [x] Sala de pruebas en `/test/` (`public/test/index.html` + `public/js/testroom.js`), sin enlace desde el menú y sin
+   servidor de juego: visor del arma en primera persona con el mapa de fondo, vista lateral y libre (OrbitControls),
+   todas las acciones del ViewModel, congelar la acción en un punto, y visor de modelos (zombis, jefes, jugador).
+   Útil para revisar agarres y animaciones: si se añade una acción nueva al ViewModel, añadirla también a `ACTIONS`.
 16. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
    que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
 17. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
@@ -147,3 +151,4 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
 - **2026-09-26 (10)**: manos articuladas y animaciones de venda y botiquín.
 - **2026-09-26 (11)**: muñeca articulada y agarres reales en las curas (maletín en la palma, jeringuilla en el puño).
 - **2026-09-26 (12)**: agarre real de todas las armas (empuñadura en el puño, mano izquierda bajo el guardamanos).
+- **2026-09-26 (13)**: sala de pruebas en `/test/`.

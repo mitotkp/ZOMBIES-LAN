@@ -117,6 +117,10 @@ Si lo ves muy oscuro, sube el **Brillo** en *Ajustes* (menú de pausa con Esc) o
   `/power`, `/give ARMA [up]`, `/god`, `/killall`, `/pu TIPO`, `/parts`, `/doors`, `/perk VENTAJA`,
   `/meds`, `/infect`, `/item TIPO` y `/spawn TIPO` (runner, bomber, tank, butcher, plague, necro, armored, specter).
 - `http://localhost:3000/?debug=1`: permite jugar sin capturar el ratón y muestra los FPS.
+- `http://localhost:3000/test/`: **sala de pruebas** (no aparece en el menú). Sin entrar en partida permite ver cada arma
+  con sus manos (en primera persona, de lado o girando la cámara), lanzar disparos, recargas, cuchillo, granada, curas y escudo,
+  congelar cualquier animación en un punto con un deslizador y ver los modelos de zombis, jefes y jugador con sus animaciones.
+  Atajos: F disparar, R recargar, V cuerpo a cuerpo, G granada, H venda, J botiquín, Q escudo, espacio congelar.
 - `npm run validate-map`: comprueba el mapa.
 - `npm run bots -- --bots 2 --seconds 120 --url ws://localhost:3000`: prueba automática del servidor con bots.
 
