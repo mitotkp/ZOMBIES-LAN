@@ -82,6 +82,11 @@ partiendo de la posición de su evento `respawn`.
 15. [x] Manos en primera persona articuladas (palma, 4 dedos de 2 falanges y pulgar) que se cierran sobre la empuñadura,
    se curvan al sujetar objetos y se relajan sin arma; dedos en las manos del modelo de tercera persona.
    Animaciones propias para la venda (vendarse el antebrazo) y el botiquín (maletín + jeringuilla); el antídoto se bebe.
+16. [x] Agarres coherentes en primera persona: la muñeca es una articulación (el antebrazo `fore` apunta al codo y la
+   mano gira libre). `_placeArm(arm, mano, codo, orient, grip)` orienta la mano con `{x: dir}` (eje del puño, p. ej. la
+   aguja) o `{y: dir}` (dorso) y hace coincidir un punto de agarre de la mano con el objeto. El maletín va en la palma
+   izquierda (palma arriba), la jeringuilla y la botella dentro del puño derecho y el rollo de venda entre los dedos;
+   la aguja entra justo en la muñeca izquierda. Las armas siguen con la orientación por defecto.
 16. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
    que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
 17. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
@@ -135,3 +140,4 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
 - **2026-09-25 (8)**: más aguante (4 golpes) y 5 jefes por ronda desde la ronda 5.
 - **2026-09-26 (9)**: modelos de personajes y armas menos cuadrados.
 - **2026-09-26 (10)**: manos articuladas y animaciones de venda y botiquín.
+- **2026-09-26 (11)**: muñeca articulada y agarres reales en las curas (maletín en la palma, jeringuilla en el puño).

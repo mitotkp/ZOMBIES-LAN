@@ -88,10 +88,22 @@ const DRINK_KEYS = [
 // ------------------------------------------------------------------ Curas: venda y botiquín
 const HEAL_REST_R = V(0.2, -0.58, -0.3);     // manos fuera de la vista
 const HEAL_REST_L = V(-0.18, -0.6, -0.3);
-const HEAL_ARM_L = V(0.03, -0.11, -0.42);     // antebrazo izquierdo cruzado delante (para vendar / inyectar)
-const HEAL_CASE_L = V(-0.02, -0.19, -0.5);   // maletín sujeto delante
-const HEAL_ELBOW_L = V(-0.3, -0.24, -0.3);   // codo a la izquierda: el antebrazo queda cruzado en horizontal
+const HEAL_ARM_L = V(0.04, -0.14, -0.5);      // antebrazo izquierdo cruzado delante (para vendar / inyectar)
+const HEAL_CASE_L = V(-0.04, -0.2, -0.5);    // maletín sujeto delante
+const HEAL_ELBOW_R = V(0.3, -0.6, -0.1);    // codo derecho bajo: el antebrazo no tapa la vista
+const HEAL_ELBOW_L = V(-0.32, -0.3, -0.38);   // codo a la izquierda: el antebrazo queda cruzado en horizontal
 const lerpV = (out, a, b, k) => out.copy(a).lerp(b, clamp01(k));
+// Agarres (espacio local de la mano: dorso +Y, dedos -Z, meñique de la derecha +X)
+const GRIP_BOTTLE = V(0, -0.048, -0.02);              // botella (r 3 cm) dentro del puño
+const GRIP_ROLL = V(0, -0.05, -0.03);                  // rollo de venda sujeto con los dedos contra la palma
+const SYR_GRIP = V(0.015, -0.03, -0.018);              // centro de la jeringuilla dentro del puño
+const SYR_Q = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -PI / 2, 0));   // aguja (-Z) → meñique (+X)
+const SYR_SLOT_P = V(0.05, 0.1, 0);                    // jeringuilla de pie dentro del maletín (local del maletín)
+const SYR_SLOT_Q = new THREE.Quaternion().setFromEuler(new THREE.Euler(-PI / 2, 0, 0)); // aguja hacia abajo
+const SYR_REST_N = V(0, -1, 0);
+const SYR_HOLD_P = V(0.1, -0.13, -0.4);                // jeringuilla preparada delante del pecho
+const SYR_HOLD_N = V(-0.6, -0.5, -0.35).normalize();
+const Z_AXIS = V(0, 0, 1);
 
 function buildHealProps() {
   const RB = (w, h, d, r) => new RoundedBoxGeometry(w, h, d, 2, r);
@@ -198,19 +210,24 @@ function buildArm(mats, left) {
     thumbTip.rotation.x = -0.2 - 0.6 * c;
   };
   setCurl(0.4);
+  // antebrazo: pivota en la muñeca (z 0.045) para que la mano pueda girar respecto al brazo
+  const fore = new THREE.Group();
+  fore.position.z = 0.045;
+  root.add(fore);
+  const addF = (geo, mat, z) => { const m = new THREE.Mesh(geo, mat); m.position.z = z; fore.add(m); return m; };
   const wrist = new THREE.CylinderGeometry(0.03, 0.033, 0.07, 18);
   wrist.rotateX(-PI / 2);
-  add(wrist, mats.glove, 0, 0, 0.085);
+  addF(wrist, mats.glove, 0.04);
   const cuff = new THREE.CylinderGeometry(0.05, 0.05, 0.025, 20);
   cuff.rotateX(-PI / 2);
-  add(cuff, mats.sleeveDark, 0, 0, 0.12);
+  addF(cuff, mats.sleeveDark, 0.075);
   // manga que se estira hasta el codo (0..1 en Z, escalada cada frame)
   const sg = new THREE.CylinderGeometry(0.046, 0.056, 1, 20, 1, true);
   sg.rotateX(-PI / 2);
   sg.translate(0, 0, 0.5);
-  const sleeve = add(sg, mats.sleeve, 0, 0, 0.11);
+  const sleeve = addF(sg, mats.sleeve, 0.065);
   root.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
-  return { root, sleeve, setCurl, curl: 0.4 };
+  return { root, fore, sleeve, setCurl, curl: 0.4 };
 }
 
 export class ViewModel {
@@ -254,10 +271,23 @@ export class ViewModel {
 
     // Accesorios de las curas (venda y botiquín)
     this.heal = buildHealProps();
-    this.sway.add(this.heal.roll, this.heal.kit, this.heal.syr);
-    this.armL.root.add(this.heal.wrap);
+    this.sway.add(this.heal.roll, this.heal.syr);
+    // el maletín descansa en la palma izquierda (mano con la palma hacia arriba: su -Y de la mano es arriba)
+    this.heal.kit.position.set(0, -0.061, -0.008);
+    this.heal.kit.rotation.set(0, 0, PI);
+    this.heal.kit.scale.setScalar(0.8);
+    this.armL.root.add(this.heal.kit);
+    this.armL.fore.add(this.heal.wrap);
     this.healT = -1; this.healDur = 2; this.healKind = null;
-    this._hR = V(0, 0, 0); this._hL = V(0, 0, 0); this._hC = V(0, 0, 0); this._hD = V(0, 0, 0); this._hE = V(0, 0, 0);
+    const Q = () => new THREE.Quaternion();
+    this._heal = {
+      L: V(0, 0, 0), R: V(0, 0, 0), S: V(0, 0, 0), N: V(0, 0, 0), C: V(0, 0, 0), w: V(0, 0, 0), e: V(0, 0, 0),
+      ax: V(0, 0, 0), ay: V(0, 0, 0), az: V(0, 0, 0), back: V(0, 0, 0), up: V(0, 0, 0), tmp: V(0, 0, 0), tmp2: V(0, 0, 0),
+      inj: V(0, 0, 0), injN: V(0, 0, 0), slotP: V(0, 0, 0), slotN: V(0, 0, 0), slotQ: Q(), q: Q(), q2: Q(),
+    };
+    this._drinkN = V(0, 0, 0);
+    this._arm = { p: V(0, 0, 0), e: V(0, 0, 0), pos: V(0, 0, 0), f: V(0, 0, 0), v: V(0, 0, 0), g: V(0, 0, 0),
+      x: V(0, 0, 0), y: V(0, 0, 0), z: V(0, 0, 0), m: new THREE.Matrix4() };
 
     // Accesorios de las acciones
     this.knifeHolder = new THREE.Group();
@@ -705,8 +735,6 @@ export class ViewModel {
       this.bottleHolder.position.copy(this._tmpP);
       this.bottleHolder.rotation.set(this._tmpR.x, this._tmpR.y, this._tmpR.z);
     }
-    // curas
-    this._healPose(healU);
     // escudo en las manos (y golpe)
     this.shieldHolder.visible = this.shieldBlend > 0.01;
     if (this.shieldHolder.visible) {
@@ -725,62 +753,68 @@ export class ViewModel {
     this.root.updateMatrixWorld(true);
     const rightW = this._v1, leftW = this._v2;
     let hasRight = false, hasLeft = false;
-    const fistBob = this._v3.set(bx, by - 0.32 * smooth(this.switchLower), 0);
-    // mano derecha
-    if (healU >= 0) { this.sway.localToWorld(rightW.copy(this._hR)); hasRight = true; }
-    else if (knifeU >= 0) { this.knifeHolder.getWorldPosition(rightW); hasRight = true; }
-    else if (throwU >= 0) { this.throwHolder.getWorldPosition(rightW); hasRight = true; }
-    else if (drinkU >= 0) { this.bottleHolder.getWorldPosition(rightW); hasRight = true; }
-    else if (this.shieldBlend > 0.5) { this.shield.localToWorld(rightW.copy(this.shield.userData.handleR)); hasRight = true; }
-    else if (this.mounted) { this.mounted.localToWorld(rightW.set(0, 0, 0.012)); hasRight = true; }
-    else { this.sway.localToWorld(rightW.set(0.15, -0.2, -0.34).add(fistBob)); hasRight = true; }
-    // mano izquierda
-    if (healU >= 0) { this.sway.localToWorld(leftW.copy(this._hL)); hasLeft = true; }
-    else if (this.shieldBlend > 0.5) { this.shield.localToWorld(leftW.copy(this.shield.userData.handleL)); hasLeft = true; }
-    else if (this.mounted) {
-      const lhp = ud.leftHandParent || this.mounted;
-      lhp.localToWorld(leftW.copy(ud.leftHand));
-      if (R.leftToMag > 0) {
-        const mp = this._tmpP;
-        if (ud.mag && !ud.magPoint) ud.mag.localToWorld(mp.set(0, -0.02, 0));
-        else if (ud.magPoint) this.mounted.localToWorld(mp.copy(ud.magPoint));
-        else this.mounted.localToWorld(mp.set(0, 0.02, -0.12));
-        leftW.lerp(mp, R.leftToMag);
+    if (healU >= 0) this._healArms(healU, dt);
+    else {
+      const H = this.heal;
+      H.roll.visible = H.syr.visible = H.kit.visible = H.wrap.visible = false;
+      const fistBob = this._v3.set(bx, by - 0.32 * smooth(this.switchLower), 0);
+      let orientR = null, gripR = null;
+      // mano derecha
+      if (knifeU >= 0) { this.knifeHolder.getWorldPosition(rightW); hasRight = true; }
+      else if (throwU >= 0) { this.throwHolder.getWorldPosition(rightW); hasRight = true; }
+      else if (drinkU >= 0) {
+        // la botella queda dentro del puño, con el meñique hacia el culo de la botella
+        this.bottleHolder.localToWorld(rightW.set(0, -0.005, 0));
+        orientR = { x: this._drinkN.set(0, -1, 0).applyQuaternion(this.bottleHolder.quaternion) };
+        gripR = GRIP_BOTTLE;
+        hasRight = true;
       }
-      if (R.leftOff.lengthSq() > 0) {
-        this.sway.worldToLocal(leftW);
-        leftW.add(R.leftOff);
-        this.sway.localToWorld(leftW);
+      else if (this.shieldBlend > 0.5) { this.shield.localToWorld(rightW.copy(this.shield.userData.handleR)); hasRight = true; }
+      else if (this.mounted) { this.mounted.localToWorld(rightW.set(0, 0, 0.012)); hasRight = true; }
+      else { this.sway.localToWorld(rightW.set(0.15, -0.2, -0.34).add(fistBob)); hasRight = true; }
+      // mano izquierda
+      if (this.shieldBlend > 0.5) { this.shield.localToWorld(leftW.copy(this.shield.userData.handleL)); hasLeft = true; }
+      else if (this.mounted) {
+        const lhp = ud.leftHandParent || this.mounted;
+        lhp.localToWorld(leftW.copy(ud.leftHand));
+        if (R.leftToMag > 0) {
+          const mp = this._tmpP;
+          if (ud.mag && !ud.magPoint) ud.mag.localToWorld(mp.set(0, -0.02, 0));
+          else if (ud.magPoint) this.mounted.localToWorld(mp.copy(ud.magPoint));
+          else this.mounted.localToWorld(mp.set(0, 0.02, -0.12));
+          leftW.lerp(mp, R.leftToMag);
+        }
+        if (R.leftOff.lengthSq() > 0) {
+          this.sway.worldToLocal(leftW);
+          leftW.add(R.leftOff);
+          this.sway.localToWorld(leftW);
+        }
+        hasLeft = true;
+      } else if (knifeU >= 0 && this.meleeMeshes[this.knifeKey] && this.meleeMeshes[this.knifeKey].userData.grip2) {
+        // armas a dos manos: la izquierda agarra el mango por detrás de la derecha
+        this.meleeMeshes[this.knifeKey].localToWorld(leftW.copy(this.meleeMeshes[this.knifeKey].userData.grip2));
+        hasLeft = true;
+      } else if (knifeU < 0 && throwU < 0) {
+        this.sway.localToWorld(leftW.set(-0.15, -0.21, -0.36).add(fistBob));
+        hasLeft = true;
+      } else {
+        this.sway.localToWorld(leftW.set(-0.2, -0.6, -0.3));
+        hasLeft = true;
       }
-      hasLeft = true;
-    } else if (knifeU >= 0 && this.meleeMeshes[this.knifeKey] && this.meleeMeshes[this.knifeKey].userData.grip2) {
-      // armas a dos manos: la izquierda agarra el mango por detrás de la derecha
-      this.meleeMeshes[this.knifeKey].localToWorld(leftW.copy(this.meleeMeshes[this.knifeKey].userData.grip2));
-      hasLeft = true;
-    } else if (knifeU < 0 && throwU < 0) {
-      this.sway.localToWorld(leftW.set(-0.15, -0.21, -0.36).add(fistBob));
-      hasLeft = true;
-    } else {
-      this.sway.localToWorld(leftW.set(-0.2, -0.6, -0.3));
-      hasLeft = true;
+      const oneH = oneHand && !(this.shieldBlend > 0.5);
+      this._placeArm(this.armR, hasRight ? rightW : null, RIGHT_ELBOW, orientR, gripR);
+      this._placeArm(this.armL, hasLeft ? leftW : null, oneH ? LEFT_ELBOW_SHORT : LEFT_ELBOW_LONG);
+      // dedos: puño sobre la empuñadura, curvados al sujetar objetos, relajados con las manos vacías
+      let cR = this.mounted ? 1 : 0.35, cL = this.mounted ? 0.92 : 0.4;
+      if (knifeU >= 0 || throwU >= 0) cR = 0.9;
+      if (drinkU >= 0) cR = 0.6;
+      if (knifeU >= 0 && this.meleeMeshes[this.knifeKey] && this.meleeMeshes[this.knifeKey].userData.grip2) cL = 0.95;
+      if (this.shieldBlend > 0.5) { cR = 0.95; cL = 0.95; }
+      this.armR.curl = damp(this.armR.curl, cR, 14, dt);
+      this.armL.curl = damp(this.armL.curl, cL, 14, dt);
+      this.armR.setCurl(this.armR.curl);
+      this.armL.setCurl(this.armL.curl);
     }
-    const oneH = oneHand && !(this.shieldBlend > 0.5);
-    this._placeArm(this.armR, hasRight ? rightW : null, RIGHT_ELBOW);
-    const healArm = healU >= 0 && (this.healKind === 'bandage' || healU > 0.46);
-    this._placeArm(this.armL, hasLeft ? leftW : null, healArm ? this._healElbow(healU) : oneH && healU < 0 ? LEFT_ELBOW_SHORT : LEFT_ELBOW_LONG);
-    // dedos: puño sobre la empuñadura, curvados al sujetar objetos, relajados con las manos vacías
-    let cR = this.mounted ? 1 : 0.35, cL = this.mounted ? 0.92 : 0.4;
-    if (knifeU >= 0 || throwU >= 0 || drinkU >= 0) cR = 0.9;
-    if (knifeU >= 0 && this.meleeMeshes[this.knifeKey] && this.meleeMeshes[this.knifeKey].userData.grip2) cL = 0.95;
-    if (this.shieldBlend > 0.5) { cR = 0.95; cL = 0.95; }
-    if (healU >= 0) {
-      cR = 0.8;
-      cL = this.healKind === 'medkit' && healU < 0.46 ? 0.9 : 0.15;   // sujeta el maletín / antebrazo abierto
-    }
-    this.armR.curl = damp(this.armR.curl, cR, 14, dt);
-    this.armL.curl = damp(this.armL.curl, cL, 14, dt);
-    this.armR.setCurl(this.armR.curl);
-    this.armL.setCurl(this.armL.curl);
     // cartucho en la mano izquierda
     this.shellProp.visible = R.shellProp;
     if (R.shellProp) {
@@ -798,85 +832,148 @@ export class ViewModel {
     if (this.flashLight.intensity < 0.01) this.flashLight.intensity = 0;
   }
 
-  // Coloca los accesorios de la cura y calcula dónde van las manos (this._hR / this._hL, en el espacio de sway)
-  _healPose(u) {
-    const H = this.heal;
-    if (u < 0) { H.roll.visible = H.wrap.visible = H.kit.visible = H.syr.visible = false; return; }
-    const R = this._hR, L = this._hL, C = this._hC, D = this._hD;
-    // punto de la muñeca izquierda (7 cm hacia el codo) y dirección del antebrazo
-    D.copy(HEAL_ELBOW_L).sub(HEAL_ARM_L).normalize();
-    C.copy(HEAL_ARM_L).addScaledVector(D, 0.075);
-    // ejes perpendiculares al antebrazo para girar alrededor
-    const ax = this._tmpP.set(0, 1, 0).cross(D).normalize();
-    const ay = this._tmpR.copy(D).cross(ax).normalize();
+  // Curas: coloca los dos brazos a partir de los objetos (el maletín va en la palma izquierda, la jeringuilla y
+  // el rollo en el puño derecho) y orienta las manos para que el objeto quede bien agarrado.
+  _healArms(u, dt) {
+    const H = this.heal, T = this._heal;
+    const armL = this.armL, armR = this.armR;
+    let cR = 0.4, cL = 0.3;
     if (this.healKind === 'bandage') {
+      H.kit.visible = H.syr.visible = false;
       const raise = seg(u, 0, 0.15), lower = seg(u, 0.86, 1);
       const wrapP = clamp01((u - 0.15) / 0.7);
-      lerpV(L, HEAL_REST_L, HEAL_ARM_L, raise).lerp(HEAL_REST_L, lower);
-      // la mano derecha da vueltas con el rollo alrededor de la muñeca
-      const ang = wrapP * PI * 2 * 4 + PI * 0.3;
-      const orbit = V(0, 0, 0).addScaledVector(ax, Math.cos(ang) * 0.065).addScaledVector(ay, Math.sin(ang) * 0.065 + 0.02);
-      const target = V(0, 0, 0).copy(C).addScaledVector(D, 0.03 * Math.sin(ang * 0.5)).add(orbit);
-      lerpV(R, HEAL_REST_R, target, raise).lerp(HEAL_REST_R, lower);
+      // antebrazo izquierdo cruzado delante con la palma hacia abajo
+      const k = bump(u, 0, 0.15, 0.86, 1);
+      lerpV(T.L, HEAL_REST_L, HEAL_ARM_L, raise).lerp(HEAL_REST_L, lower);
+      T.back.set(0, 1, 0.2);
+      this._placeArm(armL, this.sway.localToWorld(T.w.copy(T.L)), T.e.copy(LEFT_ELBOW_LONG).lerp(HEAL_ELBOW_L, k), { y: T.back });
+      // centro de la muñeca y ejes del antebrazo (espacio de sway)
+      this._armAxes(armL, 0.035);
+      // el rollo da vueltas pegado a la muñeca; la palma derecha siempre mira hacia ella
+      const phi = wrapP * PI * 2 * 4 + PI * 0.5;
+      const ang = phi + 0.6 * Math.sin(phi);                        // pasa deprisa por el lado de la cámara
+      const rad = T.tmp.set(0, 0, 0).addScaledVector(T.ax, Math.cos(ang)).addScaledVector(T.ay, Math.sin(ang));
+      T.S.copy(T.C).addScaledVector(rad, 0.058).addScaledVector(T.az, 0.012 * Math.sin(ang * 0.5));
+      lerpV(T.R, HEAL_REST_R, T.S, raise).lerp(HEAL_REST_R, lower);
+      T.back.copy(rad).lerp(T.up.set(0, 1, 0), 1 - raise * (1 - lower));
+      this._placeArm(armR, this.sway.localToWorld(T.w.copy(T.R)), HEAL_ELBOW_R, { y: T.back }, GRIP_ROLL);
       H.roll.visible = u < 0.9;
-      H.roll.position.copy(R).addScaledVector(ay, -0.02);
-      H.roll.lookAt(this.sway.localToWorld(V(0, 0, 0).copy(H.roll.position).add(D)));
+      this._toSway(armR.root, GRIP_ROLL, null, H.roll.position, null);
+      H.roll.quaternion.setFromUnitVectors(Z_AXIS, T.az);
       H.roll.rotateZ(ang);
       H.roll.scale.setScalar(1 - 0.35 * wrapP);                  // el rollo se gasta
       H.wrap.visible = wrapP > 0.02;
-      H.wrap.position.set(0, 0, 0.042);
+      H.wrap.position.set(0, 0, -0.005);
       H.wrap.scale.set(1, 1, Math.max(0.001, 0.085 * wrapP));
-      H.kit.visible = H.syr.visible = false;
-      return;
+      cR = 0.5; cL = 0.15;
+    } else {
+      // Botiquín: sacar el maletín, abrirlo, coger la jeringuilla, guardarlo e inyectarse en la muñeca
+      H.roll.visible = H.wrap.visible = false;
+      const caseUp = seg(u, 0, 0.12), caseDown = seg(u, 0.4, 0.52);
+      lerpV(T.L, HEAL_REST_L, HEAL_CASE_L, caseUp);
+      if (u > 0.4) lerpV(T.L, HEAL_CASE_L, HEAL_REST_L, caseDown * 2).lerp(HEAL_ARM_L, seg(u, 0.46, 0.58));
+      T.L.lerp(HEAL_REST_L, seg(u, 0.88, 1));
+      const k = bump(u, 0.46, 0.58, 0.88, 1);
+      T.back.set(0, -1, 0);                                        // palma arriba: sujeta el maletín / muestra la muñeca
+      this._placeArm(armL, this.sway.localToWorld(T.w.copy(T.L)), T.e.copy(LEFT_ELBOW_LONG).lerp(HEAL_ELBOW_L, k), { y: T.back });
+      H.kit.visible = u < 0.46;
+      H.lid.rotation.x = -1.9 * seg(u, 0.12, 0.24) * (1 - seg(u, 0.36, 0.44));
+      armL.root.updateMatrixWorld(true);
+      // hueco de la jeringuilla dentro del maletín (de pie, aguja abajo) y punto de inyección en la muñeca
+      this._toSway(H.kit, SYR_SLOT_P, SYR_SLOT_Q, T.slotP, T.slotQ);
+      T.slotN.set(0, 0, -1).applyQuaternion(T.slotQ);
+      this._armAxes(armL, 0.03);
+      T.inj.copy(T.C).addScaledVector(T.ay, 0.03);
+      T.injN.copy(T.ay).negate().add(T.tmp.set(-0.35, 0, -0.15)).normalize();
+      const stab = bump(u, 0.6, 0.63, 0.72, 0.76);
+      const inject = T.tmp2.copy(T.inj).addScaledVector(T.injN, -(0.07 + 0.035 * (1 - stab) - 0.014 * stab));
+      // centro de la jeringuilla (T.S) y dirección de la aguja (T.N) por fases
+      T.S.copy(HEAL_REST_R); T.N.copy(SYR_REST_N);
+      const toCase = seg(u, 0.2, 0.3), up = seg(u, 0.32, 0.44), toArm = seg(u, 0.52, 0.62);
+      const back = seg(u, 0.76, 0.86), away = seg(u, 0.86, 1);
+      T.S.lerp(T.slotP, toCase); T.N.lerp(T.slotN, toCase);
+      T.S.lerp(SYR_HOLD_P, up); T.N.lerp(SYR_HOLD_N, up);
+      T.S.lerp(inject, toArm); T.N.lerp(T.injN, toArm);
+      T.S.lerp(SYR_HOLD_P, back); T.N.lerp(SYR_HOLD_N, back);
+      T.S.lerp(HEAL_REST_R, away); T.N.lerp(SYR_REST_N, away);
+      T.N.normalize();
+      // mientras no se coge, la mano se acerca con el puño algo más arriba (sin atravesar el maletín)
+      if (u < 0.3) T.S.y += 0.04 * (1 - seg(u, 0.26, 0.3));
+      this._placeArm(armR, this.sway.localToWorld(T.w.copy(T.S)), HEAL_ELBOW_R, { x: T.N }, SYR_GRIP);
+      armR.root.updateMatrixWorld(true);
+      H.syr.visible = u > 0.14 && u < 0.92;
+      if (u < 0.3) { H.syr.position.copy(T.slotP); H.syr.quaternion.copy(T.slotQ); }
+      else this._toSway(armR.root, SYR_GRIP, SYR_Q, H.syr.position, H.syr.quaternion);
+      const push = seg(u, 0.63, 0.72);
+      H.plunger.position.z = 0.035 - 0.05 * push;
+      H.liq.scale.set(1, 1, Math.max(0.05, 1 - push));
+      cR = u < 0.27 ? 0.3 : 0.9;
+      cL = u < 0.46 ? 0.6 : 0.15;
     }
-    // Botiquín: sacar el maletín, abrirlo, coger la jeringuilla, guardarlo e inyectarse en el antebrazo
-    H.roll.visible = H.wrap.visible = false;
-    const caseUp = seg(u, 0, 0.12), caseDown = seg(u, 0.4, 0.52);
-    lerpV(L, HEAL_REST_L, HEAL_CASE_L, caseUp);
-    if (u > 0.4) lerpV(L, HEAL_CASE_L, HEAL_REST_L, caseDown * 2).lerp(HEAL_ARM_L, seg(u, 0.46, 0.58));
-    L.lerp(HEAL_REST_L, seg(u, 0.88, 1));
-    H.kit.visible = u < 0.52;
-    H.kit.position.copy(L).add(V(0.005, 0.06, -0.01));
-    H.kit.rotation.set(0.35, 0, 0);
-    H.kit.scale.setScalar(0.75);
-    H.lid.rotation.x = -1.9 * seg(u, 0.12, 0.24) * (1 - seg(u, 0.36, 0.44));
-    // mano derecha: al maletín, saca la jeringuilla, la acerca al antebrazo, inyecta y se retira
-    const inCase = V(0, 0, 0).copy(HEAL_CASE_L).add(V(0.02, 0.085, 0.0));
-    const hold = V(0.15, -0.1, -0.38);
-    const inject = V(0, 0, 0).copy(C).addScaledVector(ay, 0.075).addScaledVector(ax, 0.03);
-    lerpV(R, HEAL_REST_R, inCase, seg(u, 0.22, 0.32));
-    if (u > 0.32) lerpV(R, inCase, hold, seg(u, 0.32, 0.44));
-    if (u > 0.52) lerpV(R, hold, inject, seg(u, 0.52, 0.62));
-    if (u > 0.74) lerpV(R, inject, hold, seg(u, 0.74, 0.84));
-    if (u > 0.84) lerpV(R, hold, HEAL_REST_R, seg(u, 0.84, 1));
-    const stab = bump(u, 0.6, 0.63, 0.72, 0.76);
-    R.addScaledVector(ay, -0.03 * stab);
-    H.syr.visible = u > 0.3 && u < 0.9;
-    H.syr.position.copy(R).add(V(0, 0.012, 0));
-    // la aguja apunta a la muñeca durante la inyección y hacia delante el resto del tiempo
-    const aim = u > 0.5 && u < 0.8 ? V(0, 0, 0).copy(C) : V(0, 0, 0).copy(R).add(V(-0.3, 0.05, -1));
-    H.syr.lookAt(this.sway.localToWorld(aim));
-    H.syr.rotateY(PI);                                            // lookAt apunta +Z; la aguja está en -Z
-    const push = seg(u, 0.63, 0.72);
-    H.plunger.position.z = 0.035 - 0.05 * push;
-    H.liq.scale.set(1, 1, Math.max(0.05, 1 - push));
+    armR.curl = damp(armR.curl, cR, 14, dt);
+    armL.curl = damp(armL.curl, cL, 14, dt);
+    armR.setCurl(armR.curl);
+    armL.setCurl(armL.curl);
   }
 
-  // Codo izquierdo durante la cura: pasa suavemente de la posición normal a la cruzada y vuelve
-  _healElbow(u) {
-    const k = this.healKind === 'bandage' ? bump(u, 0, 0.15, 0.86, 1) : bump(u, 0.46, 0.58, 0.88, 1);
-    return this._hE.copy(LEFT_ELBOW_LONG).lerp(HEAL_ELBOW_L, k);
+  // Centro (T.C) y ejes (T.ax, T.ay, T.az) del antebrazo de un brazo a cierta distancia de la mano, en espacio de sway
+  _armAxes(arm, z) {
+    const T = this._heal;
+    arm.root.updateMatrixWorld(true);
+    this._toSway(arm.fore, T.tmp.set(0, 0, z - 0.045), null, T.C, T.q);
+    T.ax.set(1, 0, 0).applyQuaternion(T.q);
+    T.ay.set(0, 1, 0).applyQuaternion(T.q);
+    T.az.set(0, 0, 1).applyQuaternion(T.q);
   }
 
-  _placeArm(arm, handWorld, elbowLocal) {
+  // Pasa una posición / rotación local de obj al espacio de sway
+  _toSway(obj, p, q, outP, outQ) {
+    if (outP) this.sway.worldToLocal(obj.localToWorld(outP.copy(p)));
+    if (outQ) {
+      obj.getWorldQuaternion(outQ);
+      this.sway.getWorldQuaternion(this._heal.q2).invert();
+      outQ.premultiply(this._heal.q2);
+      if (q) outQ.multiply(q);
+    }
+  }
+
+  // Coloca un brazo: la mano en handWorld y el antebrazo apuntando al codo (espacio de sway).
+  // orient (opcional, espacio de sway): { x: dir } alinea el eje X de la mano (el meñique en la derecha, lo que
+  // sale del puño por abajo) con dir; { y: dir } orienta el dorso de la mano hacia dir. La mano sigue la línea del
+  // antebrazo todo lo posible y la muñeca absorbe el resto.
+  // grip (opcional, local de la mano): punto de la mano que debe quedar en handWorld (p. ej. el hueco del puño).
+  _placeArm(arm, handWorld, elbowLocal, orient = null, grip = null) {
     if (!handWorld) { arm.root.visible = false; return; }
     arm.root.visible = true;
-    const local = this.sway.worldToLocal(this._tmpR.copy(handWorld));
-    arm.root.position.copy(local);
-    const elbowW = this.sway.localToWorld(this._tmpP.copy(elbowLocal));
-    arm.root.lookAt(elbowW);
-    const len = handWorld.distanceTo(elbowW) - 0.11;
-    arm.sleeve.scale.set(1, 1, Math.max(0.05, len));
+    const A = this._arm;
+    const local = this.sway.worldToLocal(A.p.copy(handWorld));
+    if (!orient) {
+      arm.root.position.copy(local);
+      arm.root.lookAt(this.sway.localToWorld(A.e.copy(elbowLocal)));
+    } else {
+      A.pos.copy(local);
+      for (let i = 0; i < 2; i++) {
+        A.f.copy(elbowLocal).sub(A.pos).normalize();
+        const v = orient.x || orient.y;
+        A.v.copy(v).normalize();
+        A.z.copy(A.f).addScaledVector(A.v, -A.f.dot(A.v));
+        if (A.z.lengthSq() < 1e-6) A.z.set(0, 0, 1).addScaledVector(A.v, -A.v.z);
+        A.z.normalize();
+        if (orient.x) { A.x.copy(A.v); A.y.crossVectors(A.z, A.x); }
+        else { A.y.copy(A.v); A.x.crossVectors(A.y, A.z); }
+        A.m.makeBasis(A.x, A.y, A.z);
+        arm.root.quaternion.setFromRotationMatrix(A.m);
+        A.pos.copy(local);
+        if (grip) A.pos.sub(A.g.copy(grip).applyQuaternion(arm.root.quaternion));
+      }
+      arm.root.position.copy(A.pos);
+    }
+    arm.root.updateMatrixWorld(true);
+    const elbowW = this.sway.localToWorld(A.e.copy(elbowLocal));
+    arm.fore.rotation.set(0, 0, 0);
+    arm.fore.lookAt(elbowW);
+    arm.fore.getWorldPosition(A.p);
+    arm.sleeve.scale.set(1, 1, Math.max(0.05, A.p.distanceTo(elbowW) - 0.065));
   }
 
   // Poses de recarga según el tipo de arma
