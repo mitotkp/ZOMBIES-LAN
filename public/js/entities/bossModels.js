@@ -1717,10 +1717,13 @@ function commonGeos() {
     const hole = new THREE.CircleGeometry(1, 16);
     deform(hole, (v) => { const a = Math.atan2(v.y, v.x); const k = 1 + (valueNoise(a * 3, 4, 9) - 0.5) * 0.5; v.set(v.x * 0.06 * k, v.y * 0.05 * k, 0); });
     hole.rotateY(PI);
-    hole.translate(0.03, 0.14, -0.121);
+    hole.translate(0.075, 0.26, -0.118);
     paintGeo(hole, (x, y, z, c) => c.setRGB(0.25, 0.02, 0.02).multiplyScalar(0.6 + 0.6 * fbm(x * 40, y * 40, 3, 2)));
-    const guts = tube([[0, 0, 0], [0.02, -0.06, -0.03], [-0.01, -0.13, -0.04], [0.03, -0.2, -0.02], [0.0, -0.26, -0.03], [-0.02, -0.3, -0.01]], 0.017, 30, 8,
-      (x, y, z, c) => c.setRGB(0.62, 0.3, 0.3).lerp(C(0.35, 0.05, 0.05), clamp01(fbm(y * 30, x * 30, 5, 2) * 1.4 - 0.4)), (k) => 1 - 0.25 * k + 0.15 * Math.sin(k * 30));
+    // dos lazos de intestino cortos y gruesos que cuelgan del agujero (en U, sin llegar a la cintura)
+    const gutPaint = (x, y, z, c) => c.setRGB(0.42, 0.1, 0.09).lerp(C(0.22, 0.03, 0.03), clamp01(fbm(y * 30, x * 30, 5, 2) * 1.4 - 0.3));
+    const loopA = tube([[-0.02, 0, 0], [-0.035, -0.05, -0.025], [-0.01, -0.09, -0.035], [0.025, -0.075, -0.03], [0.02, -0.02, -0.01]], 0.018, 24, 8, gutPaint, (k) => 1 + 0.15 * Math.sin(k * 25));
+    const loopB = tube([[0.015, 0, 0], [0.04, -0.035, -0.02], [0.05, -0.065, -0.01], [0.03, -0.07, 0.005]], 0.015, 18, 8, gutPaint, (k) => 1 + 0.15 * Math.sin(k * 22));
+    const guts = mergeGeos([loopA, loopB]);
     // sin mandíbula: carne desgarrada y la lengua colgando
     const jawGore = sphere(1, 12, 8);
     deform(jawGore, (v) => v.multiplyScalar(1 + (fbm(v.x * 3, v.y * 3 + v.z * 2, 4, 2) - 0.5) * 0.5));
@@ -1837,7 +1840,7 @@ export function decorateCommon(M, K) {
   if (!outfit.skirt && roll(0.12)) {
     K.mesh(G.hole, gore, M.spine);
     const anchor = new THREE.Group();
-    anchor.position.set(0.03, 0.14, -0.125);
+    anchor.position.set(0.075, 0.26, -0.122);
     M.spine.add(anchor);
     parts.guts = K.mesh(G.guts, gore, anchor, true);
   }
@@ -1859,7 +1862,7 @@ export function decorateCommon(M, K) {
   return {
     update() {
       const t = M.time;
-      if (parts.guts) { parts.guts.rotation.x = 0.35 * Math.sin(t * 3.1 + ph); parts.guts.rotation.z = 0.2 * Math.sin(t * 2.3 + ph); }
+      if (parts.guts) { parts.guts.rotation.x = 0.15 * Math.sin(t * 3.1 + ph); parts.guts.rotation.z = 0.1 * Math.sin(t * 2.3 + ph); }
       if (parts.hair) { parts.hair.rotation.x = 0.06 * Math.sin(t * 2.2 + ph); parts.hair.rotation.z = 0.04 * Math.sin(t * 1.7 + ph); }
     },
   };
