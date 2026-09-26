@@ -116,6 +116,20 @@ partiendo de la posición de su evento `respawn`.
    cara frontal (`GRIP_GUN`) y las segundas falanges apenas se cierran (`setCurl(c, idx, mid)`), así los dedos
    cruzan por delante sin meterse en ella; el agarre sube bajo la corredera (`addGrip`, 2,6 cm sobre el centro).
    Comprobado midiendo las puntas de los dedos en coordenadas del arma.
+25. [x] Modelos nuevos de especiales y jefes (`public/js/entities/bossModels.js`): cada tipo monta su anatomía sobre
+   el esqueleto del zombi (mismos huesos, así siguen funcionando poses, impactos y muertes) con torsos paramétricos
+   (`torsoFn`), cabezas de monstruo con dientes y mandíbula animada (`monsterHead`), brazos, manos con garras, ropa,
+   armas y accesorios. Cada tipo aporta `pose` (retoques de la pose), `update` (piezas animadas) y `onAbility`
+   (evento `ev:bossAbility`: carga, golpe al suelo, invocación).
+   - Carnicero: saco en la cabeza, delantal, cuchilla y gancho; carga con la cuchilla en alto.
+   - Madre Plaga: cuerpo deforme con bubones emisivos, tumor, sacos de huevos, bilis y nube tóxica; respira.
+   - Nigromante: flota; capucha con calavera, bastón que se mantiene vertical, runas orbitando; invoca alzándolo.
+   - Acorazado: armadura de chatarra por capas, cadenas, casco de barrotes; carga y descarga el golpe al suelo.
+   - Espectro: esquelético, pelo que tapa la cara, brazos largos, jirones que ondean; espasmos de cabeza.
+   - Tanque: gorila con puños enormes y huesos saliendo; galope apoyado en los puños.
+   - Explosivo: barriga con venas incandescentes (emissiveMap) que parpadean con la mecha. Corredor: costillas.
+   Todos los zombis tienen espasmos de cabeza aleatorios. La elevación de los que flotan es pequeña para no salirse
+   de la caja de impacto. `/test/` → Modelos tiene el botón «Habilidad del jefe».
 16. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
    que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
 17. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
@@ -176,3 +190,4 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
 - **2026-09-26 (15)**: mano del arma envolviendo la empuñadura, brazos desde las esquinas y guantes marrones.
 - **2026-09-26 (16)**: agarre de pistola legible (puño real, índice en el gatillo, una mano a la cadera).
 - **2026-09-26 (17)**: los dedos ya no atraviesan la empuñadura.
+- **2026-09-26 (18)**: modelos y animaciones nuevos de jefes y zombis especiales.

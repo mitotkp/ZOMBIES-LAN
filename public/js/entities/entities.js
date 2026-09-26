@@ -304,6 +304,9 @@ export class EntityManager {
     const play = (name, o) => { try { if (audio) audio.play(name, o); } catch { /* sin sonido */ } };
     const call = (fn) => { try { if (fx) fn(fx); } catch { /* nada */ } };
     const pos = { x: +e.x || 0, y: 1.5, z: +e.z || 0 };
+    // animación propia del jefe (levantar el bastón, cargar el golpe al suelo...)
+    const rec = this._zrec(e.id);
+    if (rec && rec.model && typeof rec.model.onAbility === 'function') { try { rec.model.onAbility(e.a); } catch { /* nada */ } }
     switch (e.a) {
       case 'charge':
         play('zombie_attack', { pos, volume: 1, rate: 0.55 });

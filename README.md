@@ -82,11 +82,11 @@ golpes) y, jugando solo, pegan un 30 % menos y tienen un 20 % menos de vida. Su 
 
 | Jefe | Cómo es | Consejo |
 |---|---|---|
-| **El Carnicero** | Enorme, con delantal y cuchilla | Carga en línea recta si estás lejos: apártate y dispárale cuando se estampe |
-| **La Madre Plaga** | Hinchada y verde | Su aura tóxica daña e infecta: no te acerques y lleva antídotos |
-| **El Nigromante** | Alto, encapuchado, con bastón | Invoca zombis cada pocos segundos: mátalo primero |
-| **El Acorazado** | Placas de acero | Solo la cabeza recibe todo el daño; golpea el suelo en área |
-| **El Espectro** | Pálido y translúcido | A ratos se vuelve casi invisible, más rápido y resistente |
+| **El Carnicero** | Gordo enorme con un saco por cabeza, delantal de cuero ensangrentado, cuchilla y gancho | Carga en línea recta si estás lejos: apártate y dispárale cuando se estampe |
+| **La Madre Plaga** | Hinchada y deforme, llena de bubones que brillan, con fauces que chorrean bilis y una nube tóxica | Su aura tóxica daña e infecta: no te acerques y lleva antídotos |
+| **El Nigromante** | Calavera encapuchada que flota, túnica en jirones, bastón con orbe y runas que giran; alza el bastón al invocar | Invoca zombis cada pocos segundos: mátalo primero |
+| **El Acorazado** | Armadura de chatarra con púas y casco de barrotes que deja ver la cara; levanta los puños antes de golpear el suelo | Solo la cabeza recibe todo el daño; golpea el suelo en área |
+| **El Espectro** | Pálido, esquelético y translúcido, con el pelo sobre la cara, garras largas y jirones en lugar de piernas | A ratos se vuelve casi invisible, más rápido y resistente |
 
 ### Armas cuerpo a cuerpo
 

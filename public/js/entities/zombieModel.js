@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { ZA, ZF } from '/shared/protocol.js';
 import { ZOMBIE_HITBOX } from '/shared/collision.js';
+import { hasTypeModel, buildTypeModel } from './bossModels.js';
 import {
   TAU, rng, makeCanvas, canvasTexture, blotches, bloodStain, tearHole, grime, paintGeo, solidColor, remapUV,
   deform, mergeGeos, makeMat, limbGeo, glowTexture, smoothstep, easeInOut, clamp01, fbm, roundedBox, capsule } from './procgen.js';
@@ -844,6 +845,34 @@ export class ZombieModel {
   _decorateType(type, r) {
     if (type === 'normal') return;
     const T = typeAssets();
+    if (hasTypeModel(type)) {
+      const shadows = this.A.quality !== 'low';
+      const K = {
+        T, DIM, r,
+        P: { HIPY, HIPZ, HIPP, HIPYAW, HIPROLL, LEAN, TWIST, ROLL, NOD, TURN, TILT, JAW, LRAISE, LSPLAY, LTWIST, LELB,
+          RRAISE, RSPLAY, RTWIST, RELB, LSWING, LLSPLAY, LKNEE, RSWING, RLSPLAY, RKNEE, LIFT },
+        mesh: (geo, mat, parent, shadow = false) => {
+          const m = new THREE.Mesh(geo, mat);
+          m.castShadow = shadow && shadows;
+          m.userData.typePart = true;
+          parent.add(m);
+          this.meshes.push(m);
+          return m;
+        },
+        // grupo de la mandíbula (se anima con JAW) sin la mandíbula base
+        jaw: () => { for (const m of this.jaw.children) if (m.isMesh && !m.userData.typePart) m.visible = false; this.jaw.visible = true; return this.jaw; },
+        // oculta partes del zombi base que el tipo sustituye
+        hideBase: (o) => {
+          if (o.head) { this.head.visible = false; this.jaw.visible = false; if (this.hat) this.hat.visible = false; }
+          if (o.torso) this.torso.visible = false;
+          if (o.pelvis) for (const m of this.hips.children) if (m.isMesh) m.visible = false;
+          if (o.arms) for (const a of [this.armL, this.armR]) { a.um.visible = false; a.fm.visible = false; }
+          if (o.legs) for (const l of [this.legL, this.legR]) { l.tm.visible = false; l.sm.visible = false; }
+        },
+      };
+      this.kit = buildTypeModel(this, type, K);
+      return;
+    }
     const add = (parent, geo, mat, x, y, z, sx, sy = sx, sz = sx) => {
       const m = new THREE.Mesh(geo, mat);
       m.position.set(x, y, z);
@@ -957,6 +986,7 @@ export class ZombieModel {
     const headless = !!(flags & ZF.NOHEAD);
     if (headless && this.neck.visible) this._removeHead(null);
     this._pose(dt, st, crawler);
+    if (this.kit && this.kit.update) this.kit.update(dt, flags);
     if (this.auraSprite) this.auraSprite.material.opacity = this.auraBase * (0.75 + 0.25 * Math.sin(this.time * 3));
     if (this._ghostMats) {
       const cloak = !!(flags & ZF.CLOAK);
@@ -980,6 +1010,16 @@ export class ZombieModel {
     const k = 1 - Math.exp(-rate * dt);
     const tp = this.tp, cp = this.cp;
     for (let i = 0; i < NP; i++) cp[i] += (tp[i] - cp[i]) * k;
+    // espasmos: cada pocos segundos la cabeza y el cuello dan un tirón brusco
+    this._twitchT = (this._twitchT ?? 1 + Math.random() * 4) - dt;
+    if (this._twitchT <= 0) {
+      this._twitchT = 1.5 + Math.random() * 4.5;
+      const S = this.spr, sgn = Math.random() < 0.5 ? -1 : 1;
+      S.tilt.w += sgn * (5 + Math.random() * 6);
+      S.nod.w += (Math.random() - 0.35) * 7;
+      if (Math.random() < 0.4) S.twist.w += (Math.random() - 0.5) * 7;
+      this.jawBoost = Math.max(this.jawBoost, 0.5);
+    }
     // resortes de impacto
     for (const key in this.spr) this.spr[key].step(dt);
     this.jawBoost = Math.max(0, this.jawBoost - dt * 1.2);
@@ -1066,6 +1106,7 @@ export class ZombieModel {
         case ZA.STUN: this._poseStun(); break;
         default: this._poseIdle(this.time); break;
       }
+      if (this.kit && this.kit.pose) this.kit.pose(tp, anim, c);
       // La cabeza debe quedar sobre (x, z) como en ZOMBIE_HITBOX: la cadera retrocede lo que avanza la cabeza
       const lean = tp[LEAN], nod = tp[NOD];
       tp[HIPZ] += 0.9 * (DIM.neckY * Math.sin(lean) + DIM.headC * Math.sin(lean + nod));
@@ -1383,6 +1424,9 @@ export class ZombieModel {
   }
 
   groan() { this.jawBoost = 1; }
+
+  // Habilidad de jefe (evento ev:bossAbility): la animación la pone el tipo
+  onAbility(a) { if (this.kit && this.kit.onAbility && !this.death) this.kit.onAbility(a); }
 
   getHeadWorld(out) { return this.headPt.getWorldPosition(out); }
   getNeckWorld(out) { this.neck.updateWorldMatrix(true, false); return out.setFromMatrixPosition(this.neck.matrixWorld); }

@@ -309,6 +309,17 @@ $('row').onchange = buildModels;
 $('z-reset').onclick = buildModels;
 $('z-hit').onclick = () => { for (const o of models) if (o.kind === 'zombie') o.m.hitReact('torso', 0, 1, 1); };
 $('z-attack').onclick = () => { for (const o of models) if (o.kind === 'zombie') { o.m.onAttack(); o.attackT = 0.9; } };
+// Habilidad según el jefe: carga (Carnicero), golpe al suelo (Acorazado), invocación (Nigromante)
+let chargeT = 0;
+$('z-ability').onclick = () => {
+  for (const o of models) {
+    if (o.kind !== 'zombie') continue;
+    if (o.type === 'butcher') { chargeT = 1.3; o.m.onAbility('charge'); }
+    else if (o.type === 'armored') { o.m.onAbility('slamStart'); setTimeout(() => o.m.onAbility('slam'), 800); }
+    else if (o.type === 'necro') o.m.onAbility('summon');
+    else if (o.type === 'specter') $('cloak').checked = !$('cloak').checked;
+  }
+};
 $('z-death').onclick = () => { for (const o of models) if (o.kind === 'zombie') o.m.startDeath(null, 0, 1, {}); };
 
 // ------------------------------------------------------------------ bucle
@@ -396,11 +407,13 @@ function updateModels(dt) {
   let flags = 0;
   if ($('fuse').checked) flags |= ZF.FUSE;
   if ($('cloak').checked) flags |= ZF.CLOAK;
+  if (chargeT > 0) { chargeT -= dt; flags |= ZF.CHARGE; }
   for (const o of models) {
     if (o.kind === 'zombie') {
       if (o.m.death) { o.m.updateDeath(dt, {}); continue; }
       let a = anim;
       if (o.attackT > 0) { o.attackT -= dt; a = ZA.ATTACK; }
+      if (flags & ZF.CHARGE) a = ZA.SPRINT;
       o.m.update(dt, { anim: a, flags, speed: a === ZA.WALK || a === ZA.RUN || a === ZA.SPRINT || a === ZA.CRAWL ? spd : 0 });
     } else {
       let pf = 0;
@@ -430,4 +443,11 @@ function render() {
 }
 
 requestAnimationFrame(frame);
-window.testroom = { vm, ACTIONS, setMode, vmCamera, controls, mCamera, mControls };
+// altura (m) del modelo mostrado, para encuadrarlo en las pruebas automáticas
+function lastModel() {
+  const o = models[0];
+  if (!o) return 1.8;
+  const box = new THREE.Box3().setFromObject(o.m.group);
+  return Math.max(0.5, box.max.y);
+}
+window.testroom = { vm, ACTIONS, setMode, vmCamera, controls, mCamera, mControls, lastModel, models: () => models };
