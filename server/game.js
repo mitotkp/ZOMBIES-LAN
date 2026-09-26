@@ -6,6 +6,7 @@ import {
   MAX_PLAYERS, TICK_RATE, GS_MAX_RATE, SNAPSHOT_RATE, PLAYER, POINTS, BOARDS_PER_WINDOW, REPAIR_TIME,
   BOX, PAP, SHIELD, MELEE, GRENADE, POWERUPS, PLAYER_COLORS, clamp, angleDiff, yawTo, forwardXZ,
   MEDS, MED_KEYS, MED_DROPS, INFECTION, ZOMBIE_TYPES, BOSS_RULES,
+  BALANCE,
 } from '../shared/constants.js';
 import {
   W, H, DOORS, WINDOW_INFO, INTERACTABLE_BY_ID, BOX_LOCATIONS, BOX_START, SHIELD_PARTS,
@@ -1266,7 +1267,13 @@ export class Game {
     if (!p || !d || p.state !== 'alive' || gs.phase !== 'playing') return { hit: false, blocked: false };
     const now = Date.now();
     if (d.god || now < d.invulnUntil) return { hit: false, blocked: false };
-    const amt = Math.max(0, Math.round(Number(amount) || 0));
+    let amt = Math.max(0, Math.round(Number(amount) || 0));
+    // golpes de jefes y tanques: menos daño jugando solo y nunca más de heavyHitCap de la salud máxima
+    const heavy = !!(z && (z.boss || z.type === 'tank'));
+    if (heavy) {
+      if (this.playerCount() <= 1) amt = Math.round(amt * BALANCE.soloHeavyDamage);
+      amt = Math.min(amt, Math.round((p.maxHp || PLAYER.health) * BALANCE.heavyHitCap));
+    }
     if (p.shield && z && isNum(z.x) && isNum(z.z)) {
       const ang = Math.abs(angleDiff(d.yaw, yawTo(d.x, d.z, z.x, z.z)));
       const out = (d.flags & PF.SHIELD_OUT) !== 0;
@@ -1282,6 +1289,7 @@ export class Game {
     }
     p.hp = Math.max(0, p.hp - amt);
     d.lastDamageAt = now;
+    if (heavy && amt >= BALANCE.heavyHitMin) d.invulnUntil = Math.max(d.invulnUntil || 0, now + BALANCE.heavyHitInvuln * 1000);
     this.markDirty();
     if (p.hp <= 0) { this._goDown(p, d, now); return { hit: true, blocked: false }; }
     if (!p.infected && Math.random() < INFECTION.chance) {

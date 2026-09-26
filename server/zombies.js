@@ -4,6 +4,7 @@
 
 import {
   ZOMBIE, ROUND, ZOMBIE_TYPES, BOSS_RULES, BOSS_KEYS, zombieHealth, zombiesForRound, zombieSpeedChances, angleDiff, yawTo,
+  BALANCE,
 } from '../shared/constants.js';
 import { WINDOW_INFO, DIRS } from '../shared/map.js';
 import { moveCircle, resolveCircle, solidForZombieInside, solidForZombieOutside } from '../shared/collision.js';
@@ -420,7 +421,8 @@ export class ZombieManager {
       z.dmg = T.damage;
     } else if (type === 'tank') {
       const extra = Math.max(0, (this.players || 1) - 1);
-      z.hp = z.maxHp = Math.round((T.hpBase + this.health * T.hpRoundMult) * (1 + T.hpPerExtraPlayer * extra));
+      const solo = (this.players || 1) <= 1 ? BALANCE.soloBossHp : 1;
+      z.hp = z.maxHp = Math.round((T.hpBase + this.health * T.hpRoundMult) * (1 + T.hpPerExtraPlayer * extra) * solo);
       z.cls = 'run';
       z.speed = T.speed;
       z.dmg = T.damage;
@@ -434,7 +436,8 @@ export class ZombieManager {
       const extra = Math.max(0, (this.players || 1) - 1);
       z.boss = type;
       z.level = r;
-      z.hp = z.maxHp = Math.round((T.hpBase + this.health * T.hpMult) * (1 + BOSS_RULES.hpPerRound * lv) * (1 + BOSS_RULES.hpPerExtraPlayer * extra));
+      const solo = (this.players || 1) <= 1 ? BALANCE.soloBossHp : 1;
+      z.hp = z.maxHp = Math.round((T.hpBase + this.health * T.hpMult) * (1 + BOSS_RULES.hpPerRound * lv) * (1 + BOSS_RULES.hpPerExtraPlayer * extra) * solo);
       z.dmg = Math.round(T.damage * Math.min(BOSS_RULES.dmgMax, 1 + BOSS_RULES.dmgPerRound * lv));
       z.cls = T.speed >= 3.4 ? 'run' : 'walk';
       z.speed = z.baseSpeed = T.speed;

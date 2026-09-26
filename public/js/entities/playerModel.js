@@ -385,8 +385,30 @@ function getTorchAssets() {
     color: 0xfff1c8, transparent: true, opacity: 0.07, blending: THREE.AdditiveBlending,
     depthWrite: false, side: THREE.DoubleSide,
   });
+  // linterna táctica: cuerpo negro, cabezal más ancho, lente emisiva y una abrazadera; la lente mira a -Z (z = 0)
+  const Z = (g) => { g.rotateX(Math.PI / 2); return g; };
+  const body = Z(new THREE.CylinderGeometry(0.015, 0.015, 0.1, 14)); body.translate(0, 0, 0.075);
+  const head = Z(new THREE.CylinderGeometry(0.023, 0.016, 0.04, 16)); head.translate(0, 0, 0.02);
+  const bezel = Z(new THREE.CylinderGeometry(0.025, 0.025, 0.008, 16)); bezel.translate(0, 0, 0.004);
+  const cap = Z(new THREE.CylinderGeometry(0.012, 0.015, 0.012, 12)); cap.translate(0, 0, 0.131);
+  const clamp = new THREE.BoxGeometry(0.022, 0.022, 0.05); clamp.translate(0, 0.016, 0.07);
+  const lensGeo = new THREE.CircleGeometry(0.019, 18); lensGeo.rotateY(Math.PI); lensGeo.translate(0, 0, -0.0005);
+  const metal = new THREE.MeshStandardMaterial({ color: 0x1c1d20, roughness: 0.45, metalness: 0.7 });
   const lens = new THREE.MeshBasicMaterial({ color: 0xfff8e8 });
-  torchAssets = { cone, beam, lens, lensGeo: new THREE.SphereGeometry(0.035, 8, 6) };
+  // halo suave delante de la lente (se ve de frente sin ser una bola blanca)
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grd.addColorStop(0, 'rgba(255,248,230,1)');
+  grd.addColorStop(0.25, 'rgba(255,236,200,0.55)');
+  grd.addColorStop(1, 'rgba(255,230,190,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const halo = new THREE.SpriteMaterial({ map: tex, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+  torchAssets = { cone, beam, lens, lensGeo, body, head, bezel, cap, clamp, metal, halo };
   return torchAssets;
 }
 const _tv = new THREE.Vector3();
@@ -641,23 +663,50 @@ export class PlayerModel {
     const T = getTorchAssets();
     this.torch = new THREE.Group();
     this.torch.name = 'torch';
+    for (const geo of [T.body, T.head, T.bezel, T.cap]) this.torch.add(new THREE.Mesh(geo, T.metal));
+    this.torchClamp = new THREE.Mesh(T.clamp, T.metal);
+    this.torch.add(this.torchClamp);
+    this.torch.add(new THREE.Mesh(T.lensGeo, T.lens));
+    const halo = new THREE.Sprite(T.halo);
+    halo.scale.setScalar(0.16);
+    halo.position.z = -0.02;
+    halo.renderOrder = 5;
+    this.torch.add(halo);
     const cone = new THREE.Mesh(T.cone, T.beam);
     cone.renderOrder = 4;
     cone.frustumCulled = false;
-    this.torch.add(cone, new THREE.Mesh(T.lensGeo, T.lens));
-    this.group.add(this.torch);
+    this.torch.add(cone);
+    this.torch.traverse((o) => { if (o.isMesh && o.geometry !== T.cone && o.geometry !== T.lensGeo) o.castShadow = this.A.quality !== 'low'; });
     return this.torch;
   }
 
+  // La linterna va montada en el arma (bajo el cañón en las cortas, en el lateral derecho en las largas);
+  // sin arma, sujeta al chaleco a la izquierda del pecho.
   _updateTorch(on) {
     if (!on) { if (this.torch) this.torch.visible = false; return; }
     const t = this._ensureTorch();
     t.visible = true;
-    // a la altura de la cabeza, algo adelantada y a la derecha
-    this.headPt.getWorldPosition(_tv);
-    this.group.worldToLocal(_tv);
-    t.position.set(0.14, _tv.y - 0.12, -0.2);
-    t.rotation.set(this.pitch, 0, 0);
+    const w = this.weapon && this.weapon.visible !== false && this.holder.visible !== false ? this.weapon : null;
+    if (w) {
+      if (t.parent !== w) w.add(t);
+      const mz = (w.userData && w.userData.muzzle && w.userData.muzzle.isVector3) ? w.userData.muzzle : _tv.set(0, 0.06, -0.5);
+      if (mz.z < -0.35) {
+        t.position.set(0.034, mz.y - 0.012, mz.z + 0.24);    // lateral derecho del guardamanos
+        this.torchClamp.position.set(-0.018, 0, 0);
+        this.torchClamp.rotation.set(0, 0, Math.PI / 2);
+      } else {
+        t.position.set(0, mz.y - 0.045, mz.z + 0.07);        // bajo el cañón (pistolas)
+        this.torchClamp.position.set(0, 0, 0);
+        this.torchClamp.rotation.set(0, 0, 0);
+      }
+      t.rotation.set(0, 0, 0);
+    } else {
+      if (t.parent !== this.spine) this.spine.add(t);
+      t.position.set(-0.1, 0.33, -0.16);
+      this.torchClamp.position.set(0, -0.004, 0.012);
+      this.torchClamp.rotation.set(Math.PI / 2, 0, 0);
+      t.rotation.set(this.pitch * 0.7, 0, 0);
+    }
   }
 
   update(dt, st) {

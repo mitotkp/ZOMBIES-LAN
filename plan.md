@@ -96,6 +96,14 @@ partiendo de la posición de su evento `respawn`.
    servidor de juego: visor del arma en primera persona con el mapa de fondo, vista lateral y libre (OrbitControls),
    todas las acciones del ViewModel, congelar la acción en un punto, y visor de modelos (zombis, jefes, jugador).
    Útil para revisar agarres y animaciones: si se añade una acción nueva al ViewModel, añadirla también a `ACTIONS`.
+19. [x] Codo articulado en primera persona: hombros fijos (`SHOULDER_R/L`) y codo por IK de 2 huesos (`_ik`), con
+   antebrazo (`FORE_LEN`) y brazo (`UPPER_LEN`) de longitud fija; las antiguas posiciones de codo son ahora el
+   polo hacia el que se dobla. Las poses solo indican dónde va la mano (y su orientación).
+20. [x] Linterna del modelo del jugador: linterna táctica montada en el arma (bajo el cañón en las cortas, en el
+   lateral en las largas) o en el chaleco sin arma, con lente, halo y haz.
+21. [x] Equilibrio de golpes fuertes (`BALANCE` en constants): un golpe de jefe/tanque quita como mucho el 40 % de la
+   salud máxima, 0,7 s de invulnerabilidad tras un golpe fuerte, y en solitario −30 % de daño y −20 % de vida.
+   El crecimiento de daño de los jefes baja (`dmgPerRound` 0,05, `dmgMax` 2,2).
 16. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
    que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
 17. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
@@ -152,3 +160,4 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
 - **2026-09-26 (11)**: muñeca articulada y agarres reales en las curas (maletín en la palma, jeringuilla en el puño).
 - **2026-09-26 (12)**: agarre real de todas las armas (empuñadura en el puño, mano izquierda bajo el guardamanos).
 - **2026-09-26 (13)**: sala de pruebas en `/test/`.
+- **2026-09-26 (14)**: codo con IK, linterna táctica en el modelo del jugador y equilibrio de jefes en solitario.

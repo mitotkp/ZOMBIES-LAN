@@ -76,7 +76,8 @@ Según avanzan las rondas aparecen, cada vez con más frecuencia:
 ### Jefes
 
 Desde la **ronda 5** cada ronda trae un jefe (dos desde la ronda 20). Cuanto más alta es la ronda, más vida y más daño
-tienen. Su barra de vida aparece arriba. La Muerte Instantánea no les afecta. Al derrotarlo, el que lo remata gana
+tienen. Aun así, ningún golpe de jefe o tanque quita más del 40 % de la salud máxima (hacen falta al menos 3
+golpes) y, jugando solo, pegan un 30 % menos y tienen un 20 % menos de vida. Su barra de vida aparece arriba. La Muerte Instantánea no les afecta. Al derrotarlo, el que lo remata gana
 1000 puntos, el resto del equipo 300, y siempre suelta un potenciador y un botiquín.
 
 | Jefe | Cómo es | Consejo |

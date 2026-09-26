@@ -36,9 +36,9 @@ const HIP = {
   sniper: [0.145, -0.175, -0.23], launcher: [0.15, -0.19, -0.25], knife: [0.15, -0.2, -0.3],
 };
 const ONE_HANDED = new Set(['pistol', 'revolver', 'raygun']);
-const RIGHT_ELBOW = V(0.3, -0.42, 0.08);
-const LEFT_ELBOW_LONG = V(-0.17, -0.47, -0.05);
-const LEFT_ELBOW_SHORT = V(-0.11, -0.45, 0.05);
+const RIGHT_ELBOW = V(0.26, -0.66, 0.0);
+const LEFT_ELBOW_LONG = V(-0.2, -0.66, -0.1);
+const LEFT_ELBOW_SHORT = V(-0.15, -0.64, 0.0);
 
 // Animaciones por fotogramas clave: [{ t, p:[x,y,z], r:[x,y,z] }]
 function sampleKeys(keys, u, outP, outR) {
@@ -94,6 +94,12 @@ const HEAL_ELBOW_R = V(0.3, -0.6, -0.1);    // codo derecho bajo: el antebrazo n
 const HEAL_ELBOW_L = V(-0.32, -0.3, -0.38);   // codo a la izquierda: el antebrazo queda cruzado en horizontal
 const lerpV = (out, a, b, k) => out.copy(a).lerp(b, clamp01(k));
 // Agarres (espacio local de la mano: dorso +Y, dedos -Z, meñique de la derecha +X)
+// Brazo con codo: el hombro es fijo y el codo sale por cinemática inversa (2 huesos). Las antiguas posiciones de
+// codo se usan como "polo": indican hacia dónde se dobla el brazo.
+const SHOULDER_R = V(0.19, -0.33, 0.02);
+const SHOULDER_L = V(-0.19, -0.33, 0.02);
+const FORE_LEN = 0.33;                               // del centro de la mano al codo (incluye la muñeca)
+const UPPER_LEN = 0.34;                              // del codo al hombro
 const GRIP_GUN = V(0, -0.033, -0.004);                // empuñadura de pistola (3 x 5 cm) rodeada por el puño
 const GRIP_FIST = V(0, -0.03, -0.018);                // mango redondo (cuchillo, bate...) dentro del puño cerrado
 const SIDE_R = V(1, 0, 0), SIDE_L = V(-1, 0, 0), FWD = V(0, 0, -1), BACK = V(0, 0, 1);
@@ -231,8 +237,18 @@ function buildArm(mats, left) {
   sg.rotateX(-PI / 2);
   sg.translate(0, 0, 0.5);
   const sleeve = addF(sg, mats.sleeve, 0.065);
+  // brazo (codo → hombro): grupo aparte en sway, en el codo y con +Z hacia el hombro
+  const upper = new THREE.Group();
+  const eg = new THREE.SphereGeometry(0.057, 18, 12);
+  upper.add(new THREE.Mesh(eg, mats.sleeve));
+  const ug = new THREE.CylinderGeometry(0.057, 0.064, 1, 20, 1, true);
+  ug.rotateX(-PI / 2);
+  ug.translate(0, 0, 0.5);
+  const upperSleeve = new THREE.Mesh(ug, mats.sleeve);
+  upper.add(upperSleeve);
   root.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
-  return { root, fore, sleeve, setCurl, curl: 0.4 };
+  upper.traverse((o) => { if (o.isMesh) o.frustumCulled = false; });
+  return { root, fore, sleeve, upper, upperSleeve, shoulder: left ? SHOULDER_L : SHOULDER_R, setCurl, curl: 0.4 };
 }
 
 export class ViewModel {
@@ -272,7 +288,7 @@ export class ViewModel {
     const mats = getArmMaterials();
     this.armR = buildArm(mats, false);
     this.armL = buildArm(mats, true);
-    this.sway.add(this.armR.root, this.armL.root);
+    this.sway.add(this.armR.root, this.armL.root, this.armR.upper, this.armL.upper);
 
     // Accesorios de las curas (venda y botiquín)
     this.heal = buildHealProps();
@@ -294,7 +310,8 @@ export class ViewModel {
     this._oR = { x: V(0, 0, 0), y: V(0, 0, 0), k: 0 };
     this._oL = { x: V(0, 0, 0), y: V(0, 0, 0), k: 0 };
     this._arm = { p: V(0, 0, 0), e: V(0, 0, 0), pos: V(0, 0, 0), f: V(0, 0, 0), v: V(0, 0, 0), g: V(0, 0, 0),
-      x: V(0, 0, 0), y: V(0, 0, 0), z: V(0, 0, 0), m: new THREE.Matrix4(), q: new THREE.Quaternion() };
+      x: V(0, 0, 0), y: V(0, 0, 0), z: V(0, 0, 0), m: new THREE.Matrix4(), q: new THREE.Quaternion(),
+      elb: V(0, 0, 0), ikD: V(0, 0, 0), ikP: V(0, 0, 0) };
 
     // Accesorios de las acciones
     this.knifeHolder = new THREE.Group();
@@ -987,17 +1004,20 @@ export class ViewModel {
   // antebrazo todo lo posible y la muñeca absorbe el resto.
   // grip (opcional, local de la mano): punto de la mano que debe quedar en handWorld (p. ej. el hueco del puño).
   _placeArm(arm, handWorld, elbowLocal, orient = null, grip = null) {
-    if (!handWorld) { arm.root.visible = false; return; }
+    if (!handWorld) { arm.root.visible = false; arm.upper.visible = false; return; }
     arm.root.visible = true;
+    arm.upper.visible = true;
     const A = this._arm;
     const local = this.sway.worldToLocal(A.p.copy(handWorld));
     if (!orient) {
       arm.root.position.copy(local);
-      arm.root.lookAt(this.sway.localToWorld(A.e.copy(elbowLocal)));
+      this._ik(arm, local, elbowLocal, A.elb);
+      arm.root.lookAt(this.sway.localToWorld(A.e.copy(A.elb)));
     } else {
       A.pos.copy(local);
       for (let i = 0; i < 2; i++) {
-        A.f.copy(elbowLocal).sub(A.pos).normalize();
+        this._ik(arm, A.pos, elbowLocal, A.elb);
+        A.f.copy(A.elb).sub(A.pos).normalize();
         const v = orient.x || orient.y;
         A.v.copy(v).normalize();
         A.z.copy(A.f).addScaledVector(A.v, -A.f.dot(A.v));
@@ -1019,13 +1039,38 @@ export class ViewModel {
         if (grip) A.pos.sub(A.g.copy(grip).applyQuaternion(arm.root.quaternion));
       }
       arm.root.position.copy(A.pos);
+      this._ik(arm, A.pos, elbowLocal, A.elb);
     }
     arm.root.updateMatrixWorld(true);
-    const elbowW = this.sway.localToWorld(A.e.copy(elbowLocal));
+    const elbowW = this.sway.localToWorld(A.e.copy(A.elb));
     arm.fore.rotation.set(0, 0, 0);
     arm.fore.lookAt(elbowW);
     arm.fore.getWorldPosition(A.p);
     arm.sleeve.scale.set(1, 1, Math.max(0.05, A.p.distanceTo(elbowW) - 0.065));
+    // brazo: del codo al hombro
+    arm.upper.position.copy(A.elb);
+    arm.upper.lookAt(this.sway.localToWorld(A.e.copy(arm.shoulder)));
+    arm.upperSleeve.scale.set(1, 1, Math.max(0.05, A.elb.distanceTo(arm.shoulder)));
+  }
+
+  // Codo por cinemática inversa de 2 huesos (hombro fijo → codo → mano), doblado hacia el polo.
+  // Si la mano queda fuera de alcance, el brazo se estira en línea recta hacia ella.
+  _ik(arm, hand, pole, out) {
+    const A = this._arm;
+    const S = arm.shoulder;
+    const dir = A.ikD.copy(hand).sub(S);
+    let d = dir.length();
+    if (d < 1e-5) { out.copy(S); return out; }
+    dir.divideScalar(d);
+    const a0 = UPPER_LEN, b0 = FORE_LEN;
+    d = Math.min(Math.max(d, Math.abs(a0 - b0) + 1e-3), a0 + b0 - 1e-4);
+    const x = (a0 * a0 - b0 * b0 + d * d) / (2 * d);
+    const h = Math.sqrt(Math.max(0, a0 * a0 - x * x));
+    const bend = A.ikP.copy(pole).sub(S);
+    bend.addScaledVector(dir, -bend.dot(dir));
+    if (bend.lengthSq() < 1e-8) bend.set(0, -1, 0).addScaledVector(dir, -dir.y);
+    bend.normalize();
+    return out.copy(S).addScaledVector(dir, x).addScaledVector(bend, h);
   }
 
   // Poses de recarga según el tipo de arma

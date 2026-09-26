@@ -430,4 +430,4 @@ function render() {
 }
 
 requestAnimationFrame(frame);
-window.testroom = { vm, ACTIONS, setMode };
+window.testroom = { vm, ACTIONS, setMode, vmCamera, controls, mCamera, mControls };

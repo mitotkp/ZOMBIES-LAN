@@ -101,7 +101,7 @@ export const ZOMBIE_TYPES = {
 // Daño = damage · min(dmgMax, 1 + dmgPerRound·(ronda − from))
 export const BOSS_RULES = {
   from: 5, twoFrom: 20, spawnAt: 0.2,        // aparece tras el 20 % de la ronda
-  hpPerRound: 0.12, hpPerExtraPlayer: 0.5, dmgPerRound: 0.07, dmgMax: 3,
+  hpPerRound: 0.12, hpPerExtraPlayer: 0.5, dmgPerRound: 0.05, dmgMax: 2.2,
   killPoints: 1000, teamPoints: 300,         // al que lo mata / al resto del equipo
 };
 Object.assign(ZOMBIE_TYPES, {
@@ -132,6 +132,16 @@ Object.assign(ZOMBIE_TYPES, {
     cloak: { visible: 6, hidden: 4, speedMult: 1.6, damageTaken: 0.5 },
   },
 });
+// Equilibrio de los golpes fuertes (jefes y tanques). Un golpe nunca quita más de heavyHitCap de la salud máxima
+// (con la salud llena hacen falta al menos 3), tras un golpe fuerte hay un instante de invulnerabilidad para que
+// no se encadenen golpe + área, y jugando solo pegan menos y tienen menos vida.
+export const BALANCE = {
+  heavyHitCap: 0.4,         // fracción máxima de la salud máxima por golpe
+  heavyHitMin: 15,          // a partir de este daño el golpe cuenta como fuerte (el aura de la Plaga no)
+  heavyHitInvuln: 0.7,      // s de invulnerabilidad tras un golpe fuerte
+  soloHeavyDamage: 0.7,     // multiplicador de daño de jefes y tanques con un solo jugador
+  soloBossHp: 0.8,          // multiplicador de vida de jefes y tanques con un solo jugador
+};
 export const BOSS_KEYS = Object.keys(ZOMBIE_TYPES).filter((k) => ZOMBIE_TYPES[k].boss);
 
 export const ZOMBIE_TYPE_BY_CODE = Object.fromEntries(Object.entries(ZOMBIE_TYPES).map(([k, v]) => [v.code, k]));
