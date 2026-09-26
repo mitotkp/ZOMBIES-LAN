@@ -3,6 +3,7 @@
 // Convención de armas: metros, cañón hacia -Z, origen en la empuñadura (donde se cierra la mano derecha).
 // Geometrías y materiales se cachean: crear muchas copias de un arma es barato.
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { WEAPONS } from '/shared/weapons.js';
 
 const PI = Math.PI;
@@ -73,9 +74,19 @@ function G(key, make) {
 }
 const k3 = (v) => Math.round(v * 10000);
 // Caja
-function B(w, h, d) { return G(`b${k3(w)},${k3(h)},${k3(d)}`, () => new THREE.BoxGeometry(w, h, d)); }
+// Caja con cantos redondeados: radio ~30 % del lado menor (máx. 1,2 cm), así las piezas no parecen bloques
+function B(w, h, d) {
+  return G(`b${k3(w)},${k3(h)},${k3(d)}`, () => {
+    const m = Math.min(w, h, d);
+    const r = Math.min(0.012, m * 0.3);
+    return new RoundedBoxGeometry(w, h, d, m > 0.02 ? 2 : 1, r);
+  });
+}
+// Mínimo de lados para que los cilindros se vean redondos (6 o menos = forma hexagonal intencionada)
+const smoothSeg = (seg) => (seg <= 6 ? seg : Math.max(seg, 18));
 // Cilindro a lo largo de Z (rf = radio del extremo delantero -Z, rb = radio trasero)
-function CZ(rf, rb, len, seg = 12) {
+function CZ(rf, rb, len, seg = 20) {
+  seg = smoothSeg(seg);
   return G(`cz${k3(rf)},${k3(rb)},${k3(len)},${seg}`, () => {
     const g = new THREE.CylinderGeometry(rf, rb, len, seg);
     g.rotateX(-PI / 2);
@@ -83,24 +94,26 @@ function CZ(rf, rb, len, seg = 12) {
   });
 }
 // Cilindro vertical (Y)
-function CY(rt, rb, len, seg = 12) {
+function CY(rt, rb, len, seg = 20) {
+  seg = smoothSeg(seg);
   return G(`cy${k3(rt)},${k3(rb)},${k3(len)},${seg}`, () => new THREE.CylinderGeometry(rt, rb, len, seg));
 }
 // Cilindro a lo largo de X
-function CX(r, len, seg = 16) {
+function CX(r, len, seg = 24) {
+  seg = smoothSeg(seg);
   return G(`cx${k3(r)},${k3(len)},${seg}`, () => {
     const g = new THREE.CylinderGeometry(r, r, len, seg);
     g.rotateZ(PI / 2);
     return g;
   });
 }
-function SPH(r, ws = 12, hs = 8) { return G(`s${k3(r)},${ws},${hs}`, () => new THREE.SphereGeometry(r, ws, hs)); }
+function SPH(r, ws = 18, hs = 12) { ws = Math.max(ws, 16); hs = Math.max(hs, 10); return G(`s${k3(r)},${ws},${hs}`, () => new THREE.SphereGeometry(r, ws, hs)); }
 // Toro alrededor del eje Z (anillos sobre un cañón)
 function TOR(R, r, rs = 8, ts = 20, arc = PI * 2) {
   return G(`t${k3(R)},${k3(r)},${rs},${ts},${k3(arc)}`, () => new THREE.TorusGeometry(R, r, rs, ts, arc));
 }
 // Cono a lo largo de Z con la punta hacia -Z
-function CONEZ(r, len, seg = 8) {
+function CONEZ(r, len, seg = 14) {
   return G(`cn${k3(r)},${k3(len)},${seg}`, () => {
     const g = new THREE.ConeGeometry(r, len, seg);
     g.rotateX(-PI / 2);

@@ -3,6 +3,7 @@
 // respiración, balanceo al caminar, inercia al mirar, correr, apuntar, retroceso, recargas por tipo,
 // cambio de arma, cuchillo, granada, escudo, beber ventajas y última batalla.
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import {
   createWeaponMesh, createShieldMesh, createKnifeMesh, createMeleeMesh, createGrenadeMesh, createBottleMesh,
   getFlashTexture, getArmMaterials,
@@ -95,18 +96,22 @@ function buildArm(mats, left) {
     root.add(m);
     return m;
   };
-  add(new THREE.BoxGeometry(0.064, 0.07, 0.085), mats.glove, 0, -0.004, 0.018);
-  add(new THREE.BoxGeometry(0.066, 0.026, 0.032), mats.glove, 0, 0.014, -0.03);
-  add(new THREE.BoxGeometry(0.066, 0.012, 0.03), mats.gloveDetail, 0, 0.03, -0.012);
-  add(new THREE.BoxGeometry(0.02, 0.02, 0.052), mats.glove, -s * 0.036, 0.02, -0.004, 0, s * 0.4, 0);
-  const wrist = new THREE.CylinderGeometry(0.03, 0.033, 0.07, 10);
+  // mano enguantada con formas redondeadas (dorso, nudillos, protector y pulgar)
+  const RB = (w, h, d, r) => new RoundedBoxGeometry(w, h, d, 3, r);
+  add(RB(0.064, 0.07, 0.085, 0.022), mats.glove, 0, -0.004, 0.018);
+  add(RB(0.066, 0.028, 0.034, 0.012), mats.glove, 0, 0.014, -0.03);
+  add(RB(0.062, 0.012, 0.03, 0.005), mats.gloveDetail, 0, 0.03, -0.012);
+  const th = new THREE.CapsuleGeometry(0.011, 0.034, 3, 8);
+  th.rotateX(PI / 2);
+  add(th, mats.glove, -s * 0.036, 0.02, -0.004, 0, s * 0.4, 0);
+  const wrist = new THREE.CylinderGeometry(0.03, 0.033, 0.07, 18);
   wrist.rotateX(-PI / 2);
   add(wrist, mats.glove, 0, 0, 0.085);
-  const cuff = new THREE.CylinderGeometry(0.05, 0.05, 0.025, 12);
+  const cuff = new THREE.CylinderGeometry(0.05, 0.05, 0.025, 20);
   cuff.rotateX(-PI / 2);
   add(cuff, mats.sleeveDark, 0, 0, 0.12);
   // manga que se estira hasta el codo (0..1 en Z, escalada cada frame)
-  const sg = new THREE.CylinderGeometry(0.046, 0.056, 1, 12, 1, true);
+  const sg = new THREE.CylinderGeometry(0.046, 0.056, 1, 20, 1, true);
   sg.rotateX(-PI / 2);
   sg.translate(0, 0, 0.5);
   const sleeve = add(sg, mats.sleeve, 0, 0, 0.11);

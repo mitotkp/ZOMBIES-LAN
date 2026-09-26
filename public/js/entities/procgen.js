@@ -1,6 +1,7 @@
 // Utilidades procedurales compartidas por los modelos de entidades y los efectos:
 // números aleatorios con semilla, lienzos (canvas), texturas, pintura de vértices y fusión de geometrías.
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 export const TAU = Math.PI * 2;
 export const HAS_DOM = typeof document !== 'undefined' && typeof document.createElement === 'function';
@@ -309,7 +310,21 @@ export function makeMat(quality, params) {
 }
 
 // Limbo (cilindro que cuelga hacia -Y desde el pivote) con perfil de radio y borde irregular opcional
+// Caja con cantos redondeados (r = radio del canto; por defecto un 30 % del lado menor)
+export function roundedBox(w, h, d, r = null, seg = 2) {
+  const rad = r == null ? Math.min(w, h, d) * 0.3 : r;
+  return new RoundedBoxGeometry(w, h, d, seg, rad);
+}
+
+// Cápsula vertical (dedos, pulgares) de longitud total len
+export function capsule(radius, len, radial = 8) {
+  return new THREE.CapsuleGeometry(radius, Math.max(0.001, len - 2 * radius), 3, radial);
+}
+
 export function limbGeo(len, r0, r1, radial = 8, rows = 3, raggedEnd = 0, seed = 1, depthScale = 1) {
+  // más lados y filas para que las extremidades se vean redondas y no poligonales
+  radial = Math.max(14, Math.round(radial * 1.7));
+  rows = rows + 2;
   const g = new THREE.CylinderGeometry(r0, r1, len, radial, rows, false);
   g.translate(0, -len / 2, 0);
   if (depthScale !== 1) g.scale(1, 1, depthScale);

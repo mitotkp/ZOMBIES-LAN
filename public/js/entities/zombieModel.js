@@ -5,12 +5,12 @@
 // Geometrías, texturas y materiales se comparten entre todos los zombis.
 
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { ZA, ZF } from '/shared/protocol.js';
 import { ZOMBIE_HITBOX } from '/shared/collision.js';
 import {
   TAU, rng, makeCanvas, canvasTexture, blotches, bloodStain, tearHole, grime, paintGeo, solidColor, remapUV,
-  deform, mergeGeos, makeMat, limbGeo, glowTexture, smoothstep, easeInOut, clamp01, fbm,
-} from './procgen.js';
+  deform, mergeGeos, makeMat, limbGeo, glowTexture, smoothstep, easeInOut, clamp01, fbm, roundedBox, capsule } from './procgen.js';
 
 const HB = ZOMBIE_HITBOX;
 
@@ -315,7 +315,7 @@ function profile(t, pts) {
 }
 
 function torsoGeo(seed) {
-  const g = new THREE.CylinderGeometry(1, 1, 1, 16, 10, false);
+  const g = new THREE.CylinderGeometry(1, 1, 1, 26, 14, false);
   deform(g, (v) => {
     const t = v.y + 0.5;
     const back = v.z > 0 ? v.z : 0;
@@ -343,7 +343,7 @@ function torsoGeo(seed) {
 }
 
 function pelvisGeo() {
-  const g = new THREE.CylinderGeometry(1, 1, 1, 14, 3, false);
+  const g = new THREE.CylinderGeometry(1, 1, 1, 24, 5, false);
   deform(g, (v) => {
     const t = v.y + 0.5;
     const w = profile(t, [[0, 0.135], [0.5, 0.158], [1, 0.155]]);
@@ -366,7 +366,7 @@ function shinGeo() {
   const shin = limbGeo(DIM.shin + 0.01, 0.058, 0.044, 9, 2);
   remapUV(shin, 0, 1, 0.0, 0.4);
   solidColor(shin, 1, 1, 1);
-  const foot = new THREE.BoxGeometry(0.092, 0.066, 0.215, 2, 1, 2);
+  const foot = roundedBox(0.092, 0.066, 0.215, 0.028, 2);
   deform(foot, (v) => { if (v.z < -0.05) v.y -= 0.012 * (v.y > 0 ? 1 : 0); }, false);
   foot.translate(0, -DIM.shin - 0.0195, -0.05);
   remapUV(foot, 0.08, 0.3, 0.935, 0.985); // cuero del cinturón
@@ -378,7 +378,7 @@ function upperArmSleeveGeo(seed) {
   const arm = limbGeo(DIM.upperArm, 0.053, 0.046, 8, 2, 0.06, seed);
   remapUV(arm, 0, 1, 0.0, 0.25);
   solidColor(arm, 1, 1, 1);
-  const cap = new THREE.SphereGeometry(0.06, 8, 6);
+  const cap = new THREE.SphereGeometry(0.06, 14, 10);
   cap.scale(1, 0.9, 0.95);
   remapUV(cap, 0, 1, 0.2, 0.25);
   solidColor(cap, 1, 1, 1);
@@ -387,7 +387,7 @@ function upperArmSleeveGeo(seed) {
 
 function upperArmBareGeo() {
   const arm = limbGeo(DIM.upperArm, 0.045, 0.038, 8, 2);
-  const cap = new THREE.SphereGeometry(0.05, 8, 6);
+  const cap = new THREE.SphereGeometry(0.05, 14, 10);
   solidColor(arm, 0.92, 0.92, 0.92);
   solidColor(cap, 0.92, 0.92, 0.92);
   return mergeGeos([arm, cap]);
@@ -399,16 +399,16 @@ function forearmGeo(seed) {
   const fore = limbGeo(DIM.forearm, 0.04, 0.03, 8, 2);
   paintGeo(fore, (x, y, z, c) => { const k = 0.95 - 0.1 * smoothstep(-0.05, -0.25, y); c.setRGB(k, k, k); });
   parts.push(fore);
-  const elbow = new THREE.SphereGeometry(0.042, 7, 5);
+  const elbow = new THREE.SphereGeometry(0.042, 12, 9);
   solidColor(elbow, 0.9, 0.9, 0.9);
   parts.push(elbow);
   // mano: palma + dedos en garra
-  const palm = new THREE.BoxGeometry(0.05, 0.085, 0.026);
+  const palm = roundedBox(0.05, 0.085, 0.026, 0.011, 2);
   palm.translate(0, -DIM.forearm - 0.04, -0.004);
   paintGeo(palm, (x, y, z, c) => c.setRGB(0.85, 0.82, 0.8));
   parts.push(palm);
   for (let i = 0; i < 4; i++) {
-    const f = new THREE.BoxGeometry(0.011, 0.07, 0.012);
+    const f = capsule(0.0062, 0.07, 7);
     f.translate(0, -0.035, 0);
     f.rotateX(0.45 + r() * 0.5);            // curvados hacia delante (garra)
     f.translate(-0.018 + i * 0.012, -DIM.forearm - 0.082, -0.006);
@@ -420,7 +420,7 @@ function forearmGeo(seed) {
     });
     parts.push(f);
   }
-  const thumb = new THREE.BoxGeometry(0.012, 0.05, 0.013);
+  const thumb = capsule(0.0066, 0.05, 7);
   thumb.translate(0, -0.025, 0);
   thumb.rotateZ(0.6); thumb.rotateX(0.5);
   thumb.translate(0.026, -DIM.forearm - 0.02, -0.01);
@@ -437,7 +437,7 @@ function headGeo(style, hairIdx, seed) {
   const hair = HAIR_COLORS[hairIdx % HAIR_COLORS.length];
   const wound = { x: (r() < 0.5 ? -1 : 1) * (0.5 + r() * 0.4), y: r() * 0.6 - 0.1, z: r() * 0.8 - 0.4 };
   const rotNose = r() < 0.35;
-  const g = new THREE.SphereGeometry(1, 18, 14);
+  const g = new THREE.SphereGeometry(1, 26, 20);
   paintGeo(g, (x, y, z, c) => {
     let k = 1;
     for (const s of [-1, 1]) {
@@ -666,10 +666,10 @@ function typeAssets() {
     bloat: new THREE.MeshStandardMaterial({ color: 0x8a8a5a, roughness: 0.55, metalness: 0 }),
     pustule: new THREE.MeshStandardMaterial({ color: 0x6a5a10, emissive: 0xffa020, emissiveIntensity: 1.2, roughness: 0.4 }),
     tankSkin: new THREE.MeshStandardMaterial({ color: 0x6f7560, roughness: 0.85, metalness: 0 }),
-    sphere: new THREE.SphereGeometry(1, 14, 10),
-    lump: new THREE.SphereGeometry(1, 8, 6),
-    box: new THREE.BoxGeometry(1, 1, 1),
-    cyl: new THREE.CylinderGeometry(1, 1, 1, 10),
+    sphere: new THREE.SphereGeometry(1, 20, 14),
+    lump: new THREE.SphereGeometry(1, 10, 8),
+    box: new RoundedBoxGeometry(1, 1, 1, 2, 0.18),
+    cyl: new THREE.CylinderGeometry(1, 1, 1, 16),
     cone: new THREE.ConeGeometry(1, 1, 12, 1, true),
     // jefes
     eyesPurple: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.8, 0.3, 1.0), toneMapped: false }),

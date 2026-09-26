@@ -9,7 +9,7 @@ import { PF } from '/shared/protocol.js';
 import { weaponDef } from '/shared/weapons.js';
 import {
   rng, makeCanvas, canvasTexture, blotches, paintGeo, solidColor, mergeGeos, makeMat, limbGeo, smoothstep, clamp01,
-  glowTexture, deform,
+  glowTexture, deform, roundedBox, capsule,
 } from './procgen.js';
 
 // ------------------------------------------------------------------ Modelos de armas (carga tolerante a fallos)
@@ -64,13 +64,13 @@ function profile(t, pts) {
 }
 
 function box(w, h, d, x, y, z, shade = 1) {
-  const g = new THREE.BoxGeometry(w, h, d);
+  const g = roundedBox(w, h, d, Math.min(w, h, d) * 0.32, Math.min(w, h, d) > 0.05 ? 2 : 1);
   g.translate(x, y, z);
   return solidColor(g, shade, shade, shade);
 }
 
 function torsoGeo() {
-  const g = new THREE.CylinderGeometry(1, 1, 1, 16, 8, false);
+  const g = new THREE.CylinderGeometry(1, 1, 1, 26, 12, false);
   deform(g, (v) => {
     const t = v.y + 0.5;
     const w = profile(t, [[0, 0.155], [0.35, 0.165], [0.7, 0.2], [0.9, 0.195], [1, 0.075]]);
@@ -78,7 +78,7 @@ function torsoGeo() {
     v.set(v.x * w, -0.02 + t * 0.56, v.z * d);
   });
   // cuello de la chaqueta
-  const collar = new THREE.CylinderGeometry(0.068, 0.08, 0.06, 12, 1, true);
+  const collar = new THREE.CylinderGeometry(0.068, 0.08, 0.06, 20, 1, true);
   collar.translate(0, 0.53, 0.005);
   paintGeo(g, (x, y, z, c) => { const k = 0.82 + 0.18 * smoothstep(0, 0.3, y); c.setRGB(k, k, k); });
   solidColor(collar, 0.8, 0.8, 0.8);
@@ -86,7 +86,7 @@ function torsoGeo() {
 }
 
 function pelvisGeo() {
-  const g = new THREE.CylinderGeometry(1, 1, 1, 14, 2, false);
+  const g = new THREE.CylinderGeometry(1, 1, 1, 24, 4, false);
   deform(g, (v) => {
     const t = v.y + 0.5;
     const w = profile(t, [[0, 0.14], [0.6, 0.162], [1, 0.158]]);
@@ -98,7 +98,7 @@ function pelvisGeo() {
 
 function beltGeo() {
   const parts = [];
-  const belt = new THREE.CylinderGeometry(0.168, 0.168, 0.05, 16, 1, true);
+  const belt = new THREE.CylinderGeometry(0.168, 0.168, 0.05, 26, 1, true);
   belt.scale(1, 1, 0.7);
   belt.translate(0, 0.035, 0);
   parts.push(solidColor(belt, 0.7, 0.7, 0.7));
@@ -119,7 +119,7 @@ function vestGeo() {
   parts.push(box(0.06, 0.07, 0.04, -0.1, 0.36, -0.15, 0.7));                      // radio
   // mochila con saco de dormir
   parts.push(box(0.28, 0.3, 0.13, 0, 0.3, 0.2, 0.9));
-  const roll = new THREE.CylinderGeometry(0.06, 0.06, 0.3, 10);
+  const roll = new THREE.CylinderGeometry(0.06, 0.06, 0.3, 18);
   roll.rotateZ(Math.PI / 2);
   roll.translate(0, 0.49, 0.2);
   parts.push(solidColor(roll, 0.6, 0.62, 0.55));
@@ -130,7 +130,7 @@ function vestGeo() {
 }
 
 function headGeo() {
-  const g = new THREE.SphereGeometry(0.1, 16, 12);
+  const g = new THREE.SphereGeometry(0.1, 26, 20);
   deform(g, (v) => {
     const nz = v.z / 0.1, ny = v.y / 0.1;
     // mandíbula más estrecha, nariz y arco de las cejas
@@ -151,12 +151,12 @@ function headGeo() {
     if (y < -0.03) c.multiplyScalar(0.8 + 0.2 * smoothstep(-0.1, -0.03, y));                    // barba de días
   });
   const ears = [-1, 1].map((s) => {
-    const e = new THREE.SphereGeometry(0.022, 6, 5);
+    const e = new THREE.SphereGeometry(0.022, 10, 8);
     e.scale(0.5, 1, 0.8);
     e.translate(s * 0.093, 0.0, 0.005);
     return solidColor(e, 0.92, 0.92, 0.92);
   });
-  const neck = new THREE.CylinderGeometry(0.047, 0.055, 0.14, 10);
+  const neck = new THREE.CylinderGeometry(0.047, 0.055, 0.14, 18);
   neck.translate(0, -0.1, 0.01);
   solidColor(neck, 0.85, 0.85, 0.85);
   const out = mergeGeos([g, ...ears, neck]);
@@ -165,12 +165,12 @@ function headGeo() {
 }
 
 function helmetGeo() {
-  const dome = new THREE.SphereGeometry(0.124, 16, 7, 0, TAU, 0, Math.PI / 2);
+  const dome = new THREE.SphereGeometry(0.124, 26, 12, 0, TAU, 0, Math.PI / 2);
   dome.scale(1.0, 0.86, 1.1);
-  const rim = new THREE.CylinderGeometry(0.128, 0.132, 0.03, 18, 1, true);
+  const rim = new THREE.CylinderGeometry(0.128, 0.132, 0.03, 26, 1, true);
   rim.scale(1, 1, 1.1);
   rim.translate(0, -0.012, 0);
-  const cover = new THREE.BoxGeometry(0.06, 0.035, 0.03);
+  const cover = roundedBox(0.06, 0.035, 0.03, 0.01, 2);
   cover.translate(0, 0.07, -0.118);
   const parts = [paintGeo(dome, (x, y, z, c) => { const k = 0.85 + 0.15 * smoothstep(0, 0.1, y); c.setRGB(k, k, k); }),
     solidColor(rim, 0.75, 0.75, 0.75), solidColor(cover, 0.45, 0.45, 0.45)];
@@ -180,7 +180,7 @@ function helmetGeo() {
 }
 
 function bandGeo() {
-  const g = new THREE.TorusGeometry(0.126, 0.011, 5, 28);
+  const g = new THREE.TorusGeometry(0.126, 0.011, 8, 36);
   g.rotateX(Math.PI / 2);
   g.scale(1, 1, 1.1);
   g.translate(0, D.headC + 0.045, 0.004);
@@ -189,7 +189,7 @@ function bandGeo() {
 
 function thighGeo() {
   const g = limbGeo(D.thigh, 0.088, 0.066, 10, 3);
-  const cap = new THREE.SphereGeometry(0.086, 10, 6);
+  const cap = new THREE.SphereGeometry(0.086, 16, 10);
   cap.scale(1, 0.8, 1);
   return mergeGeos([solidColor(g, 1, 1, 1), solidColor(cap, 1, 1, 1)]);
 }
@@ -197,15 +197,15 @@ function thighGeo() {
 function shinGeo() {
   const shin = limbGeo(D.shin - 0.05, 0.066, 0.052, 10, 2);
   solidColor(shin, 1, 1, 1);
-  const knee = new THREE.SphereGeometry(0.06, 8, 6);
+  const knee = new THREE.SphereGeometry(0.06, 14, 10);
   knee.scale(1, 1.1, 0.7);
   knee.translate(0, -0.02, -0.045);
   solidColor(knee, 0.55, 0.57, 0.5);                                              // rodillera
-  const boot = new THREE.BoxGeometry(0.105, 0.11, 0.26, 2, 1, 2);
+  const boot = roundedBox(0.105, 0.11, 0.26, 0.035, 2);
   deform(boot, (v) => { if (v.z < -0.06 && v.y > 0) v.y -= 0.03; }, false);
   boot.translate(0, -D.shin + 0.05, -0.045);
   paintGeo(boot, (x, y, z, c) => { const sole = y < -D.shin + 0.015 ? 0.08 : 0.2; c.setRGB(sole, sole * 0.9, sole * 0.8); });
-  const cuff = new THREE.CylinderGeometry(0.06, 0.062, 0.08, 10);
+  const cuff = new THREE.CylinderGeometry(0.06, 0.062, 0.08, 18);
   cuff.translate(0, -D.shin + 0.13, 0);
   solidColor(cuff, 0.22, 0.2, 0.18);
   return mergeGeos([shin, knee, boot, cuff]);
@@ -213,20 +213,20 @@ function shinGeo() {
 
 function upperArmGeo() {
   const g = limbGeo(D.upper, 0.058, 0.048, 9, 2);
-  const cap = new THREE.SphereGeometry(0.066, 9, 6);
+  const cap = new THREE.SphereGeometry(0.066, 16, 10);
   cap.scale(1, 0.9, 1);
   return mergeGeos([solidColor(g, 1, 1, 1), solidColor(cap, 1, 1, 1)]);
 }
 
 function forearmGeo() {
   const g = limbGeo(D.fore - 0.07, 0.048, 0.04, 9, 2);
-  const elbow = new THREE.SphereGeometry(0.048, 8, 6);
-  const cuff = new THREE.CylinderGeometry(0.044, 0.044, 0.04, 9);
+  const elbow = new THREE.SphereGeometry(0.048, 14, 10);
+  const cuff = new THREE.CylinderGeometry(0.044, 0.044, 0.04, 16);
   cuff.translate(0, -D.fore + 0.08, 0);
-  const hand = new THREE.BoxGeometry(0.058, 0.1, 0.042);
+  const hand = roundedBox(0.058, 0.1, 0.042, 0.017, 2);
   deform(hand, (v) => { if (v.y < 0) v.z -= 0.01; }, false);
   hand.translate(0, -D.fore + 0.005, -0.005);
-  const thumb = new THREE.BoxGeometry(0.02, 0.05, 0.022);
+  const thumb = capsule(0.011, 0.05, 8);
   thumb.rotateZ(0.5);
   thumb.translate(0.03, -D.fore + 0.03, -0.02);
   return mergeGeos([
