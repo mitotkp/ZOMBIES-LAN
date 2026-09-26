@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { ZA, ZF } from '/shared/protocol.js';
 import { ZOMBIE_HITBOX } from '/shared/collision.js';
-import { hasTypeModel, buildTypeModel } from './bossModels.js';
+import { hasTypeModel, buildTypeModel, decorateCommon } from './bossModels.js';
 import {
   TAU, rng, makeCanvas, canvasTexture, blotches, bloodStain, tearHole, grime, paintGeo, solidColor, remapUV,
   deform, mergeGeos, makeMat, limbGeo, glowTexture, smoothstep, easeInOut, clamp01, fbm, roundedBox, capsule } from './procgen.js';
@@ -32,7 +32,12 @@ const HIPY = 0, HIPZ = 1, HIPP = 2, HIPYAW = 3, HIPROLL = 4;
 const LEAN = 5, TWIST = 6, ROLL = 7, NOD = 8, TURN = 9, TILT = 10, JAW = 11;
 const LRAISE = 12, LSPLAY = 13, LTWIST = 14, LELB = 15, RRAISE = 16, RSPLAY = 17, RTWIST = 18, RELB = 19;
 const LSWING = 20, LLSPLAY = 21, LKNEE = 22, RSWING = 23, RLSPLAY = 24, RKNEE = 25, LIFT = 26;
-const NP = 27;
+const LTOE = 27, RTOE = 28;                 // puntera abajo (+) respecto al pie plano
+const NP = 29;
+// velocidad de suavizado por canal: brazos y cabeza van algo retrasados respecto al cuerpo (inercia)
+const RATE = new Float32Array(NP).fill(11);
+for (const i of [LRAISE, LSPLAY, LTWIST, LELB, RRAISE, RSPLAY, RTWIST, RELB]) RATE[i] = 7;
+for (const i of [NOD, TILT, TURN]) RATE[i] = 8.5;
 
 // Conjuntos de ropa
 const OUTFITS = [
@@ -43,6 +48,8 @@ const OUTFITS = [
   { key: 'policia', shirt: 'police', pants: 'police', hat: 'police', hatChance: 0.65 },
   { key: 'civil', shirt: 'flannelRed', pants: 'jeans' },
   { key: 'civil', shirt: 'tee', pants: 'jeans' },
+  { key: 'civil', shirt: 'dress', pants: 'bare', skirt: true, longHair: true, bareArms: 0.85 },
+  { key: 'paciente', shirt: 'gown', pants: 'bare', skirt: true, bareArms: 0.9 },
 ];
 export const ZOMBIE_VARIANTS = OUTFITS.map((o) => o.key);
 
@@ -76,18 +83,22 @@ function paintSkin(seed) {
     for (let k = 0; k < 7; k++) { x += (r() - 0.5) * 22; y += (r() - 0.5) * 22; g.lineTo(x, y); }
     g.stroke();
   }
-  // heridas abiertas
-  for (let i = 0; i < 7; i++) {
-    const x = r() * TW, y = r() * TH, w = 8 + r() * 18, h = 3 + r() * 6;
+  // heridas abiertas: pocas, pequeñas e irregulares (en extremidades finas no deben parecer lunares)
+  for (let i = 0; i < 3; i++) {
+    const x = r() * TW, y = r() * TH, w = 5 + r() * 9, h = 2 + r() * 3;
     g.save();
     g.translate(x, y);
     g.rotate(r() * Math.PI);
-    g.fillStyle = 'rgba(70,6,6,0.85)';
+    g.fillStyle = 'rgba(60,8,6,0.75)';
     g.beginPath(); g.ellipse(0, 0, w, h, 0, 0, TAU); g.fill();
-    g.fillStyle = 'rgba(140,28,22,0.8)';
-    g.beginPath(); g.ellipse(0, 0, w * 0.6, h * 0.45, 0, 0, TAU); g.fill();
+    g.fillStyle = 'rgba(120,26,20,0.6)';
+    g.beginPath(); g.ellipse(0, 0, w * 0.55, h * 0.4, 0, 0, TAU); g.fill();
     g.restore();
   }
+  // arañazos
+  g.strokeStyle = 'rgba(90,20,16,0.45)';
+  g.lineWidth = 1;
+  for (let i = 0; i < 10; i++) { const x = r() * TW, y = r() * TH; g.beginPath(); g.moveTo(x, y); g.lineTo(x + 6 + r() * 10, y + (r() - 0.5) * 6); g.stroke(); }
   // poros / textura fina
   blotches(g, TW, TH, r, '#000000', 260, 0.6, 1.6, 0.05, 0.14);
   return c;
@@ -217,6 +228,32 @@ function paintShirt(kind, seed) {
       g.beginPath(); g.moveTo(FX + 24, 0); g.lineTo(FX + 3, 20); g.lineTo(FX + 8, 0); g.fill();
       break;
     }
+    case 'dress': {
+      // vestido granate con estampado de flores y escote
+      base = '#5e1a24';
+      fabricBase(g, 0, 0, TW, TH, base, r, 0.12);
+      for (let i = 0; i < 90; i++) {
+        const x = r() * TW, y = r() * TH;
+        g.fillStyle = r() < 0.5 ? 'rgba(220,190,120,0.35)' : 'rgba(240,220,220,0.25)';
+        for (let k = 0; k < 5; k++) { const a = (k / 5) * TAU; g.beginPath(); g.arc(x + Math.cos(a) * 3, y + Math.sin(a) * 3, 2, 0, TAU); g.fill(); }
+      }
+      g.fillStyle = EXPOSED_SKIN;
+      g.beginPath(); g.moveTo(FX - 30, 0); g.lineTo(FX, 38); g.lineTo(FX + 30, 0); g.fill();
+      g.fillStyle = 'rgba(0,0,0,0.25)'; g.fillRect(0, 118, TW, 6);        // costura de la cintura
+      break;
+    }
+    case 'gown': {
+      // bata de hospital celeste con estampado, abierta por detrás
+      base = '#8fb2b8';
+      fabricBase(g, 0, 0, TW, TH, base, r, 0.1);
+      g.fillStyle = 'rgba(40,70,90,0.25)';
+      for (let y = 6; y < TH; y += 14) for (let x = (y % 28 ? 7 : 0); x < TW; x += 14) g.fillRect(x, y, 3, 3);
+      g.fillStyle = EXPOSED_SKIN;
+      g.fillRect(0, 0, 14, TORSO_H); g.fillRect(TW - 14, 0, 14, TORSO_H);   // espalda abierta
+      g.fillStyle = '#6a8a90';
+      for (const y of [30, 90, 150]) { g.fillRect(8, y, 16, 3); g.fillRect(TW - 24, y, 16, 3); }   // cintas
+      break;
+    }
     default: { // camiseta gris con estampado desteñido
       base = '#86857f';
       fabricBase(g, 0, 0, TW, TH, base, r, 0.12);
@@ -265,8 +302,15 @@ function paintPants(kind, seed) {
   if (!c) return null;
   const g = c.getContext('2d');
   const r = rng(seed);
-  const cols = { work: '#33455a', slacks: '#29292d', police: '#1b2236', jeans: '#3b5d84' };
+  const cols = { work: '#33455a', slacks: '#29292d', police: '#1b2236', jeans: '#3b5d84', bare: '#8c937f' };
   fabricBase(g, 0, 0, TW, TH, cols[kind] || '#333', r, 0.14);
+  if (kind === 'bare') {
+    // piernas desnudas: moratones, venas y arañazos
+    blotches(g, TW, TH, r, '#5d4a66', 30, 5, 20, 0.08, 0.25);
+    blotches(g, TW, TH, r, '#6e5c3a', 25, 4, 16, 0.06, 0.2);
+    g.strokeStyle = 'rgba(55,42,78,0.35)'; g.lineWidth = 1.2;
+    for (let i = 0; i < 16; i++) { let x = r() * TW, y = r() * TH; g.beginPath(); g.moveTo(x, y); for (let k = 0; k < 6; k++) { x += (r() - 0.5) * 18; y += r() * 20; g.lineTo(x, y); } g.stroke(); }
+  }
   if (kind === 'jeans') {
     g.fillStyle = 'rgba(255,255,255,0.05)';
     for (let x = 0; x < TW; x += 3) g.fillRect(x, 0, 1, TH);
@@ -284,14 +328,14 @@ function paintPants(kind, seed) {
   }
   grime(g, TW, TH, r, kind === 'work' ? 1.4 : 1);
   // desgarros en rodillas y perneras
-  const holes = kind === 'jeans' ? 3 : 1 + Math.floor(r() * 2);
+  const holes = kind === 'bare' ? 0 : kind === 'jeans' ? 3 : 1 + Math.floor(r() * 2);
   for (let i = 0; i < holes; i++) {
     tearHole(g, 80 + r() * 100, 140 + r() * 70, 16 + r() * 22, 10 + r() * 14, r, EXPOSED_SKIN);
   }
   bloodStain(g, r() * TW, 60 + r() * 60, 8 + r() * 8, r, true);
   bloodStain(g, r() * TW, 120 + r() * 60, 6 + r() * 6, r);
   // cinturón (también sirve de "cuero" para los zapatos)
-  const belt = kind === 'slacks' || kind === 'police' ? '#111111' : '#3b2616';
+  const belt = kind === 'slacks' || kind === 'police' ? '#111111' : kind === 'bare' ? '#2a1c16' : '#3b2616';
   g.fillStyle = belt; g.fillRect(0, 0, TW, 20);
   blotches(g, TW, 20, r, '#000000', 20, 2, 8, 0.1, 0.3);
   g.fillStyle = 'rgba(255,255,255,0.08)'; g.fillRect(0, 2, TW, 1);
@@ -316,17 +360,26 @@ function profile(t, pts) {
 }
 
 function torsoGeo(seed) {
-  const g = new THREE.CylinderGeometry(1, 1, 1, 26, 14, false);
+  const g = new THREE.CylinderGeometry(1, 1, 1, 28, 18, false);
+  const belly = seed === 2 ? 0.035 : 0;                 // variante con barriga
+  const thin = seed === 3 ? 0.9 : 1;                    // variante demacrada
   deform(g, (v) => {
     const t = v.y + 0.5;
-    const back = v.z > 0 ? v.z : 0;
-    const w = profile(t, [[0, 0.152], [0.3, 0.158], [0.6, 0.178], [0.8, 0.198], [0.92, 0.165], [1, 0.062]]);
-    const d = profile(t, [[0, 0.102], [0.35, 0.106], [0.62, 0.122], [0.84, 0.112], [1, 0.052]]);
+    const back = v.z > 0 ? v.z : 0, front = v.z < 0 ? -v.z : 0;
+    const side = Math.abs(v.x);
+    const w = profile(t, [[0, 0.15], [0.3, 0.155 * thin], [0.55, 0.168 * thin], [0.72, 0.186], [0.84, 0.2], [0.92, 0.186], [0.97, 0.13], [1, 0.058]]);
+    const d = profile(t, [[0, 0.1], [0.35, 0.104 * thin], [0.62, 0.12], [0.84, 0.114], [0.95, 0.1], [1, 0.05]]);
     let y = -0.03 + t * 0.70;
     let z = v.z * d;
-    // joroba en la espalda alta, pecho hundido
+    // hombros caídos: los lados bajan hacia los brazos en vez de acabar en una meseta
+    y -= 0.055 * smoothstep(0.78, 1, t) * side * side;
+    // joroba en la espalda alta, pecho hundido y clavículas marcadas
     z += back * 0.035 * smoothstep(0.55, 0.8, t) * (1 - smoothstep(0.9, 1, t));
     if (v.z < 0) z *= 1 - 0.08 * smoothstep(0.5, 0.75, t);
+    z -= front * 0.012 * Math.exp(-((t - 0.9) ** 2) / 0.002) * side;
+    // barriga (variante) y costillas marcadas bajo la tela (demacrado)
+    z -= front * belly * Math.exp(-((t - 0.3) ** 2) / 0.02);
+    if (thin < 1) z -= front * 0.006 * Math.max(0, Math.sin(t * 60)) * smoothstep(0.45, 0.6, t) * (1 - smoothstep(0.8, 0.85, t));
     // dobladillo rasgado
     if (t < 0.02 && Math.hypot(v.x, v.z) > 0.5) {
       const ang = Math.atan2(v.x, v.z) + Math.PI;
@@ -336,8 +389,8 @@ function torsoGeo(seed) {
   });
   remapUV(g, 0, 1, 0.25, 1);
   paintGeo(g, (x, y, z, c) => {
-    // sombreado de oclusión bajo los hombros / cuello
-    const k = 0.85 + 0.15 * smoothstep(-0.03, 0.2, y);
+    // oclusión bajo los hombros / cuello y en los costados
+    const k = (0.82 + 0.18 * smoothstep(-0.03, 0.2, y)) * (0.9 + 0.1 * smoothstep(0.1, 0.02, Math.abs(Math.abs(x) - 0.17)));
     c.setRGB(k, k, k);
   });
   return g;
@@ -365,30 +418,45 @@ function thighGeo() {
 
 function shinGeo() {
   const shin = limbGeo(DIM.shin + 0.01, 0.058, 0.044, 9, 2);
+  // gemelo marcado
+  deform(shin, (v) => { const t = -v.y / DIM.shin; const k = 1 + 0.12 * Math.exp(-((t - 0.3) ** 2) / 0.02) * (v.z > 0 ? 1 : 0.4); v.x *= k; v.z *= k; });
   remapUV(shin, 0, 1, 0.0, 0.4);
   solidColor(shin, 1, 1, 1);
-  const foot = roundedBox(0.092, 0.066, 0.215, 0.028, 2);
-  deform(foot, (v) => { if (v.z < -0.05) v.y -= 0.012 * (v.y > 0 ? 1 : 0); }, false);
-  foot.translate(0, -DIM.shin - 0.0195, -0.05);
+  return shin;
+}
+
+// Zapato (cuelga del tobillo, al final de la espinilla): se mantiene plano en el suelo al andar
+function footGeo() {
+  const foot = roundedBox(0.094, 0.066, 0.215, 0.028, 2);
+  deform(foot, (v) => {
+    if (v.z < -0.05) v.y -= 0.012 * (v.y > 0 ? 1 : 0);          // puntera más baja
+    if (v.z > 0.06 && v.y < 0) v.y -= 0.004;                     // tacón
+  }, false);
+  foot.translate(0, -0.0195, -0.05);
   remapUV(foot, 0.08, 0.3, 0.935, 0.985); // cuero del cinturón
-  paintGeo(foot, (x, y, z, c) => c.setRGB(0.8, 0.75, 0.7));
-  return mergeGeos([shin, foot]);
+  paintGeo(foot, (x, y, z, c) => { const k = y < -0.045 ? 0.45 : 0.8; c.setRGB(k, k * 0.94, k * 0.88); });
+  return foot;
 }
 
 function upperArmSleeveGeo(seed) {
-  const arm = limbGeo(DIM.upperArm, 0.053, 0.046, 8, 2, 0.06, seed);
+  const arm = limbGeo(DIM.upperArm, 0.056, 0.047, 8, 2, 0.06, seed);
+  deform(arm, (v) => { const t = -v.y / DIM.upperArm; const k = 1 + 0.07 * Math.exp(-((t - 0.45) ** 2) / 0.03); v.x *= k; v.z *= k; });
   remapUV(arm, 0, 1, 0.0, 0.25);
   solidColor(arm, 1, 1, 1);
-  const cap = new THREE.SphereGeometry(0.06, 14, 10);
-  cap.scale(1, 0.9, 0.95);
+  const cap = new THREE.SphereGeometry(0.06, 16, 12);
+  cap.scale(0.95, 1.12, 0.98);
+  cap.translate(0, -0.012, 0);
   remapUV(cap, 0, 1, 0.2, 0.25);
   solidColor(cap, 1, 1, 1);
   return mergeGeos([arm, cap]);
 }
 
 function upperArmBareGeo() {
-  const arm = limbGeo(DIM.upperArm, 0.045, 0.038, 8, 2);
-  const cap = new THREE.SphereGeometry(0.05, 14, 10);
+  const arm = limbGeo(DIM.upperArm, 0.048, 0.038, 8, 2);
+  deform(arm, (v) => { const t = -v.y / DIM.upperArm; const k = 1 + 0.1 * Math.exp(-((t - 0.4) ** 2) / 0.03) * (v.z < 0 ? 1 : 0.5); v.x *= k; v.z *= k; });
+  const cap = new THREE.SphereGeometry(0.052, 14, 10);
+  cap.scale(0.95, 1.1, 0.98);
+  cap.translate(0, -0.01, 0);
   solidColor(arm, 0.92, 0.92, 0.92);
   solidColor(cap, 0.92, 0.92, 0.92);
   return mergeGeos([arm, cap]);
@@ -397,34 +465,43 @@ function upperArmBareGeo() {
 function forearmGeo(seed) {
   const r = rng(seed);
   const parts = [];
-  const fore = limbGeo(DIM.forearm, 0.04, 0.03, 8, 2);
+  const L = DIM.forearm;
+  const fore = limbGeo(L, 0.043, 0.031, 8, 3);
+  // músculo del antebrazo cerca del codo y muñeca huesuda
+  deform(fore, (v) => { const t = -v.y / L; const k = 1 + 0.14 * Math.exp(-((t - 0.25) ** 2) / 0.03) - 0.06 * smoothstep(0.8, 1, t); v.x *= k; v.z *= k * 0.92; });
   paintGeo(fore, (x, y, z, c) => { const k = 0.95 - 0.1 * smoothstep(-0.05, -0.25, y); c.setRGB(k, k, k); });
   parts.push(fore);
-  const elbow = new THREE.SphereGeometry(0.042, 12, 9);
+  const elbow = new THREE.SphereGeometry(0.045, 12, 9);
   solidColor(elbow, 0.9, 0.9, 0.9);
   parts.push(elbow);
-  // mano: palma + dedos en garra
-  const palm = roundedBox(0.05, 0.085, 0.026, 0.011, 2);
-  palm.translate(0, -DIM.forearm - 0.04, -0.004);
+  // mano: palma + dedos huesudos en garra (dos falanges) con uñas negras
+  const palm = roundedBox(0.058, 0.095, 0.03, 0.012, 2);
+  palm.translate(0, -L - 0.045, -0.004);
   paintGeo(palm, (x, y, z, c) => c.setRGB(0.85, 0.82, 0.8));
   parts.push(palm);
+  const bloody = r() < 0.4;
   for (let i = 0; i < 4; i++) {
-    const f = capsule(0.0062, 0.07, 7);
-    f.translate(0, -0.035, 0);
-    f.rotateX(0.45 + r() * 0.5);            // curvados hacia delante (garra)
-    f.translate(-0.018 + i * 0.012, -DIM.forearm - 0.082, -0.006);
-    const bloody = r() < 0.4;
+    const len = (i === 0 || i === 3 ? 0.07 : 0.082) * (0.92 + r() * 0.16);
+    const a = capsule(0.0075, len * 0.55, 7);
+    a.translate(0, -len * 0.27, 0);
+    const b = capsule(0.0068, len * 0.55, 7);
+    b.translate(0, -len * 0.27, 0);
+    b.rotateX(0.5 + r() * 0.5);
+    b.translate(0, -len * 0.5, 0);
+    const f = mergeGeos([a, b]);
+    f.rotateX(0.35 + r() * 0.45);
+    f.translate(-0.021 + i * 0.014, -L - 0.09, -0.006);
     paintGeo(f, (x, y, z, c) => {
-      const tip = smoothstep(-DIM.forearm - 0.12, -DIM.forearm - 0.14, y);
+      const tip = smoothstep(-L - 0.13, -L - 0.16, y);
       if (bloody) c.setRGB(0.75, 0.35, 0.3); else c.setRGB(0.85, 0.82, 0.8);
-      c.multiplyScalar(1 - 0.6 * tip);       // uñas sucias
+      c.multiplyScalar(1 - 0.75 * tip);       // uñas negras
     });
     parts.push(f);
   }
-  const thumb = capsule(0.0066, 0.05, 7);
-  thumb.translate(0, -0.025, 0);
+  const thumb = capsule(0.0075, 0.055, 7);
+  thumb.translate(0, -0.027, 0);
   thumb.rotateZ(0.6); thumb.rotateX(0.5);
-  thumb.translate(0.026, -DIM.forearm - 0.02, -0.01);
+  thumb.translate(0.03, -L - 0.02, -0.01);
   solidColor(thumb, 0.85, 0.82, 0.8);
   parts.push(thumb);
   return mergeGeos(parts);
@@ -443,7 +520,8 @@ function headGeo(style, hairIdx, seed) {
     let k = 1;
     for (const s of [-1, 1]) {
       const e = Math.sqrt((x - s * 0.36) ** 2 + (y - 0.06) ** 2 + (z + 0.93) ** 2);
-      k *= 0.1 + 0.9 * smoothstep(0.1, 0.32, e);
+      k *= 0.12 + 0.88 * smoothstep(0.07, 0.22, e);               // cuencas hundidas y oscuras, sin tapar la cara
+      if (e > 0.2 && e < 0.3 && y > 0.1) k *= 0.85;                 // ojeras
     }
     c.setRGB(k, k * 0.97, k * 0.95);
     // boca: cavidad oscura y dientes superiores
@@ -484,10 +562,33 @@ function headGeo(style, hairIdx, seed) {
     if (z > 0) v.z *= 1.06;
     v.set(v.x * 0.1, v.y * 0.115 + DIM.headC, v.z * 0.113);
   });
-  const neck = new THREE.CylinderGeometry(0.046, 0.056, 0.2, 9, 2);
+  const neck = new THREE.CylinderGeometry(0.046, 0.056, 0.2, 12, 2);
   neck.translate(0, 0.07, 0.008);
   paintGeo(neck, (x, y, z, c) => { const k = 0.75 + 0.15 * smoothstep(-0.03, 0.12, y); c.setRGB(k, k * 0.96, k * 0.95); });
-  return mergeGeos([g, neck]);
+  const parts = [g, neck];
+  // orejas
+  for (const s of [-1, 1]) {
+    const ear = new THREE.SphereGeometry(1, 10, 8);
+    ear.scale(0.011, 0.028, 0.019);
+    ear.rotateY(s * 0.35);
+    ear.translate(s * 0.099, DIM.headC + 0.002, 0.012);
+    paintGeo(ear, (x, y, z, c) => c.setRGB(0.85, 0.8, 0.78));
+    parts.push(ear);
+  }
+  // dientes superiores de verdad (amarillentos, alguno roto o que falta)
+  for (let i = 0; i < 8; i++) {
+    if (r() < 0.18) continue;
+    const a = -0.75 + (i / 7) * 1.5;
+    const len = 0.011 + r() * 0.007;
+    const t = new THREE.ConeGeometry(0.0045, len, 4, 1);
+    t.rotateX(Math.PI);
+    t.translate(0, -len / 2, 0);
+    t.rotateZ((r() - 0.5) * 0.4);
+    t.translate(Math.sin(a) * 0.034, DIM.headC - 0.036, -0.1 + (1 - Math.cos(a)) * 0.03);
+    paintGeo(t, (x, y, z, c) => { const k = 0.65 + 0.25 * r(); c.setRGB(k, k * 0.9, k * 0.6); });
+    parts.push(t);
+  }
+  return mergeGeos(parts);
 }
 
 function jawGeo(seed) {
@@ -500,12 +601,25 @@ function jawGeo(seed) {
   });
   g.scale(0.074, 0.07, 0.092);
   g.translate(0, 0, -0.048);
-  return g;
+  const r = rng(seed + 5);
+  const parts = [g];
+  for (let i = 0; i < 7; i++) {
+    if (r() < 0.2) continue;
+    const a = -0.7 + (i / 6) * 1.4;
+    const len = 0.01 + r() * 0.008;
+    const t = new THREE.ConeGeometry(0.0042, len, 4, 1);
+    t.translate(0, len / 2, 0);
+    t.rotateZ((r() - 0.5) * 0.4);
+    t.translate(Math.sin(a) * 0.05, -0.004, -0.048 - Math.cos(a) * 0.075);
+    paintGeo(t, (x, y, z, c) => { const k = 0.6 + 0.25 * r(); c.setRGB(k, k * 0.88, k * 0.58); });
+    parts.push(t);
+  }
+  return mergeGeos(parts);
 }
 
 function eyesGeo() {
-  const a = new THREE.SphereGeometry(0.0165, 8, 6);
-  const b = new THREE.SphereGeometry(0.0165, 8, 6);
+  const a = new THREE.SphereGeometry(0.0125, 8, 6);
+  const b = new THREE.SphereGeometry(0.0125, 8, 6);
   a.translate(-0.036, DIM.headC + 0.007, -0.089);
   b.translate(0.036, DIM.headC + 0.007, -0.089);
   return mergeGeos([a, b]);
@@ -597,7 +711,7 @@ export function getZombieAssets(quality = 'high') {
   A.mats.eyes = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.0, 0.7, 0.16), toneMapped: false });
   A.tex.glow = glowTexture(64, 2.4);
   A.mats.halo = new THREE.PointsMaterial({
-    size: 0.15, map: A.tex.glow, color: 0xff9420, transparent: true, opacity: 0.95,
+    size: 0.11, map: A.tex.glow, color: 0xff9420, transparent: true, opacity: 0.95,
     blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true, toneMapped: false,
   });
   // Geometrías (algunas con variantes)
@@ -605,6 +719,7 @@ export function getZombieAssets(quality = 'high') {
   A.geos.pelvis = pelvisGeo();
   A.geos.thigh = thighGeo();
   A.geos.shin = shinGeo();
+  A.geos.foot = footGeo();
   A.geos.upperSleeve = [upperArmSleeveGeo(5), upperArmSleeveGeo(9)];
   A.geos.upperBare = upperArmBareGeo();
   A.geos.forearm = [forearmGeo(21), forearmGeo(33), forearmGeo(47)];
@@ -740,7 +855,11 @@ export class ZombieModel {
       kn.position.y = -DIM.thigh;
       th.add(kn);
       const sm = mesh(A.geos.shin, pants, kn, true);
-      return { th, kn, tm, sm };
+      const an = new THREE.Group();                  // tobillo
+      an.position.y = -DIM.shin;
+      kn.add(an);
+      const ft = mesh(A.geos.foot, pants, an, true);
+      return { th, kn, tm, sm, an, ft };
     };
     this.legL = leg(-1);
     this.legR = leg(1);
@@ -752,8 +871,9 @@ export class ZombieModel {
     this.neck = new THREE.Group();
     this.neck.position.set(0, DIM.neckY, 0.012);
     this.spine.add(this.neck);
-    const hairStyle = outfit.key === 'policia' ? 1 : Math.floor(r() * 3);
-    this.head = mesh(headFor(A, hairStyle, Math.floor(r() * HAIR_COLORS.length)), skin, this.neck, true);
+    const hairStyle = outfit.key === 'policia' ? 1 : outfit.longHair ? 1 : Math.floor(r() * 3);
+    this.hairIdx = Math.floor(r() * HAIR_COLORS.length);
+    this.head = mesh(headFor(A, hairStyle, this.hairIdx), skin, this.neck, true);
     this.jaw = new THREE.Group();
     this.jaw.position.set(0, DIM.headC - 0.035, -0.004);
     this.neck.add(this.jaw);
@@ -772,7 +892,7 @@ export class ZombieModel {
       const sh = new THREE.Group();
       sh.position.set(side * DIM.shoulderX, DIM.shoulderY, 0.005);
       this.spine.add(sh);
-      const bare = r() < (outfit.shirt === 'vest' ? 0.15 : 0.3);
+      const bare = r() < (outfit.bareArms != null ? outfit.bareArms : outfit.shirt === 'vest' ? 0.15 : 0.3);
       const um = bare
         ? mesh(A.geos.upperBare, skin, sh)
         : mesh(A.geos.upperSleeve[Math.floor(r() * A.geos.upperSleeve.length)], shirt, sh);
@@ -803,10 +923,13 @@ export class ZombieModel {
       sprintStyle: r() < 0.55 ? 0 : 1,
       reach: 0.85 + r() * 0.35,
       tempo: 0.85 + r() * 0.3,
+      // 0 = arrastra los pies, 1 = cojo que arrastra una pierna, 2 = acechador encorvado, 3 = rígido que se balancea
+      gaitStyle: [0, 0, 1, 2, 3][Math.floor(r() * 5)],
+      brokenArm: r() < 0.14 ? (r() < 0.5 ? -1 : 1) : 0,   // un brazo colgando roto
     };
     this.tp = new Float32Array(NP);
     this.cp = new Float32Array(NP);
-    this.spr = { lean: new Spring(), roll: new Spring(), twist: new Spring(), nod: new Spring(), tilt: new Spring(), knee: new Spring() };
+    this.spr = { lean: new Spring(), roll: new Spring(), twist: new Spring(), nod: new Spring(), tilt: new Spring(), knee: new Spring(), armL: new Spring(), armR: new Spring() };
     this.anim = -1;
     this.animT = 0;
     this.time = r() * 10;
@@ -825,6 +948,7 @@ export class ZombieModel {
     this._fadeMats = null;
     this.type = opts.type || 'normal';
     this._decorateType(this.type, r);
+    this.strideScale = this.group.scale.y;
     this._poseIdle(0);
     this.cp.set(this.tp);
     this._apply();
@@ -843,9 +967,8 @@ export class ZombieModel {
   // Aspecto de los tipos especiales: corredor (delgado, ojos rojos), explosivo (hinchado con pústulas brillantes)
   // y tanque (enorme, hombros y antebrazos de gorila, joroba)
   _decorateType(type, r) {
-    if (type === 'normal') return;
     const T = typeAssets();
-    if (hasTypeModel(type)) {
+    if (type === 'normal' || hasTypeModel(type)) {
       const shadows = this.A.quality !== 'low';
       const K = {
         T, DIM, r,
@@ -867,10 +990,14 @@ export class ZombieModel {
           if (o.torso) this.torso.visible = false;
           if (o.pelvis) for (const m of this.hips.children) if (m.isMesh) m.visible = false;
           if (o.arms) for (const a of [this.armL, this.armR]) { a.um.visible = false; a.fm.visible = false; }
-          if (o.legs) for (const l of [this.legL, this.legR]) { l.tm.visible = false; l.sm.visible = false; }
+          if (o.legs) for (const l of [this.legL, this.legR]) { l.tm.visible = false; l.sm.visible = false; l.ft.visible = false; }
         },
       };
-      this.kit = buildTypeModel(this, type, K);
+      K.outfit = this.outfit;
+      K.hairColor = HAIR_COLORS[this.hairIdx % HAIR_COLORS.length];
+      K.shirtMat = this.torso.material;
+      K.pantsMat = this.legL.tm.material;
+      this.kit = type === 'normal' ? decorateCommon(this, K) : buildTypeModel(this, type, K);
       return;
     }
     const add = (parent, geo, mat, x, y, z, sx, sy = sx, sz = sx) => {
@@ -1007,9 +1134,9 @@ export class ZombieModel {
     // suavizado hacia la pose objetivo
     const rate = this._crawlBlend < 1 ? 5 : 11;
     this._crawlBlend = Math.min(1, this._crawlBlend + dt * 2);
-    const k = 1 - Math.exp(-rate * dt);
     const tp = this.tp, cp = this.cp;
-    for (let i = 0; i < NP; i++) cp[i] += (tp[i] - cp[i]) * k;
+    const slow = this._crawlBlend < 1;
+    for (let i = 0; i < NP; i++) cp[i] += (tp[i] - cp[i]) * (1 - Math.exp(-(slow ? rate : RATE[i]) * dt));
     // espasmos: cada pocos segundos la cabeza y el cuello dan un tirón brusco
     this._twitchT = (this._twitchT ?? 1 + Math.random() * 4) - dt;
     if (this._twitchT <= 0) {
@@ -1072,7 +1199,12 @@ export class ZombieModel {
     if (anim !== this.anim) {
       this.anim = anim;
       this.animT = 0;
-      if (anim === ZA.ATTACK) this.swingSide = -this.swingSide;
+      if (anim === ZA.ATTACK) {
+        this.swingSide = -this.swingSide;
+        // zarpazo, agarrón con mordisco o martillazo con los dos puños (los jefes usan los suyos)
+        const q = Math.random();
+        this.atkStyle = this.kit && this.kit.attackStyle != null ? this.kit.attackStyle : this.kit && this.kit.ownAttack ? 0 : this.type !== 'normal' && this.type !== 'runner' ? 0 : q < 0.45 ? 0 : q < 0.8 ? 1 : 2;
+      }
     }
     this.animT += dt;
     // ciclo de marcha acorde a la velocidad real de desplazamiento
@@ -1081,6 +1213,7 @@ export class ZombieModel {
     if (crawler) stride = 0.7;
     else if (anim === ZA.RUN) stride = 1.9;
     else if (anim === ZA.SPRINT) stride = 2.4;
+    stride *= this.strideScale || 1;                 // los grandes dan zancadas más largas y lentas
     const locomotion = crawler ? (anim !== ZA.ATTACK && anim !== ZA.TEAR && anim !== ZA.STUN)
       : (anim === ZA.WALK || anim === ZA.RUN || anim === ZA.SPRINT);
     let rate = (speed / stride) * TAU;
@@ -1099,7 +1232,7 @@ export class ZombieModel {
         case ZA.WALK: this._poseWalk(c); break;
         case ZA.RUN: this._poseRun(c); break;
         case ZA.SPRINT: this._poseSprint(c); break;
-        case ZA.ATTACK: this._poseAttack(); break;
+        case ZA.ATTACK: if (this.kit && this.kit.ownAttack) this._poseIdle(this.time); else this._poseAttack(); break;
         case ZA.TEAR: this._poseTear(); break;
         case ZA.CLIMB: this._poseClimb(); break;
         case ZA.RISE: this._poseRise(); break;
@@ -1119,42 +1252,91 @@ export class ZombieModel {
     const tp = this.tp, P = this.p;
     this._base(tp);
     const s = t * P.tempo + P.phase;
-    tp[LEAN] = 0.14 + P.hunch + 0.04 * Math.sin(s * 0.7);
-    tp[ROLL] = 0.07 * Math.sin(s * 0.8) * P.sway;
-    tp[HIPROLL] = 0.035 * Math.sin(s * 0.8);
+    const shift = Math.sin(s * 0.35);                                // pasa el peso de una pierna a otra
+    tp[LEAN] = 0.14 + P.hunch + 0.035 * Math.sin(s * 1.1);          // respiración
+    tp[ROLL] = 0.07 * Math.sin(s * 0.8) * P.sway + 0.05 * shift;
+    tp[HIPROLL] = 0.035 * Math.sin(s * 0.8) - 0.05 * shift;
     tp[TWIST] = 0.06 * Math.sin(s * 0.45);
     tp[NOD] = 0.12 + 0.06 * Math.sin(s * 0.6);
     tp[TILT] = P.headTilt + 0.12 * Math.sin(s * 0.5);
-    tp[TURN] = P.headTurn + 0.25 * Math.sin(s * 0.33);
-    tp[JAW] = 0.15 + P.jaw + 0.12 * Math.max(0, Math.sin(s * 2.7));
+    // mira a un lado y a otro, olfateando
+    tp[TURN] = P.headTurn + 0.45 * Math.sin(s * 0.23) * Math.abs(Math.sin(s * 0.11));
+    tp[JAW] = 0.15 + P.jaw + 0.18 * Math.max(0, Math.sin(s * 2.7)) * Math.max(0, Math.sin(s * 0.4));
     this._armsForward(tp, s * 1.3, 0.6);
     tp[LRAISE] *= 0.85; tp[RRAISE] *= 0.85;
     tp[LSWING] = 0.05 * Math.sin(s * 0.8); tp[RSWING] = -0.05 * Math.sin(s * 0.8);
-    tp[LKNEE] = 0.08 + 0.05 * Math.max(0, Math.sin(s * 0.8)); tp[RKNEE] = 0.08 + 0.05 * Math.max(0, -Math.sin(s * 0.8));
+    tp[LKNEE] = 0.08 + 0.1 * Math.max(0, shift); tp[RKNEE] = 0.08 + 0.1 * Math.max(0, -shift);
+    this._brokenArm(tp, s * 1.3);
     this._ground(tp);
+  }
+
+  // Brazo roto: cuelga sin fuerza, girado, y oscila como un péndulo
+  _brokenArm(tp, c) {
+    const b = this.p.brokenArm;
+    if (!b) return;
+    const sw = 0.12 + 0.22 * Math.sin(c + 1.9);
+    if (b < 0) { tp[LRAISE] = sw; tp[LELB] = 0.05; tp[LTWIST] = 0.7; tp[LSPLAY] = 0.04; }
+    else { tp[RRAISE] = sw; tp[RELB] = 0.05; tp[RTWIST] = 0.7; tp[RSPLAY] = 0.04; }
   }
 
   _poseWalk(c) {
     const tp = this.tp, P = this.p;
     const s = Math.sin(c), co = Math.cos(c);
-    const A = 0.38;
+    const st = P.gaitStyle;
+    const A = st === 2 ? 0.34 : st === 3 ? 0.3 : 0.38;
     let ls = A * s, rs = -A * s;
-    let lk = 0.12 + 0.62 * Math.max(0, co), rk = 0.12 + 0.62 * Math.max(0, -co);
-    // cojera: la pierna mala se arrastra (menos rodilla y menos zancada)
-    if (P.limpSide < 0) { ls *= 1 - 0.45 * P.limp; lk = 0.08 + (lk - 0.08) * (1 - 0.75 * P.limp); }
-    else { rs *= 1 - 0.45 * P.limp; rk = 0.08 + (rk - 0.08) * (1 - 0.75 * P.limp); }
-    tp[LSWING] = ls; tp[RSWING] = rs; tp[LKNEE] = lk; tp[RKNEE] = rk;
-    tp[HIPYAW] = -0.12 * s;
-    tp[HIPROLL] = 0.06 * s * P.sway;
+    const kb = st === 2 ? 0.32 : st === 3 ? 0.04 : 0.12;          // rodillas: flexionadas (acechador) o rígidas
+    const ka = st === 3 ? 0.2 : 0.62;
+    let lk = kb + ka * Math.max(0, co), rk = kb + ka * Math.max(0, -co);
+    // puntera: baja al levantar el pie
+    tp[LTOE] = 0.28 * Math.max(0, co); tp[RTOE] = 0.28 * Math.max(0, -co);
     tp[LEAN] = 0.2 + P.hunch + 0.04 * Math.sin(2 * c);
-    tp[TWIST] = 0.12 * s;
-    tp[ROLL] = 0.1 * s * P.sway + P.limpSide * 0.07 * P.limp;
-    tp[NOD] = 0.1 + 0.07 * Math.sin(2 * c + 0.8);
+    tp[NOD] = 0.1 + 0.07 * Math.sin(2 * c + 0.8) + 0.05 * Math.abs(s);   // la cabeza cae con cada pisada
     tp[TILT] = P.headTilt + 0.1 * Math.sin(c + 1);
     tp[TURN] = P.headTurn + 0.06 * Math.sin(c * 0.5);
     tp[JAW] = 0.15 + P.jaw + 0.12 * Math.sin(this.time * 3.1 + P.phase);
+    tp[HIPYAW] = -0.12 * s;
+    tp[HIPROLL] = 0.06 * s * P.sway;
+    tp[TWIST] = 0.12 * s;
+    tp[ROLL] = 0.1 * s * P.sway + P.limpSide * 0.07 * P.limp;
     this._armsForward(tp, c, 1);
-    this._ground(tp, 0, 0.06);
+    let maxDrop = 0.06;
+    if (st === 0) {
+      // cojera ligera: la pierna mala se arrastra (menos rodilla y menos zancada)
+      if (P.limpSide < 0) { ls *= 1 - 0.45 * P.limp; lk = 0.08 + (lk - 0.08) * (1 - 0.75 * P.limp); }
+      else { rs *= 1 - 0.45 * P.limp; rk = 0.08 + (rk - 0.08) * (1 - 0.75 * P.limp); }
+    } else if (st === 1) {
+      // arrastra una pierna rígida con la puntera por el suelo; el cuerpo se vence hacia ese lado
+      const bad = P.limpSide;
+      const sb = bad < 0 ? s : -s;                              // fase de la pierna mala
+      if (bad < 0) { ls = 0.16 * s; lk = 0.05; tp[LTOE] = 0.75; tp[LLSPLAY] = 0.1; rs = -0.46 * s; rk = 0.15 + 0.75 * Math.max(0, -co); }
+      else { rs = -0.16 * s; rk = 0.05; tp[RTOE] = 0.75; tp[RLSPLAY] = 0.1; ls = 0.46 * s; lk = 0.15 + 0.75 * Math.max(0, co); }
+      const lurch = Math.max(0, -sb);                             // cuando apoya la pierna mala
+      tp[ROLL] = bad * (0.08 + 0.12 * lurch);
+      tp[HIPROLL] = -bad * 0.08 * lurch;
+      tp[TILT] = P.headTilt + bad * 0.18 * lurch;
+      tp[LEAN] = 0.26 + P.hunch;
+      maxDrop = 0.09;
+    } else if (st === 2) {
+      // acechador: muy encorvado, cabeza levantada mirando al frente, brazos bajos y largos
+      tp[LEAN] = 0.45 + P.hunch * 0.5 + 0.03 * Math.sin(2 * c);
+      tp[NOD] = -0.22 + 0.04 * Math.abs(s);
+      tp[TURN] = P.headTurn * 0.5 + 0.15 * Math.sin(this.time * 1.7 + P.phase);
+      tp[JAW] = 0.35 + 0.15 * Math.sin(this.time * 4 + P.phase);
+      tp[LRAISE] = 0.6 + 0.2 * Math.sin(c + Math.PI); tp[RRAISE] = 0.6 + 0.2 * s;
+      tp[LELB] = tp[RELB] = 0.55; tp[LSPLAY] = tp[RSPLAY] = 0.2;
+      maxDrop = 0.13;
+    } else {
+      // rígido: rodillas bloqueadas, se balancea de lado a lado con la cabeza colgando
+      tp[ROLL] = 0.2 * s * P.sway; tp[HIPROLL] = 0.12 * s;
+      tp[TWIST] = 0.05 * s;
+      tp[NOD] = 0.28 + 0.05 * Math.abs(s);
+      tp[TILT] = P.headTilt + 0.3 * Math.sin(c + 0.6);
+      tp[LLSPLAY] = tp[RLSPLAY] = 0.07;
+    }
+    tp[LSWING] = ls; tp[RSWING] = rs; tp[LKNEE] = lk; tp[RKNEE] = rk;
+    this._brokenArm(tp, c);
+    this._ground(tp, 0, maxDrop);
   }
 
   _poseRun(c) {
@@ -1162,6 +1344,7 @@ export class ZombieModel {
     const s = Math.sin(c), co = Math.cos(c);
     tp[LSWING] = 0.62 * s; tp[RSWING] = -0.62 * s;
     tp[LKNEE] = 0.25 + 1.0 * Math.max(0, co); tp[RKNEE] = 0.25 + 1.0 * Math.max(0, -co);
+    tp[LTOE] = 0.4 * Math.max(0, co); tp[RTOE] = 0.4 * Math.max(0, -co);
     tp[HIPYAW] = -0.16 * s;
     tp[HIPROLL] = 0.05 * s;
     tp[LEAN] = 0.26 + P.hunch * 0.5;
@@ -1182,6 +1365,7 @@ export class ZombieModel {
     const s = Math.sin(c), co = Math.cos(c);
     tp[LSWING] = 0.8 * s; tp[RSWING] = -0.8 * s;
     tp[LKNEE] = 0.35 + 1.3 * Math.max(0, co); tp[RKNEE] = 0.35 + 1.3 * Math.max(0, -co);
+    tp[LTOE] = 0.5 * Math.max(0, co); tp[RTOE] = 0.5 * Math.max(0, -co);
     tp[HIPYAW] = -0.18 * s;
     tp[LEAN] = 0.32;
     tp[TWIST] = 0.24 * s;
@@ -1206,6 +1390,8 @@ export class ZombieModel {
     const tp = this.tp, P = this.p;
     const period = 1.1;
     const tt = this.animT % period;
+    if (this.atkStyle === 1) { this._poseGrabBite(tt, period); return; }
+    if (this.atkStyle === 2) { this._poseHammer(tt, period); return; }
     const sd = this.swingSide; // +1 brazo derecho
     let raise, splay, elbow, twist, lean;
     if (tt < 0.28) {
@@ -1227,6 +1413,49 @@ export class ZombieModel {
     tp[JAW] = 0.55 + 0.2 * Math.sin(this.time * 9);
     tp[LSWING] = 0.22 * sd; tp[RSWING] = -0.22 * sd;
     tp[LKNEE] = 0.25; tp[RKNEE] = 0.25;
+    this._ground(tp);
+  }
+
+  // Agarrón con mordisco: abre los brazos, se lanza hacia delante cerrándolos y muerde
+  _poseGrabBite(tt, period) {
+    const tp = this.tp, P = this.p;
+    let raise, splay, elbow, lean, nod, jaw, hz;
+    if (tt < 0.3) {
+      const k = easeInOut(tt / 0.3);
+      raise = 1.2 + 0.35 * k; splay = 0.15 + 0.35 * k; elbow = 0.35 - 0.2 * k; lean = 0.15 - 0.12 * k; nod = 0.05 - 0.25 * k; jaw = 0.3 + 0.7 * k; hz = 0.03 * k;
+    } else if (tt < 0.48) {
+      const k = easeInOut((tt - 0.3) / 0.18);
+      raise = 1.55 - 0.1 * k; splay = 0.5 - 0.65 * k; elbow = 0.15 + 0.9 * k; lean = 0.03 + 0.5 * k; nod = -0.2 + 0.35 * k; jaw = 1.0 - 0.8 * k; hz = 0.03 - 0.09 * k;
+    } else {
+      const k = easeInOut((tt - 0.48) / (period - 0.48));
+      raise = 1.45 - 0.2 * k; splay = -0.15 + 0.27 * k; elbow = 1.05 - 0.7 * k; lean = 0.53 - 0.35 * k; nod = 0.15 - 0.05 * k; jaw = 0.2 + 0.3 * Math.sin(this.time * 12) * (1 - k); hz = -0.06 * (1 - k);
+    }
+    tp[LRAISE] = tp[RRAISE] = raise; tp[LSPLAY] = tp[RSPLAY] = splay; tp[LELB] = tp[RELB] = elbow;
+    tp[LEAN] = lean + P.hunch * 0.5; tp[NOD] = nod; tp[JAW] = jaw; tp[HIPZ] = hz;
+    tp[TWIST] = 0.05 * Math.sin(this.time * 9);
+    tp[LSWING] = 0.3; tp[RSWING] = -0.1; tp[LKNEE] = 0.35; tp[RKNEE] = 0.2;
+    this._ground(tp);
+  }
+
+  // Martillazo: levanta los dos puños por encima de la cabeza y los deja caer
+  _poseHammer(tt, period) {
+    const tp = this.tp, P = this.p;
+    let raise, elbow, lean, nod;
+    if (tt < 0.3) {
+      const k = easeInOut(tt / 0.3);
+      raise = 1.3 + 1.5 * k; elbow = 0.3 + 0.8 * k; lean = 0.12 - 0.22 * k; nod = 0.05 - 0.3 * k;
+    } else if (tt < 0.46) {
+      const k = easeInOut((tt - 0.3) / 0.16);
+      raise = 2.8 - 2.0 * k; elbow = 1.1 - 0.9 * k; lean = -0.1 + 0.6 * k; nod = -0.25 + 0.4 * k;
+    } else {
+      const k = easeInOut((tt - 0.46) / (period - 0.46));
+      raise = 0.8 + 0.45 * k; elbow = 0.2 + 0.15 * k; lean = 0.5 - 0.35 * k; nod = 0.15 - 0.05 * k;
+    }
+    tp[LRAISE] = tp[RRAISE] = raise; tp[LELB] = tp[RELB] = elbow; tp[LSPLAY] = tp[RSPLAY] = 0.08;
+    tp[LEAN] = lean + P.hunch * 0.5; tp[NOD] = nod;
+    tp[JAW] = 0.5 + 0.3 * Math.sin(this.time * 10);
+    tp[LSWING] = 0.2; tp[RSWING] = -0.2; tp[LKNEE] = 0.3; tp[RKNEE] = 0.3;
+    if (tt > 0.3 && tt < 0.6) tp[LKNEE] = tp[RKNEE] = 0.45;
     this._ground(tp);
   }
 
@@ -1382,8 +1611,8 @@ export class ZombieModel {
     this.spine.rotation.set(-(c[LEAN] + S.lean.v), c[TWIST] + S.twist.v, c[ROLL] + S.roll.v);
     this.neck.rotation.set(-(c[NOD] + S.nod.v), c[TURN], c[TILT] + S.tilt.v);
     this.jaw.rotation.x = -Math.max(0, c[JAW]);
-    this.armL.sh.rotation.set(c[LRAISE], -c[LTWIST], -c[LSPLAY]);
-    this.armR.sh.rotation.set(c[RRAISE], c[RTWIST], c[RSPLAY]);
+    this.armL.sh.rotation.set(c[LRAISE] + S.armL.v, -c[LTWIST], -c[LSPLAY] - 0.5 * Math.abs(S.armL.v));
+    this.armR.sh.rotation.set(c[RRAISE] + S.armR.v, c[RTWIST], c[RSPLAY] + 0.5 * Math.abs(S.armR.v));
     this.armL.el.rotation.x = c[LELB];
     this.armR.el.rotation.x = c[RELB];
     const kb = Math.max(0, S.knee.v);
@@ -1391,6 +1620,11 @@ export class ZombieModel {
     this.legR.th.rotation.set(c[RSWING] + kb * 0.3, 0, c[RLSPLAY]);
     this.legL.kn.rotation.x = -(c[LKNEE] + kb);
     this.legR.kn.rotation.x = -(c[RKNEE] + kb);
+    // tobillos: el pie se mantiene paralelo al suelo (menos la puntera que se levanta o se arrastra)
+    const lvl = this.death ? 0.4 : 1;
+    const hpx = this.hips.rotation.x;
+    this.legL.an.rotation.x = -(hpx + this.legL.th.rotation.x + this.legL.kn.rotation.x) * lvl - c[LTOE];
+    this.legR.an.rotation.x = -(hpx + this.legR.th.rotation.x + this.legR.kn.rotation.x) * lvl - c[RTOE];
   }
 
   // ------------------------------------------------------------------ Eventos visuales
@@ -1402,7 +1636,7 @@ export class ZombieModel {
     const len = Math.hypot(dirX, dirZ) || 1;
     const dx = dirX / len, dz = dirZ / len;
     const lx = dx * cs - dz * sn, lz = dx * sn + dz * cs;
-    const k = Math.min(1.6, Math.max(0.3, strength));
+    const k = Math.min(1.6, Math.max(0.3, strength)) * (this.kit && this.kit.stagger != null ? this.kit.stagger : 1);
     const S = this.spr;
     const jit = () => (Math.random() - 0.5);
     if (part === 'h') {
@@ -1412,14 +1646,17 @@ export class ZombieModel {
     } else {
       S.lean.w -= lz * 5 * k; S.roll.w -= lx * 4 * k; S.twist.w += jit() * 6 * k; S.nod.w += 1.5 * k;
     }
+    S.armL.w += (jit() * 10 - 3) * k; S.armR.w += (jit() * 10 - 3) * k;
     this.jawBoost = Math.max(this.jawBoost, 0.5);
   }
 
   onAttack() {
     if (this.death) return;
     // sincroniza el zarpazo con el golpe del servidor
-    const tt = this.animT % 1.1;
-    if (this.anim !== ZA.ATTACK || tt > 0.6) { this.animT = 0.3; }
+    const hit = this.kit && this.kit.hitTime ? this.kit.hitTime : 0.3;
+    const per = this.kit && this.kit.attackPeriod ? this.kit.attackPeriod : 1.1;
+    const tt = this.animT % per;
+    if (this.anim !== ZA.ATTACK || tt > hit + 0.3 || tt < hit - 0.45) { this.animT = hit; }
     this.jawBoost = 1;
   }
 

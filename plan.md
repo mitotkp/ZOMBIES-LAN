@@ -130,6 +130,21 @@ partiendo de la posición de su evento `respawn`.
    - Explosivo: barriga con venas incandescentes (emissiveMap) que parpadean con la mecha. Corredor: costillas.
    Todos los zombis tienen espasmos de cabeza aleatorios. La elevación de los que flotan es pequeña para no salirse
    de la caja de impacto. `/test/` → Modelos tiene el botón «Habilidad del jefe».
+26. [x] Zombi común rehecho: hombros caídos, variantes de torso (barriga / demacrado), brazos con deltoides y
+   antebrazo musculado, manos más grandes con dos falanges y uñas negras, dientes de verdad arriba y abajo,
+   orejas, ojos más pequeños y hundidos, pies con tobillo (se quedan planos en el suelo). Dos conjuntos nuevos
+   (vestido con pelo largo y bata de hospital con piernas desnudas) y decoración aleatoria en `decorateCommon`
+   (bossModels.js): faldones rasgados, costillas al aire pegadas al torso, tripas colgando que se balancean,
+   sin mandíbula (con la lengua), antebrazo arrancado y un ojo reventado.
+   Animación: cuatro formas de andar (`gaitStyle`: arrastra los pies, cojo que arrastra una pierna rígida,
+   acechador encorvado, rígido que se balancea), brazo roto que cuelga (`brokenArm`), reposo que mira alrededor
+   y cambia el peso, puntera que baja al levantar el pie, brazos y cabeza con inercia (suavizado por canal `RATE`),
+   brazos que se agitan con los impactos, y tres ataques (zarpazo, agarrón con mordisco, martillazo).
+27. [x] Animaciones de los jefes: ataque propio sincronizado con el `windup` del servidor (`atkPhases`, `hitTime`,
+   `attackPeriod`): tajo de cuchilla (Carnicero), agarrón y mordisco (Plaga), estocada con el bastón
+   (Nigromante), gancho con el guantelete (Acorazado), zarpazo doble con chillido (Espectro) y mazazo con los
+   dos puños (Tanque). Rugido al aparecer y cada 8-19 s (`makeRoar`: rugido, golpes en el pecho del Tanque,
+   chillido del Espectro), resistencia a los impactos (`stagger`) y zancada proporcional al tamaño.
 16. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
    que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
 17. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
@@ -191,3 +206,4 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
 - **2026-09-26 (16)**: agarre de pistola legible (puño real, índice en el gatillo, una mano a la cadera).
 - **2026-09-26 (17)**: los dedos ya no atraviesan la empuñadura.
 - **2026-09-26 (18)**: modelos y animaciones nuevos de jefes y zombis especiales.
+- **2026-09-26 (19)**: zombi común rehecho (modelo, variantes, heridas, andares, ataques) y ataques/rugidos de los jefes.

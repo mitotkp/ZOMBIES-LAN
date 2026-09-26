@@ -110,6 +110,7 @@ for (const k of weaponKeys) $('pweapon').add(new Option(WEAPONS[k].name, k));
 $('pweapon').value = 'm16' in WEAPONS ? 'm16' : weaponKeys[0];
 const MODEL_TYPES = Object.keys(ZOMBIE_TYPES);
 for (const k of MODEL_TYPES) $('model').add(new Option(`${ZOMBIE_TYPES[k].name}${ZOMBIE_TYPES[k].boss ? ' (jefe)' : ''}`, 'z:' + k));
+$('model').add(new Option('Zombis comunes (todas las variantes)', 'commons'));
 $('model').add(new Option('Jugador', 'player'));
 const ANIMS = [['Quieto', ZA.IDLE], ['Caminar', ZA.WALK], ['Correr', ZA.RUN], ['Esprintar', ZA.SPRINT], ['Atacar', ZA.ATTACK],
   ['Arrancar tablas', ZA.TEAR], ['Saltar ventana', ZA.CLIMB], ['Salir del suelo', ZA.RISE], ['Reptar', ZA.CRAWL], ['Aturdido', ZA.STUN]];
@@ -280,8 +281,9 @@ function makeModel(sel, x) {
     mScene.add(m.group);
     return { kind: 'player', m, x };
   }
-  const type = sel.slice(2);
-  const m = new ZombieModel({ quality: 'high', seed: 4242 + x * 13, type });
+  const type = sel.startsWith('z:') ? sel.slice(2) : 'normal';
+  const variant = sel.startsWith('v:') ? +sel.slice(2) : undefined;
+  const m = new ZombieModel({ quality: 'high', seed: variant != null ? 1000 + variant * 7919 : 4242 + x * 13, type, variant });
   m.group.position.set(x, 0, 0);
   m.group.rotation.y = Math.PI;                    // de cara a la cámara
   m.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -291,7 +293,13 @@ function makeModel(sel, x) {
 function buildModels() {
   clearModels();
   if (mode !== 'models') return;
-  if ($('row').checked) {
+  if ($('model').value === 'commons') {
+    // una fila con cada conjunto de ropa (y semillas distintas para ver la variedad)
+    const n = 8, gap = 1.1;
+    for (let i = 0; i < n; i++) models.push(makeModel('v:' + i, (i - (n - 1) / 2) * gap));
+    mControls.target.set(-0.8, 1.0, 0);
+    mCamera.position.set(-0.8, 2.2, 8.5);
+  } else if ($('row').checked) {
     const all = MODEL_TYPES.map((k) => 'z:' + k).concat(['player']);
     const gap = 1.6;
     all.forEach((s, i) => models.push(makeModel(s, (i - (all.length - 1) / 2) * gap)));
@@ -308,7 +316,7 @@ $('model').onchange = buildModels;
 $('row').onchange = buildModels;
 $('z-reset').onclick = buildModels;
 $('z-hit').onclick = () => { for (const o of models) if (o.kind === 'zombie') o.m.hitReact('torso', 0, 1, 1); };
-$('z-attack').onclick = () => { for (const o of models) if (o.kind === 'zombie') { o.m.onAttack(); o.attackT = 0.9; } };
+$('z-attack').onclick = () => { for (const o of models) if (o.kind === 'zombie') { o.attackT = o.m.kit && o.m.kit.attackPeriod ? o.m.kit.attackPeriod : 1.1; } };
 // Habilidad según el jefe: carga (Carnicero), golpe al suelo (Acorazado), invocación (Nigromante)
 let chargeT = 0;
 $('z-ability').onclick = () => {

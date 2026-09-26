@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { ParametricGeometry } from 'three/addons/geometries/ParametricGeometry.js';
 import { ZA, ZF } from '/shared/protocol.js';
+import { ZOMBIE_TYPES } from '/shared/constants.js';
 import {
   TAU, rng, deform, paintGeo, mergeGeos, makeMat, limbGeo, roundedBox, capsule, fbm, smoothstep, clamp01, easeInOut,
   valueNoise, makeCanvas, canvasTexture, blotches, glowTexture,
@@ -325,6 +326,68 @@ function monsterHead({ w = 0.1, h = 0.118, d = 0.112, brow = 0.1, sockets = 0.18
   return { head, jaw: mergeGeos(jp) };
 }
 
+// ------------------------------------------------------------------ Ataques y rugidos de los jefes
+// Fases de un golpe cuyo impacto cae en W segundos (el mismo windup que usa el servidor): preparación (0 → 0.72·W),
+// descarga (0.72·W → W) y recuperación (W + 0.08 → W + 0.58).
+function atkPhases(tt, W) {
+  return {
+    wind: easeInOut(clamp01(tt / (W * 0.72))),
+    strike: easeInOut(clamp01((tt - W * 0.72) / (W * 0.28))),
+    rec: easeInOut(clamp01((tt - W - 0.08) / 0.5)),
+  };
+}
+// Valor de una articulación: reposo a → preparación b → golpe c → vuelve a a
+function k3(a, b, c, P) { return lerp(lerp(lerp(a, b, P.wind), c, P.strike), a, P.rec); }
+// Sobrescribe una articulación con un golpe (mezcla desde el valor de la pose actual)
+function setK(tp, i, b, c, P) { tp[i] = k3(tp[i], b, c, P); }
+
+// Datos de ataque de un tipo: impacto (windup del servidor) y periodo (cooldown)
+function atkInfo(type) {
+  const T = ZOMBIE_TYPES[type] || {};
+  return { hitTime: T.windup || 0.45, attackPeriod: Math.max((T.windup || 0.45) + 0.7, T.cooldown || 1.3) };
+}
+
+// Rugido: al aparecer y de vez en cuando levanta la cabeza, abre la boca y los brazos (solo la parte de arriba:
+// las piernas siguen andando). style: 'roar' | 'chest' (golpes en el pecho) | 'scream' (brazos arriba, garras)
+function makeRoar(M, K, style = 'roar', every = [9, 16], dur = 1.6) {
+  let t = dur, wait = every[0] + Math.random() * (every[1] - every[0]);
+  const P = K.P;
+  return {
+    busy: () => t > 0,
+    update(dt, anim) {
+      if (anim === ZA.CLIMB || anim === ZA.RISE || anim === ZA.ATTACK || anim === ZA.STUN || (M.flags & ZF.CHARGE)) { if (t > 0 && t < dur) t = 0; return; }
+      if (t > 0) { t -= dt; return; }
+      wait -= dt;
+      if (wait <= 0) { t = dur; wait = every[0] + Math.random() * (every[1] - every[0]); M.jawBoost = 1; }
+    },
+    apply(tp) {
+      if (t <= 0) return;
+      const k = Math.sin(PI * clamp01(1 - t / dur));
+      const s = Math.min(1, k * 1.6);
+      const mix = (i, v) => { tp[i] = lerp(tp[i], v, s); };
+      const tt = M.time;
+      if (style === 'chest') {
+        // gorila: se golpea el pecho con los dos puños alternando
+        const a = Math.sin(tt * 16), b = Math.sin(tt * 16 + PI);
+        mix(P.LRAISE, 1.25 + 0.35 * a); mix(P.RRAISE, 1.25 + 0.35 * b);
+        mix(P.LSPLAY, -0.35); mix(P.RSPLAY, -0.35);
+        mix(P.LELB, 1.7); mix(P.RELB, 1.7);
+        mix(P.LEAN, -0.15); mix(P.NOD, -0.55); mix(P.JAW, 1);
+      } else if (style === 'scream') {
+        mix(P.LRAISE, 2.4); mix(P.RRAISE, 2.4); mix(P.LSPLAY, 0.7); mix(P.RSPLAY, 0.7);
+        mix(P.LELB, 0.5); mix(P.RELB, 0.5);
+        mix(P.LEAN, -0.25); mix(P.NOD, -0.7); mix(P.JAW, 1.2);
+        tp[P.TILT] += 0.25 * s * Math.sin(tt * 23);
+      } else {
+        mix(P.LRAISE, 0.7); mix(P.RRAISE, 0.7); mix(P.LSPLAY, 1.1); mix(P.RSPLAY, 1.1);
+        mix(P.LELB, 1.0); mix(P.RELB, 1.0);
+        mix(P.LEAN, -0.2); mix(P.NOD, -0.6); mix(P.JAW, 1.1);
+        tp[P.ROLL] += 0.06 * s * Math.sin(tt * 19);                     // tiembla de rabia
+      }
+    },
+  };
+}
+
 const CACHE = new Map();
 function cached(key, make) {
   let v = CACHE.get(key);
@@ -536,9 +599,23 @@ function buildButcher(M, K) {
   const hook = K.mesh(G.hook, mats.metal, M.armL.hand, true);
   hook.position.set(0, 0.05, 0);
   // piernas gruesas
-  for (const leg of [M.legL, M.legR]) { leg.tm.scale.set(1.75, 1, 1.6); leg.sm.scale.set(1.55, 1, 1.45); }
+  for (const leg of [M.legL, M.legR]) { leg.tm.scale.set(1.75, 1, 1.6); leg.sm.scale.set(1.55, 1, 1.45); leg.ft.scale.set(1.4, 1.2, 1.2); }
+  const AI = atkInfo('butcher');
+  const roar = makeRoar(M, K, 'roar');
   return {
+    ...AI, stagger: 0.35, ownAttack: true,
+    update(dt) { roar.update(dt, M.anim); },
     pose(tp, anim, c) {
+      if (anim === ZA.ATTACK) {
+        // tajo: sube la cuchilla por detrás de la cabeza girando el tronco y la descarga en diagonal
+        const P = atkPhases(M.animT % AI.attackPeriod, AI.hitTime), I = K.P;
+        setK(tp, I.RRAISE, 3.0, 0.45, P); setK(tp, I.RELB, 1.5, 0.1, P); setK(tp, I.RSPLAY, 0.45, -0.25, P);
+        setK(tp, I.TWIST, -0.4, 0.45, P); setK(tp, I.LEAN, -0.12, 0.6, P); setK(tp, I.NOD, -0.3, 0.1, P);
+        setK(tp, I.LRAISE, 1.1, 0.5, P); setK(tp, I.LELB, 0.8, 0.4, P); setK(tp, I.LSPLAY, 0.3, 0.5, P);
+        setK(tp, I.LKNEE, 0.15, 0.5, P); setK(tp, I.RKNEE, 0.15, 0.45, P);
+        tp[I.JAW] = 0.6 + 0.4 * P.wind;
+        return;
+      }
       const charging = !!(M.flags & ZF.CHARGE);
       if (charging) {
         // embestida: cabeza gacha, cuchilla atrás y el gancho por delante
@@ -557,7 +634,7 @@ function buildButcher(M, K) {
         tp[K.P.RRAISE] = 0.28 - 0.18 * s; tp[K.P.RELB] = 0.55; tp[K.P.RSPLAY] = 0.28;
         tp[K.P.LRAISE] = 0.25 + 0.2 * s; tp[K.P.LELB] = 0.35; tp[K.P.LSPLAY] = 0.3;
       }
-      if (anim === ZA.ATTACK) M.swingSide = 1;                    // siempre golpea con la cuchilla
+      roar.apply(tp);
     },
   };
 }
@@ -704,8 +781,21 @@ function buildPlague(M, K) {
     gas.push({ sp, t: i / 9 * 3, a: K.r() * TAU, rad: 0.3 + K.r() * 0.35 });
   }
   M._aura(0x7aff3a, 2.4, 0.22);
+  const AI = atkInfo('plague');
+  const roar = makeRoar(M, K, 'roar', [10, 18]);
   return {
+    ...AI, stagger: 0.5, ownAttack: true,
     pose(tp, anim, c) {
+      if (anim === ZA.ATTACK) {
+        // agarra con los dos brazos y lanza un bocado; en la preparación abre las fauces del todo
+        const P = atkPhases(M.animT % AI.attackPeriod, AI.hitTime), I = K.P;
+        setK(tp, I.LRAISE, 1.7, 1.35, P); setK(tp, I.RRAISE, 1.7, 1.35, P);
+        setK(tp, I.LSPLAY, 0.75, -0.2, P); setK(tp, I.RSPLAY, 0.75, -0.2, P);
+        setK(tp, I.LELB, 0.2, 1.2, P); setK(tp, I.RELB, 0.2, 1.2, P);
+        setK(tp, I.LEAN, 0.2, 0.75, P); setK(tp, I.NOD, -0.45, 0.25, P);
+        tp[I.JAW] = 0.4 + 0.9 * P.wind * (1 - P.strike) + 0.2;
+        return;
+      }
       // encorvada bajo su propio peso, cabeza colgando, brazos largos que casi arrastran
       const s = Math.sin(c);
       tp[K.P.LEAN] = 0.4 + 0.04 * Math.sin(M.time * 1.3);
@@ -718,8 +808,10 @@ function buildPlague(M, K) {
         tp[K.P.LELB] = tp[K.P.RELB] = 0.35;
         tp[K.P.LSPLAY] = tp[K.P.RSPLAY] = 0.28;
       }
+      roar.apply(tp);
     },
     update(dt) {
+      roar.update(dt, M.anim);
       // respiración: el cuerpo y los huevos laten
       const br = 1 + 0.035 * Math.sin(M.time * 2.2);
       torso.scale.set(br, 1, br);
@@ -912,9 +1004,11 @@ function buildNecro(M, K) {
     M.group.add(sp);
     return { sp, a: (i / 3) * TAU };
   });
-  let summonT = 0;
+  let summonT = 0, jab = 0;
   const _q1 = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
+  const AI = atkInfo('necro');
   return {
+    ...AI, stagger: 0.6, ownAttack: true,
     onAbility(a) { if (a === 'summon') summonT = 1.8; },
     pose(tp, anim, c) {
       // flota: sin pasos, balanceo suave de la túnica
@@ -934,7 +1028,16 @@ function buildNecro(M, K) {
         tp[K.P.NOD] = lerp(0.12, -0.45, k); tp[K.P.JAW] = 0.3 + 0.6 * k; tp[K.P.LEAN] = lerp(0.08, -0.15, k);
         tp[K.P.LIFT] += 0.06 * k;
       }
-      if (anim === ZA.ATTACK) M.swingSide = -1;                   // ataca con la mano libre
+      jab = 0;
+      if (anim === ZA.ATTACK) {
+        // echa el bastón atrás y lo clava hacia delante con el orbe; la otra mano se abre como una garra
+        const P = atkPhases(M.animT % AI.attackPeriod, AI.hitTime), I = K.P;
+        setK(tp, I.RRAISE, 0.5, 1.5, P); setK(tp, I.RELB, 1.6, 0.15, P); setK(tp, I.RSPLAY, 0.35, 0.05, P);
+        setK(tp, I.TWIST, -0.35, 0.3, P); setK(tp, I.LEAN, -0.1, 0.35, P);
+        setK(tp, I.LRAISE, 1.2, 0.7, P); setK(tp, I.LSPLAY, 0.7, 0.3, P);
+        tp[I.JAW] = 0.3 + 0.7 * P.strike * (1 - P.rec);
+        jab = P.strike * (1 - P.rec);
+      }
     },
     update(dt) {
       summonT = Math.max(0, summonT - dt);
@@ -943,7 +1046,8 @@ function buildNecro(M, K) {
       M.armR.hand.getWorldQuaternion(_q1).invert();
       M.group.getWorldQuaternion(_q2);
       staffPivot.quaternion.copy(_q1.multiply(_q2));
-      staffPivot.rotateX(boost > 0 ? -0.2 * boost : -0.12);
+      staffPivot.rotateX(boost > 0 ? -0.2 * boost : -0.12 - 1.25 * jab);
+      if (orbGlow && jab > 0) orbGlow.scale.setScalar(1.1 + 1.2 * jab);
       skirt.rotation.x = 0.04 * Math.sin(M.time * 1.4);
       skirt.rotation.z = 0.03 * Math.sin(M.time * 1.1);
       ring.rotation.set(M.time * 1.3, M.time * 0.9, 0);
@@ -1106,15 +1210,28 @@ function buildArmored(M, K) {
     K.mesh(G.gauntlet, mats.metal, arm.el, true);
   }
   for (const leg of [M.legL, M.legR]) {
-    leg.tm.scale.set(1.35, 1, 1.35); leg.sm.scale.set(1.3, 1, 1.3);
+    leg.tm.scale.set(1.35, 1, 1.35); leg.sm.scale.set(1.3, 1, 1.3); leg.ft.scale.set(1.25, 1.2, 1.15);
     const la = K.mesh(G.legArmor, mats.metal, leg.kn, true);
     la.position.y = 0.0;
   }
   let slamT = 0, impactT = 0;
+  const AI = atkInfo('armored');
+  const roar = makeRoar(M, K, 'roar', [11, 19]);
   return {
+    ...AI, stagger: 0.25, ownAttack: true,
     onAbility(a) { if (a === 'slamStart') { slamT = 0.8; impactT = 0; } if (a === 'slam') { slamT = 0; impactT = 0.7; } },
     pose(tp, anim, c) {
       const s = Math.sin(c);
+      if (anim === ZA.ATTACK && slamT <= 0 && impactT <= 0) {
+        // gancho con el guantelete derecho: abre el brazo y gira todo el cuerpo en el golpe
+        const P = atkPhases(M.animT % AI.attackPeriod, AI.hitTime), I = K.P;
+        setK(tp, I.RRAISE, 1.1, 1.55, P); setK(tp, I.RSPLAY, 1.25, -0.25, P); setK(tp, I.RELB, 1.6, 0.25, P);
+        setK(tp, I.TWIST, -0.55, 0.55, P); setK(tp, I.LEAN, 0.05, 0.4, P); setK(tp, I.NOD, -0.15, 0.05, P);
+        setK(tp, I.LRAISE, 1.2, 0.5, P); setK(tp, I.LELB, 1.5, 1.2, P); setK(tp, I.LSPLAY, 0.1, 0.35, P);
+        setK(tp, I.LKNEE, 0.25, 0.45, P); setK(tp, I.RSWING, 0.1, -0.3, P);
+        tp[I.JAW] = 0.3 + 0.6 * P.wind;
+        return;
+      }
       // pisadas pesadas, brazos abiertos por el peso de la armadura
       if (anim === ZA.WALK || anim === ZA.RUN || anim === ZA.IDLE) {
         tp[K.P.LEAN] = 0.18; tp[K.P.NOD] = 0.02;
@@ -1139,9 +1256,9 @@ function buildArmored(M, K) {
         tp[K.P.LEAN] = 0.75 * k + 0.18 * (1 - k); tp[K.P.HIPY] -= 0.16 * k;
         tp[K.P.LKNEE] = tp[K.P.RKNEE] = 0.6 * k; tp[K.P.LSWING] = tp[K.P.RSWING] = 0.35 * k;
         tp[K.P.JAW] = 0.9;
-      }
+      } else roar.apply(tp);
     },
-    update(dt) { slamT = Math.max(0, slamT - dt); impactT = Math.max(0, impactT - dt); },
+    update(dt) { slamT = Math.max(0, slamT - dt); impactT = Math.max(0, impactT - dt); roar.update(dt, M.anim); },
   };
 }
 
@@ -1267,7 +1384,10 @@ function buildSpecter(M, K) {
   });
   M._aura(0x9ad8ff, 2.2, 0.22);
   let twitch = 0, twitchT = 0;
+  const AI = atkInfo('specter');
+  const roar = makeRoar(M, K, 'scream', [8, 14], 1.3);
   return {
+    ...AI, stagger: 0.8, ownAttack: true,
     pose(tp, anim, c) {
       // flota inclinada hacia delante, con los brazos estirados y la cabeza ladeada
       const t = M.time;
@@ -1282,9 +1402,22 @@ function buildSpecter(M, K) {
         tp[K.P.LRAISE] = 1.25 + 0.15 * Math.sin(t * 1.3); tp[K.P.RRAISE] = 1.15 + 0.15 * Math.sin(t * 1.3 + 2);
         tp[K.P.LELB] = 0.25; tp[K.P.RELB] = 0.35;
         tp[K.P.LSPLAY] = tp[K.P.RSPLAY] = 0.2;
+        roar.apply(tp);
+      }
+      if (anim === ZA.ATTACK) {
+        // echa los brazos atrás chillando y rasga con las dos garras en cruz mientras se abalanza
+        const P = atkPhases(M.animT % AI.attackPeriod, AI.hitTime), I = K.P;
+        setK(tp, I.LRAISE, 2.5, 0.7, P); setK(tp, I.RRAISE, 2.7, 0.5, P);
+        setK(tp, I.LSPLAY, 0.9, -0.45, P); setK(tp, I.RSPLAY, 0.9, -0.5, P);
+        setK(tp, I.LELB, 0.6, 0.1, P); setK(tp, I.RELB, 0.6, 0.1, P);
+        setK(tp, I.LEAN, -0.1, 0.8, P); setK(tp, I.NOD, -0.55, 0.15, P);
+        tp[I.JAW] = 1.3 * (1 - P.rec);
+        tp[I.TILT] += 0.3 * Math.sin(M.time * 27) * (1 - P.rec);
+        tp[I.LIFT] += 0.06 * P.strike * (1 - P.rec);
       }
     },
     update(dt) {
+      roar.update(dt, M.anim);
       // espasmos bruscos de la cabeza de vez en cuando
       twitchT -= dt;
       if (twitchT <= 0) { twitch = (Math.random() - 0.5) * 1.6; twitchT = 0.6 + Math.random() * 2.2; }
@@ -1390,10 +1523,26 @@ function buildTank(M, K) {
     const u = K.mesh(G.upper, mats.skin, arm.sh, true); u.scale.setScalar(big);
     const f = K.mesh(G.fore, mats.skin, arm.el, true); f.scale.set(big * (i === 0 ? -1 : 1), big, big);
   }
-  for (const leg of [M.legL, M.legR]) { leg.tm.scale.set(1.5, 1, 1.5); leg.sm.scale.set(1.45, 1, 1.4); }
+  for (const leg of [M.legL, M.legR]) { leg.tm.scale.set(1.5, 1, 1.5); leg.sm.scale.set(1.45, 1, 1.4); leg.ft.scale.set(1.35, 1.2, 1.2); }
+  const AI = atkInfo('tank');
+  const roar = makeRoar(M, K, 'chest', [8, 14], 1.8);
   return {
+    ...AI, stagger: 0.35, ownAttack: true,
+    update(dt) { roar.update(dt, M.anim); },
     pose(tp, anim, c) {
       const s = Math.sin(c);
+      if (anim === ZA.ATTACK) {
+        // junta los puños por encima de la cabeza y los estampa contra el suelo delante
+        const P = atkPhases(M.animT % AI.attackPeriod, AI.hitTime), I = K.P;
+        setK(tp, I.LRAISE, 2.9, 0.75, P); setK(tp, I.RRAISE, 2.9, 0.75, P);
+        setK(tp, I.LELB, 1.1, 0.1, P); setK(tp, I.RELB, 1.1, 0.1, P);
+        setK(tp, I.LSPLAY, -0.1, 0.1, P); setK(tp, I.RSPLAY, -0.1, 0.1, P);
+        setK(tp, I.LEAN, -0.2, 0.85, P); setK(tp, I.NOD, -0.5, -0.1, P);
+        setK(tp, I.LKNEE, 0.2, 0.6, P); setK(tp, I.RKNEE, 0.2, 0.6, P);
+        setK(tp, I.LSWING, 0.1, 0.4, P); setK(tp, I.RSWING, -0.1, 0.3, P);
+        tp[I.JAW] = 0.4 + 0.7 * P.wind;
+        return;
+      }
       tp[K.P.NOD] = -0.3;                                         // cabeza erguida mirando al frente
       if (anim === ZA.RUN || anim === ZA.SPRINT) {
         // galope de gorila: se apoya en los puños
@@ -1410,6 +1559,7 @@ function buildTank(M, K) {
         tp[K.P.LSPLAY] = tp[K.P.RSPLAY] = 0.35;
       }
       tp[K.P.JAW] = Math.max(tp[K.P.JAW], 0.35 + 0.3 * Math.max(0, Math.sin(M.time * 0.9)));
+      if (anim !== ZA.RUN && anim !== ZA.SPRINT) roar.apply(tp);
     },
   };
 }
@@ -1536,6 +1686,181 @@ function buildRunner(M, K) {
       tp[K.P.NOD] -= 0.12;
       tp[K.P.TILT] += 0.08 * Math.sin(M.time * 23) * Math.sin(M.time * 1.7);
       if (anim === ZA.SPRINT || anim === ZA.RUN) tp[K.P.JAW] = Math.max(tp[K.P.JAW], 0.7);
+    },
+  };
+}
+
+// ============================================================================================
+// Zombi común: faldones de camisa, falda y pelo largo (vestido / bata) y heridas variadas: costillas al aire,
+// tripas colgando, sin mandíbula, antebrazo arrancado o un ojo reventado
+// ============================================================================================
+function commonGeos() {
+  return cached('common', () => {
+    // faldones rasgados bajo el dobladillo de la camisa (UV: parte baja del torso de la textura)
+    const tails = surface((u, v, o) => {
+      const th = u * TAU, t = 1 - v;
+      let y = -0.015 - t * 0.12;
+      if (t > 0.55) y -= (valueNoise(u * 18, 2.2, 3) - 0.35) * 0.1 * (t - 0.55) / 0.45;
+      const rr = 1 + t * 0.07;
+      o.set(Math.sin(th) * 0.166 * rr, y, Math.cos(th) * 0.116 * rr);
+    }, 28, 4, (x, y, z, c) => { const k = 0.78 + 0.2 * smoothstep(-0.14, -0.02, y); c.setRGB(k, k, k); });
+    remapUVp(tails, 0.25, 0.31);
+    // falda (vestido o bata) desde la cintura hasta las rodillas, con el bajo rasgado
+    const skirt = surface((u, v, o) => {
+      const th = u * TAU, t = 1 - v;
+      let y = 0.03 - t * 0.47;
+      if (t > 0.8) y -= (valueNoise(u * 20, 5.1, 7) - 0.3) * 0.12 * (t - 0.8) / 0.2;
+      o.set(Math.sin(th) * lerp(0.172, 0.27, t), y, Math.cos(th) * lerp(0.122, 0.23, t) + 0.005);
+    }, 30, 8, (x, y, z, c) => { const k = 0.72 + 0.28 * smoothstep(-0.44, 0, y); c.setRGB(k, k, k); });
+    remapUVp(skirt, 0.25, 0.52);
+    // agujero en la tripa con las tripas colgando (el intestino se balancea desde su punto de anclaje)
+    const hole = new THREE.CircleGeometry(1, 16);
+    deform(hole, (v) => { const a = Math.atan2(v.y, v.x); const k = 1 + (valueNoise(a * 3, 4, 9) - 0.5) * 0.5; v.set(v.x * 0.06 * k, v.y * 0.05 * k, 0); });
+    hole.rotateY(PI);
+    hole.translate(0.03, 0.14, -0.121);
+    paintGeo(hole, (x, y, z, c) => c.setRGB(0.25, 0.02, 0.02).multiplyScalar(0.6 + 0.6 * fbm(x * 40, y * 40, 3, 2)));
+    const guts = tube([[0, 0, 0], [0.02, -0.06, -0.03], [-0.01, -0.13, -0.04], [0.03, -0.2, -0.02], [0.0, -0.26, -0.03], [-0.02, -0.3, -0.01]], 0.017, 30, 8,
+      (x, y, z, c) => c.setRGB(0.62, 0.3, 0.3).lerp(C(0.35, 0.05, 0.05), clamp01(fbm(y * 30, x * 30, 5, 2) * 1.4 - 0.4)), (k) => 1 - 0.25 * k + 0.15 * Math.sin(k * 30));
+    // sin mandíbula: carne desgarrada y la lengua colgando
+    const jawGore = sphere(1, 12, 8);
+    deform(jawGore, (v) => v.multiplyScalar(1 + (fbm(v.x * 3, v.y * 3 + v.z * 2, 4, 2) - 0.5) * 0.5));
+    jawGore.scale(0.05, 0.028, 0.05);
+    jawGore.translate(0, 0.165, -0.06);
+    paintGeo(jawGore, (x, y, z, c) => c.setRGB(0.5, 0.05, 0.05).lerp(C(0.8, 0.75, 0.62), fbm(x * 60, z * 60, 7, 1) > 0.62 ? 0.8 : 0));
+    const tongue = tube([[0, 0.16, -0.07], [0.005, 0.12, -0.1], [-0.003, 0.08, -0.105], [0.004, 0.05, -0.1]], 0.012, 12, 6, (x, y, z, c) => c.setRGB(0.55, 0.22, 0.25), (k) => 1 - 0.4 * k);
+    // brazo arrancado: muñón con hueso asomando (en el codo)
+    const stump = sphere(1, 12, 8);
+    stump.scale(0.045, 0.03, 0.045);
+    paintGeo(stump, (x, y, z, c) => c.setRGB(0.45, 0.04, 0.04).lerp(C(0.8, 0.72, 0.6), fbm(x * 70, z * 70, 11, 1) > 0.6 ? 0.8 : 0));
+    const bone = tube([[0, 0, 0], [0.004, -0.04, -0.005], [0.002, -0.075, 0]], 0.009, 6, 6, (x, y, z, c) => c.setRGB(0.88, 0.84, 0.72), (k) => 1 - 0.3 * k);
+    // un ojo reventado: solo queda uno brillando
+    const eyeL = sphere(0.0125, 8, 6); eyeL.translate(-0.036, 0.222, -0.089);
+    const eyeR = sphere(0.0125, 8, 6); eyeR.translate(0.036, 0.222, -0.089);
+    const halo1 = (x) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array([x, 0.222, -0.1]), 3)); g.computeBoundingSphere(); return g; };
+    return {
+      tails, skirt, hole, guts, jawGore: mergeGeos([jawGore, tongue]), stump: mergeGeos([stump, bone]),
+      eyeL, eyeR, haloL: halo1(-0.036), haloR: halo1(0.036),
+    };
+  });
+}
+
+// Remapea las UV de una superficie paramétrica a una franja vertical de la textura (v0..v1)
+function remapUVp(g, v0, v1) {
+  const uv = g.attributes.uv;
+  for (let i = 0; i < uv.count; i++) uv.setY(i, v0 + uv.getY(i) * (v1 - v0));
+  uv.needsUpdate = true;
+}
+
+// Pelo largo: mechones que caen por los lados y la espalda (sin tapar la cara)
+function longHairGeo(col, seed) {
+  return cached('longHair:' + seed, () => {
+    const r = rng(seed * 31 + 7);
+    const hair = [];
+    for (let i = 0; i < 26; i++) {
+      const a = lerp(-2.3, 2.3, i / 25) + (r() - 0.5) * 0.1;        // 0 = nuca (+Z); los extremos rodean hasta las sienes
+      const x0 = Math.sin(a) * 0.1, z0 = Math.cos(a) * 0.108 + 0.01;
+      const len = 0.2 + r() * 0.2 + 0.08 * Math.cos(a);
+      const pts = [[x0 * 0.4, 0.33, z0 * 0.4], [x0 * 1.05, 0.29, z0 * 1.05], [x0 * 1.22, 0.2, z0 * 1.2],
+        [x0 * 1.3 + (r() - 0.5) * 0.02, 0.2 - len * 0.5, z0 * 1.28 + 0.01], [x0 * 1.25 + (r() - 0.5) * 0.04, 0.2 - len, z0 * 1.25 + 0.02]];
+      hair.push(tube(pts, 0.011 + r() * 0.006, 10, 4, (x, y, z, c) => c.setRGB(col[0], col[1], col[2]).multiplyScalar(0.8 + 0.6 * r()), (k) => 1 - 0.6 * k));
+    }
+    return mergeGeos(hair);
+  });
+}
+
+// Superficie del torso del zombi común (mismo perfil que torsoGeo en zombieModel.js) para pegar heridas encima
+function commonTorsoPt(u, t, grow, out) {
+  const th = u * TAU;
+  const w = profile(t, [[0, 0.15], [0.3, 0.155], [0.55, 0.168], [0.72, 0.186], [0.84, 0.2], [0.92, 0.186], [0.97, 0.13], [1, 0.058]]);
+  const d = profile(t, [[0, 0.1], [0.35, 0.104], [0.62, 0.12], [0.84, 0.114], [0.95, 0.1], [1, 0.05]]);
+  let z = Math.cos(th) * d;
+  if (z < 0) z *= 1 - 0.08 * smoothstep(0.5, 0.75, t);
+  return out.set(Math.sin(th) * (w + grow), -0.03 + t * 0.7, z - (z < 0 ? grow : -grow));
+}
+
+// Costillas al aire: carne abierta en el costado del pecho con las costillas curvadas encima
+function ribWoundGeo(u0) {
+  return cached('ribWound:' + u0, () => {
+    const u1 = u0 + 0.16, t0 = 0.5, t1 = 0.74;
+    const flesh = surface((u, v, o) => {
+      const uu = lerp(u0, u1, u), tt = lerp(t0, t1, v);
+      commonTorsoPt(uu, tt, 0.004, o);
+    }, 10, 10, (x, y, z, c, u, v) => {
+      c.setRGB(0.32, 0.03, 0.03).multiplyScalar(0.6 + 0.7 * fbm(x * 40, y * 40, 3, 2));
+      const e = Math.min(u, 1 - u, v, 1 - v);
+      if (e < 0.12) c.lerp(C(0.55, 0.45, 0.38), 1 - e / 0.12);            // borde de piel desgarrada
+    });
+    // recorte irregular: los bordes de la herida se hunden en el torso (así no se ve un rectángulo)
+    const pos = flesh.attributes.position, uv = flesh.attributes.uv;
+    const tmp = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      const u = uv.getX(i), v = uv.getY(i);
+      const e = Math.hypot((u - 0.5) * 2, (v - 0.5) * 2) + (valueNoise(u * 7, v * 7, 3) - 0.5) * 0.5;
+      if (e > 0.95) { commonTorsoPt(lerp(u0, u1, u), lerp(t0, t1, v), -0.01, tmp); pos.setXYZ(i, tmp.x, tmp.y, tmp.z); }
+    }
+    flesh.computeVertexNormals();
+    const parts = [flesh];
+    for (let i = 0; i < 4; i++) {
+      const tt = lerp(t0 + 0.04, t1 - 0.04, i / 3);
+      const pts = [];
+      for (let k = 0; k <= 4; k++) { const p = commonTorsoPt(lerp(u0 + 0.02, u1 - 0.02, k / 4), tt - k * 0.006, 0.009, new THREE.Vector3()); pts.push([p.x, p.y, p.z]); }
+      parts.push(tube(pts, 0.0065, 12, 5, (x, y, z, c) => c.setRGB(0.86, 0.8, 0.68).multiplyScalar(0.85 + 0.2 * Math.sin(x * 300))));
+    }
+    return mergeGeos(parts);
+  });
+}
+
+export function decorateCommon(M, K) {
+  const G = commonGeos();
+  const r = K.r;
+  const q = M.A.quality;
+  const outfit = K.outfit || {};
+  const gore = cached('commonGore:' + q, () => makeMat(q, { vertexColors: true, roughness: 0.35 }));
+  const parts = { guts: null, hair: null };
+  if (outfit.skirt) {
+    const dbl = cached('dbl:' + K.shirtMat.uuid, () => { const m = K.shirtMat.clone(); m.side = THREE.DoubleSide; return m; });
+    K.mesh(G.skirt, dbl, M.hips, true);
+  } else if (outfit.shirt !== 'vest' && outfit.shirt !== 'police' && r() < 0.55) {
+    const dbl = cached('dbl:' + K.shirtMat.uuid, () => { const m = K.shirtMat.clone(); m.side = THREE.DoubleSide; return m; });
+    K.mesh(G.tails, dbl, M.spine, true);
+  }
+  if (outfit.longHair) {
+    const hm = cached('hairMat:' + q, () => makeMat(q, { vertexColors: true, roughness: 0.75 }));
+    const seed = Math.round(K.hairColor[0] * 100 + K.hairColor[1] * 10);
+    parts.hair = K.mesh(longHairGeo(K.hairColor, seed), hm, M.neck, true);
+    if (M.hat) M.hat.visible = false;
+  }
+  // heridas (como mucho dos por zombi)
+  let wounds = 0;
+  const roll = (p) => wounds < 2 && r() < p && ++wounds;
+  if (roll(0.16)) K.mesh(ribWoundGeo(r() < 0.5 ? 0.3 : 0.55), gore, M.spine);
+  if (!outfit.skirt && roll(0.12)) {
+    K.mesh(G.hole, gore, M.spine);
+    const anchor = new THREE.Group();
+    anchor.position.set(0.03, 0.14, -0.125);
+    M.spine.add(anchor);
+    parts.guts = K.mesh(G.guts, gore, anchor, true);
+  }
+  if (roll(0.07)) {
+    M.jaw.visible = false;
+    K.mesh(G.jawGore, gore, M.neck, true);
+  }
+  if (roll(0.07)) {
+    const arm = r() < 0.5 ? M.armL : M.armR;
+    arm.fm.visible = false;
+    K.mesh(G.stump, gore, arm.el, true);
+  }
+  if (r() < 0.12) {
+    const left = r() < 0.5;
+    M.eyes.geometry = left ? G.eyeR : G.eyeL;               // queda el otro
+    M.halo.geometry = left ? G.haloR : G.haloL;
+  }
+  const ph = r() * TAU;
+  return {
+    update() {
+      const t = M.time;
+      if (parts.guts) { parts.guts.rotation.x = 0.35 * Math.sin(t * 3.1 + ph); parts.guts.rotation.z = 0.2 * Math.sin(t * 2.3 + ph); }
+      if (parts.hair) { parts.hair.rotation.x = 0.06 * Math.sin(t * 2.2 + ph); parts.hair.rotation.z = 0.04 * Math.sin(t * 1.7 + ph); }
     },
   };
 }
