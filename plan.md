@@ -79,17 +79,20 @@ partiendo de la posición de su evento `respawn`.
    más lados en extremidades, torso y cabeza (`limbGeo` en `procgen.js`); dedos en cápsula; brazos en primera persona
    redondeados. Triángulos: zombi ~6.700, jugador ~11.000, arma ~3.000 (si en algún PC baja el rendimiento, reducir
    `radial` en `limbGeo` o los segmentos de `B()`).
-15. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
+15. [x] Manos en primera persona articuladas (palma, 4 dedos de 2 falanges y pulgar) que se cierran sobre la empuñadura,
+   se curvan al sujetar objetos y se relajan sin arma; dedos en las manos del modelo de tercera persona.
+   Animaciones propias para la venda (vendarse el antebrazo) y el botiquín (maletín + jeringuilla); el antídoto se bebe.
+16. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
    que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
-16. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
+17. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
    (el audio no se pudo oír en headless) y pointer lock.
-17. [ ] Partida completa a mano: comprar armas de pared y ventajas, beber, Mule Kick, escudo en la mano y en la espalda,
+18. [ ] Partida completa a mano: comprar armas de pared y ventajas, beber, Mule Kick, escudo en la mano y en la espalda,
    reanimar, liquidación y osito de la caja (con `/points` y `--dev` es rápido).
-18. [ ] Probar con 2 o más PCs reales en la misma red (firewall de Windows y latencia).
-19. [ ] Probar el equilibrio en partidas reales: probabilidad de infección, límite de regeneración (60 %), precios de las
+19. [ ] Probar con 2 o más PCs reales en la misma red (firewall de Windows y latencia).
+20. [ ] Probar el equilibrio en partidas reales: probabilidad de infección, límite de regeneración (60 %), precios de las
     curas y daño de las armas cuerpo a cuerpo (todo está en `shared/constants.js` y `MELEE_WEAPONS` en `shared/weapons.js`).
-20. [ ] Opcional: que los demás jugadores vean el arma cuerpo a cuerpo y la animación de curarse en el modelo en tercera persona.
-21. [ ] Opcional: quitar `node_modules/` del repo y añadir `.gitignore` (`start-server.bat` ya ejecuta `npm install`).
+21. [ ] Opcional: que los demás jugadores vean el arma cuerpo a cuerpo y la animación de curarse en el modelo en tercera persona.
+22. [ ] Opcional: quitar `node_modules/` del repo y añadir `.gitignore` (`start-server.bat` ya ejecuta `npm install`).
    Se dejó dentro para poder jugar sin internet.
 
 ## Mapa procedural (propuesta para una próxima sesión: convivirá con "Pueblo Olvidado" como opción en la sala)
@@ -131,3 +134,4 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
 - **2026-09-25 (7)**: zombis especiales (corredor, explosivo y tanque).
 - **2026-09-25 (8)**: más aguante (4 golpes) y 5 jefes por ronda desde la ronda 5.
 - **2026-09-26 (9)**: modelos de personajes y armas menos cuadrados.
+- **2026-09-26 (10)**: manos articuladas y animaciones de venda y botiquín.

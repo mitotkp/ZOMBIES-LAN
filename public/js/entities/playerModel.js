@@ -223,15 +223,25 @@ function forearmGeo() {
   const elbow = new THREE.SphereGeometry(0.048, 14, 10);
   const cuff = new THREE.CylinderGeometry(0.044, 0.044, 0.04, 16);
   cuff.translate(0, -D.fore + 0.08, 0);
-  const hand = roundedBox(0.058, 0.1, 0.042, 0.017, 2);
+  const hand = roundedBox(0.058, 0.075, 0.042, 0.017, 2);
   deform(hand, (v) => { if (v.y < 0) v.z -= 0.01; }, false);
   hand.translate(0, -D.fore + 0.005, -0.005);
   const thumb = capsule(0.011, 0.05, 8);
   thumb.rotateZ(0.5);
   thumb.translate(0.03, -D.fore + 0.03, -0.02);
+  // dedos curvados hacia delante (agarre)
+  const fingers = [];
+  for (let i = 0; i < 4; i++) {
+    const f = capsule(0.0085, 0.05, 7);
+    f.translate(0, -0.022, 0);
+    f.rotateX(0.95 + i * 0.06);
+    f.translate(-0.02 + i * 0.0135, -D.fore - 0.04, -0.012);
+    fingers.push(solidColor(f, 0.16, 0.15, 0.14));
+  }
   return mergeGeos([
     solidColor(g, 1, 1, 1), solidColor(elbow, 1, 1, 1), solidColor(cuff, 0.5, 0.5, 0.5),
     solidColor(hand, 0.16, 0.15, 0.14), solidColor(thumb, 0.16, 0.15, 0.14),       // guantes
+    ...fingers,
   ]);
 }
 

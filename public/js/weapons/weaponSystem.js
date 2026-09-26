@@ -1176,7 +1176,8 @@ export class WeaponSystem {
       this.drinkT = 0;
       this.drinkDur = def.useTime;
       this.drinkKind = 'heal';
-      this._safe('vm.playDrink', () => this.vm.playDrink(def.color, def.useTime));
+      if (h.item === 'bandage' || h.item === 'medkit') this._safe('vm.playHeal', () => this.vm.playHeal(h.item, def.useTime));
+      else this._safe('vm.playDrink', () => this.vm.playDrink(def.color, def.useTime));
     } else if (this.drinkKind === 'heal' && this.drinkT >= 0) {
       this.drinkT = -1;
       this._safe('vm.cancelActions', () => this.vm.cancelActions());
