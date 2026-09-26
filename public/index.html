@@ -44,6 +44,10 @@
   <!-- Aviso si el módulo principal no llega a arrancar (navegador antiguo, archivos que faltan...) -->
   <script>
     (function () {
+      // idioma guardado (antes de que cargue i18n.js)
+      var en = false;
+      try { var st = JSON.parse(localStorage.getItem('zlan.settings') || '{}'); en = st.lang ? st.lang === 'en' : !/^es/i.test(navigator.language || 'es'); } catch (e) { en = false; }
+      if (en) document.documentElement.lang = 'en';
       function fail(msg) {
         if (window.__zlanBooted) return;
         var box = document.getElementById('boot-error');
@@ -53,7 +57,7 @@
         box.style.display = 'flex';
       }
       if (!('noModule' in HTMLScriptElement.prototype) || !(HTMLScriptElement.supports && HTMLScriptElement.supports('importmap'))) {
-        fail('Tu navegador es demasiado antiguo. Usa una versión reciente de Chrome, Edge o Firefox.');
+        fail(en ? 'Your browser is too old. Use a recent version of Chrome, Edge or Firefox.' : 'Tu navegador es demasiado antiguo. Usa una versión reciente de Chrome, Edge o Firefox.');
         return;
       }
       window.addEventListener('error', function (e) {
@@ -62,10 +66,10 @@
         var t = e && e.target;
         if (t && t !== window && t.tagName && t.tagName !== 'SCRIPT') return;
         var src = e && e.filename ? ' (' + e.filename.replace(location.origin, '') + ')' : '';
-        fail('No se pudo cargar el juego' + src + '. Recarga la página; si el problema continúa, revisa la consola (F12).');
+        fail(en ? 'The game could not load' + src + '. Reload the page; if it keeps happening, check the console (F12).' : 'No se pudo cargar el juego' + src + '. Recarga la página; si el problema continúa, revisa la consola (F12).');
       }, true);
       setTimeout(function () {
-        fail('El juego tarda demasiado en cargar. Comprueba que el servidor siga abierto y recarga la página.');
+        fail(en ? 'The game is taking too long to load. Make sure the server is still running and reload the page.' : 'El juego tarda demasiado en cargar. Comprueba que el servidor siga abierto y recarga la página.');
       }, 15000);
     })();
   </script>

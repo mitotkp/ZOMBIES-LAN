@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { WEAPONS, weaponName } from '/shared/weapons.js';
 import { PERKS } from '/shared/perks.js';
+import { tr } from '../i18n.js';
 
 const TAU = Math.PI * 2;
 
@@ -657,7 +658,7 @@ const GEN = {
     for (const [x, y] of [[12, 12], [244, 12], [12, 244], [244, 244], [128, 12], [128, 244], [12, 128], [244, 128]]) { g.beginPath(); g.arc(x, y, 2.5, 0, TAU); g.fill(); }
     g.fillStyle = 'rgba(30,20,12,0.55)';
     g.font = 'bold 26px "Arial Black", Arial, sans-serif'; g.textAlign = 'center';
-    g.fillText(r() < 0.5 ? 'FRÁGIL' : 'CARGA', 128, 90);
+    g.fillText(tr(r() < 0.5 ? 'FRÁGIL' : 'CARGA'), 128, 90);
     cloud(cv, 5, r, [30, 20, 10], 0.4);
     grain(cv, 12, r);
     return toTex(cv.c, { repeat: false });
@@ -967,8 +968,9 @@ export function makeSign({ w = 512, h = 128, bg = '#1a1a1a', border = null, line
     if (L.glow) { g.shadowColor = L.glow; g.shadowBlur = size * 0.4; }
     if (L.stroke) { g.strokeStyle = L.stroke; g.lineWidth = Math.max(2, size * 0.08); g.strokeText(L.text, x, y, w * 0.94); }
     g.fillStyle = L.color || '#fff';
-    g.fillText(L.text, x, y, w * 0.94);
-    if (L.glow) { g.fillText(L.text, x, y, w * 0.94); g.shadowBlur = 0; }
+    const txt = tr(L.text);                 // carteles en el idioma activo
+    g.fillText(txt, x, y, w * 0.94);
+    if (L.glow) { g.fillText(txt, x, y, w * 0.94); g.shadowBlur = 0; }
   }
   if (draw) draw(g, w, h);
   if (rivets) {
@@ -1002,13 +1004,13 @@ export function departureBoardTexture() {
     g.fillStyle = '#050505'; g.fillRect(0, 0, 512, 256);
     g.font = 'bold 34px "Consolas", "Courier New", monospace'; g.textBaseline = 'middle';
     g.fillStyle = '#ffb000'; g.shadowColor = '#ff8800'; g.shadowBlur = 8;
-    g.fillText('SALIDAS', 18, 30);
+    g.fillText(tr('SALIDAS'), 18, 30);
     g.font = 'bold 20px "Consolas", "Courier New", monospace';
-    g.fillStyle = '#c98a00'; g.fillText('DESTINO          HORA   ESTADO', 18, 70);
+    g.fillStyle = '#c98a00'; g.fillText(tr('DESTINO          HORA   ESTADO'), 18, 70);
     const rows = [['VILLA OSCURA', '23:40', 'CANCELADO'], ['LA GRANJA', '00:15', 'CANCELADO'], ['PLANTA NORTE', '01:05', 'RETRASADO'], ['CIUDAD NUEVA', '--:--', 'CANCELADO'], ['EL PUENTE', '02:30', 'SIN SERVICIO']];
     rows.forEach((row, i) => {
       g.fillStyle = i === 2 ? '#ff4020' : '#ffb000';
-      g.fillText(row[0].padEnd(17, ' ') + row[1] + '  ' + row[2], 18, 104 + i * 30);
+      g.fillText(tr(row[0]).padEnd(17, ' ') + row[1] + '  ' + tr(row[2]), 18, 104 + i * 30);
     });
     g.shadowBlur = 0;
     for (let y = 0; y < 256; y += 3) { g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(0, y, 512, 1); }
@@ -1075,9 +1077,9 @@ export function perkTexture(key) {
     g.shadowBlur = 0;
     // Nombre vertical en franja
     g.font = 'bold 64px "Arial Black", "Impact", Arial, sans-serif'; g.fillStyle = '#fff';
-    g.fillText(title.toUpperCase(), 256, y0 + 480, 430);
+    g.fillText(tr(title).toUpperCase(), 256, y0 + 480, 430);
     g.font = 'bold 28px Arial, sans-serif'; g.fillStyle = 'rgba(255,255,255,0.8)';
-    const words = (p.desc || '').split(' ');
+    const words = tr(p.desc || '').split(' ');
     let line = '', ly = y0 + 555;
     for (const w of words) {
       const test = line ? line + ' ' + w : w;
@@ -1136,7 +1138,7 @@ export function papLogoTexture() {
     g.shadowColor = '#b050ff'; g.shadowBlur = 22; g.fillStyle = '#f2dcff';
     g.fillText('PACK-A-PUNCH', 256, 70, 480); g.fillText('PACK-A-PUNCH', 256, 70, 480);
     g.shadowBlur = 0; g.font = 'bold 22px Arial, sans-serif'; g.fillStyle = '#c9a0ff';
-    g.fillText('MEJORA DE ARMAMENTO · 5000', 256, 128);
+    g.fillText(tr('MEJORA DE ARMAMENTO · 5000'), 256, 128);
     grain(cv, 8, r);
     return toTex(cv.c, { repeat: false });
   });
@@ -1220,7 +1222,7 @@ function drawChalkCell(g, x0, y0, cw, ch, weaponKey, r) {
   for (const ln of (sil.extra || [])) chalkPath(g, ln, false, r, sx, sy, ox, oy, 2, 2.2);
   // nombre y precio
   const name = weaponName(weaponKey, false);
-  chalkText(g, name, x0 + cw / 2, y0 + ch * 0.8, Math.round(ch * 0.15), r, cw * 0.92);
+  chalkText(g, tr(name), x0 + cw / 2, y0 + ch * 0.8, Math.round(ch * 0.15), r, cw * 0.92);
   if (def.price) chalkText(g, String(def.price), x0 + cw / 2, y0 + ch * 0.94, Math.round(ch * 0.1), r, cw * 0.5);
 }
 

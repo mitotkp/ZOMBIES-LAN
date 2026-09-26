@@ -145,6 +145,14 @@ partiendo de la posición de su evento `respawn`.
    (Nigromante), gancho con el guantelete (Acorazado), zarpazo doble con chillido (Espectro) y mazazo con los
    dos puños (Tanque). Rugido al aparecer y cada 8-19 s (`makeRoar`: rugido, golpes en el pecho del Tanque,
    chillido del Espectro), resistencia a los impactos (`stagger`) y zancada proporcional al tamaño.
+28. [x] Idioma inglés. `public/js/i18n.js` (`tr(texto, ...args)`, `getLang`, `setLang`) con el diccionario
+   `public/js/lang/en.js` (clave = texto en español, `{0}` para variables; las plantillas también traducen textos ya
+   formateados que llegan del servidor, como «No tienes vendas.»). Selector en la pantalla de título y en Ajustes;
+   cambiar de idioma recarga la página (en partida pide confirmación). Idioma inicial: el del navegador.
+   Traducidos menús, HUD, avisos de interacción, pantallas de conexión, menús de respaldo, carteles del mapa
+   (`makeSign` traduce cada línea), pizarras de armas, máquinas de ventajas y nombres de curas, jefes y potenciadores.
+   El servidor sigue hablando en español (consola del anfitrión y mensajes, que traduce el cliente).
+   Para añadir un texto nuevo: escribirlo con `tr('...')` y añadir la clave a `en.js`.
 16. [x] Revisado: el zombi que quedaba en la ronda 1 de `bot-test` no está atascado. Los bots reparan la ventana
    que él arranca una y otra vez; en 150 s las rondas avanzan con normalidad.
 17. [ ] **Probar en un PC real con GPU**: FPS (objetivo 60 con 24 zombis), sombras y calidad baja, sonido
@@ -207,3 +215,4 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
 - **2026-09-26 (17)**: los dedos ya no atraviesan la empuñadura.
 - **2026-09-26 (18)**: modelos y animaciones nuevos de jefes y zombis especiales.
 - **2026-09-26 (19)**: zombi común rehecho (modelo, variantes, heridas, andares, ataques) y ataques/rugidos de los jefes.
+- **2026-09-26 (20)**: idioma inglés.

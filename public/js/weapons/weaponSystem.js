@@ -13,6 +13,7 @@ import { updateCamo } from './models.js';
 import { ViewModel, KNIFE_DUR, KNIFE_HIT, THROW_DUR, THROW_RELEASE, BASH_DUR, BASH_HIT, DRINK_DUR } from './viewmodel.js';
 import { Projectiles } from './projectiles.js';
 import { coneDir, traceBullet, meleeTargets, blockedBetween, MAX_RANGE } from './ballistics.js';
+import { tr } from '../i18n.js';
 
 const V3 = THREE.Vector3;
 const TRACER_DEFAULT = 0xffe0a0;
@@ -1156,7 +1157,7 @@ export class WeaponSystem {
     if (!item) {
       const meds = self.meds || {};
       const any = (meds.bandage | 0) + (meds.antidote | 0) + (meds.medkit | 0) > 0;
-      this._hud('message', !any ? 'No tienes curas' : self.infected ? 'Necesitas un antídoto o un botiquín' : 'Ya tienes la salud al máximo', 1.8);
+      this._hud('message', !any ? tr('No tienes curas') : self.infected ? tr('Necesitas un antídoto o un botiquín') : tr('Ya tienes la salud al máximo'), 1.8);
       this._play('deny', { volume: 0.6 });
       return;
     }

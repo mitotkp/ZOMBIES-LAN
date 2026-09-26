@@ -11,6 +11,7 @@ import { makeStub, FallbackMenus, FallbackHUD } from './fallback.js';
 import { GAME_TITLE, PLAYER_COLORS, CLIENT_SEND_RATE, ZOMBIE, clamp } from '/shared/constants.js';
 import { PLAYER_SPAWNS, PLAYER_SPAWN_YAW, MAP_NAME } from '/shared/map.js';
 import { r2, r3 } from '/shared/protocol.js';
+import { tr } from './i18n.js';
 
 const SETTINGS_KEY = 'zlan.settings';
 const PARAMS = new URLSearchParams(location.search);
@@ -55,6 +56,7 @@ function sanitizeSettings(s) {
   s.quality = s.quality === 'low' ? 'low' : 'high';
   s.invertY = !!s.invertY;
   s.brightness = num(s.brightness, d.brightness, 0.5, 2);
+  if (s.lang !== 'es' && s.lang !== 'en') delete s.lang;     // idioma (lo gestiona i18n.js)
   return s;
 }
 
@@ -65,7 +67,7 @@ function loadSettings() {
     if (raw) stored = JSON.parse(raw) || {};
   } catch { stored = {}; }
   const s = sanitizeSettings({ ...DEFAULT_SETTINGS, ...stored });
-  if (!s.name) s.name = `Jugador${Math.floor(10 + Math.random() * 90)}`;
+  if (!s.name) s.name = tr('Jugador{0}', Math.floor(10 + Math.random() * 90));
   return s;
 }
 
@@ -121,7 +123,7 @@ class CoreOverlays {
     this.statusBlocking = false;
 
     this.click = mk(`position:fixed;left:50%;top:58%;transform:translateX(-50%);z-index:30;display:none;pointer-events:none;padding:10px 22px;background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:18px;letter-spacing:1px;${font}`);
-    this.click.textContent = 'Haz clic para jugar';
+    this.click.textContent = tr('Haz clic para jugar');
 
     this.spectate = mk(`position:fixed;left:50%;top:11vh;transform:translateX(-50%);z-index:30;display:none;pointer-events:none;text-align:center;color:#eee;text-shadow:0 1px 4px #000;${font}`);
 
@@ -175,7 +177,7 @@ class CoreOverlays {
 
   fatal(title, text) {
     this.hideLoading();
-    this.showStatus(title, text, [{ label: 'Recargar', onClick: () => location.reload() }]);
+    this.showStatus(title, text, [{ label: tr('Recargar'), onClick: () => location.reload() }]);
   }
 
   // Cambia display/texto solo si difiere (evita tocar el DOM cada frame)
@@ -198,7 +200,7 @@ function escapeHtml(s) {
 async function boot() {
   window.__zlanBooted = true;
   const overlays = new CoreOverlays();
-  overlays.setLoading('Cargando…');
+  overlays.setLoading(tr('Cargando…'));
   document.title = GAME_TITLE;
 
   const settings = loadSettings();
@@ -214,7 +216,7 @@ async function boot() {
       stencil: false,
     });
   } catch (err) {
-    overlays.fatal('SIN WEBGL', 'Tu navegador o tu tarjeta gráfica no permiten WebGL.\nPrueba con Chrome, Edge o Firefox actualizados y con la aceleración por hardware activada.');
+    overlays.fatal(tr('SIN WEBGL'), tr('Tu navegador o tu tarjeta gráfica no permiten WebGL.\nPrueba con Chrome, Edge o Firefox actualizados y con la aceleración por hardware activada.'));
     throw err;
   }
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -287,7 +289,7 @@ async function boot() {
   }
 
   // ------------------------------------------------------------ carga y construcción de módulos
-  overlays.setLoading('Cargando módulos…');
+  overlays.setLoading(tr('Cargando módulos…'));
   const imported = await Promise.all(MODULES.map((m) => {
     if (m.local) return Promise.resolve(m.local);
     return import(m.path).then((mod) => {
@@ -315,7 +317,7 @@ async function boot() {
     ctx[m.key] = inst;
     if (m.key === 'world' && inst) {
       // El mapa es estático: se construye una sola vez antes de conectar
-      overlays.setLoading('Construyendo el mapa…');
+      overlays.setLoading(tr('Construyendo el mapa…'));
       await nextFrame();
       safe('world.build', () => inst.build());
     }
@@ -404,15 +406,15 @@ async function boot() {
 
   // ------------------------------------------------------------ conexión
   const KICK_TEXT = {
-    full: 'La partida está llena (máximo 4 jugadores).',
-    busy: 'La partida no admite jugadores en este momento.',
+    full: tr('La partida está llena (máximo 4 jugadores).'),
+    busy: tr('La partida no admite jugadores en este momento.'),
   };
 
   function showConnectError(title, text) {
     app.stage = 'disconnected';
     overlays.showStatus(title, text, [
-      { label: 'Reintentar', onClick: () => connectAndHello() },
-      { label: 'Volver al título', onClick: () => location.reload() },
+      { label: tr('Reintentar'), onClick: () => connectAndHello() },
+      { label: tr('Volver al título'), onClick: () => location.reload() },
     ]);
   }
 
@@ -421,7 +423,7 @@ async function boot() {
     app.connecting = true;
     app.stage = 'connecting';
     app.kickReason = null;
-    overlays.showStatus('CONECTANDO', `Conectando con ${location.host || 'el servidor'}…`, [], true);
+    overlays.showStatus(tr('CONECTANDO'), tr('Conectando con {0}…', location.host || 'el servidor'), [], true);
     // Sin estado anterior: el 'welcome' volverá a disparar el cambio de fase
     const prevGs = ctx.gs;
     ctx.gs = null;
@@ -434,14 +436,14 @@ async function boot() {
       app.welcomeTimer = setTimeout(() => {
         if (ctx.selfId === null && net.connected) {
           net.close();
-          showConnectError('SIN RESPUESTA', 'El servidor aceptó la conexión pero no respondió.\nComprueba que sea un servidor de ZOMBIES LAN.');
+          showConnectError(tr('SIN RESPUESTA'), tr('El servidor aceptó la conexión pero no respondió.\nComprueba que sea un servidor de ZOMBIES LAN.'));
         }
       }, WELCOME_TIMEOUT_MS);
     } catch (err) {
-      showConnectError('NO SE PUDO CONECTAR',
-        `No se pudo conectar con el servidor (${location.host || 'desconocido'}).\n` +
-        'Comprueba que el anfitrión tenga el servidor abierto, que estés en la misma red\n' +
-        'y que el firewall de Windows permita Node.js en redes privadas (puerto 3000).');
+      showConnectError(tr('NO SE PUDO CONECTAR'),
+        tr('No se pudo conectar con el servidor ({0}).\n', location.host || 'desconocido') +
+        tr('Comprueba que el anfitrión tenga el servidor abierto, que estés en la misma red\n') +
+        tr('y que el firewall de Windows permita Node.js en redes privadas (puerto 3000).'));
     } finally {
       app.connecting = false;
     }
@@ -450,7 +452,7 @@ async function boot() {
   function onJoin(name, color) {
     if (app.connecting) return;
     const n = typeof name === 'string' ? name.trim().slice(0, 16) : '';
-    app.joinName = n || settings.name || 'Jugador';
+    app.joinName = n || settings.name || tr('Jugador');
     app.joinColor = typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color) ? color : settings.color;
     settings.name = app.joinName;
     settings.color = app.joinColor;
@@ -475,9 +477,9 @@ async function boot() {
     releaseGameplay();
     if (app.kickReason) {
       const r = app.kickReason;
-      showConnectError('DESCONECTADO', KICK_TEXT[r] || `El servidor cerró la conexión: ${r}`);
+      showConnectError(tr('DESCONECTADO'), KICK_TEXT[r] || tr('El servidor cerró la conexión: {0}', r));
     } else {
-      showConnectError('CONEXIÓN PERDIDA', 'Se perdió la conexión con el servidor.\nPuede que el anfitrión haya cerrado la partida o que la red se haya caído.');
+      showConnectError(tr('CONEXIÓN PERDIDA'), tr('Se perdió la conexión con el servidor.\nPuede que el anfitrión haya cerrado la partida o que la red se haya caído.'));
     }
   });
 
@@ -662,18 +664,18 @@ async function boot() {
     const self = ctx.self;
     if (input.typing) app.lastTypingAt = performance.now();
     const needClick = playing && !DEBUG && !input.locked && !menusOpen() && !overlays.statusVisible && !input.typing;
-    overlays.toggle('click', needClick, self && self.state === 'dead' ? 'Haz clic para observar' : 'Haz clic para jugar');
+    overlays.toggle('click', needClick, self && self.state === 'dead' ? tr('Haz clic para observar') : tr('Haz clic para jugar'));
 
     let spec = null;
     if (playing && self && self.state === 'dead') {
       const pid = ctx.player && ctx.player.spectating;
       const target = pid !== null && pid !== undefined && ctx.gs.players ? ctx.gs.players[pid] : null;
       if (target) {
-        spec = `<div style="font-size:13px;letter-spacing:3px;color:#aaa">OBSERVANDO A</div>` +
+        spec = `<div style="font-size:13px;letter-spacing:3px;color:#aaa">${tr('OBSERVANDO A')}</div>` +
           `<div style="font-size:24px;font-weight:700;color:${escapeHtml(target.color || '#fff')}">${escapeHtml(target.name || 'Jugador')}</div>` +
-          `<div style="font-size:13px;color:#bbb;margin-top:4px">Clic para cambiar · Reaparecerás al comenzar la siguiente ronda</div>`;
+          `<div style="font-size:13px;color:#bbb;margin-top:4px">${tr('Clic para cambiar · Reaparecerás al comenzar la siguiente ronda')}</div>`;
       } else {
-        spec = '<div style="font-size:18px;color:#ddd">Esperando la siguiente ronda…</div>';
+        spec = `<div style="font-size:18px;color:#ddd">${tr('Esperando la siguiente ronda…')}</div>`;
       }
     }
     overlays.toggle('spectate', !!spec, spec || '');
@@ -754,6 +756,6 @@ boot().catch((err) => {
   console.error('[main] Error fatal al iniciar el juego:', err);
   const box = document.createElement('div');
   box.style.cssText = 'position:fixed;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;background:#000;color:#ddd;font:16px "Segoe UI",Tahoma,sans-serif;text-align:center;padding:20px;';
-  box.textContent = 'No se pudo iniciar el juego. Abre la consola del navegador (F12) para ver el detalle y recarga la página.';
+  box.textContent = tr('No se pudo iniciar el juego. Abre la consola del navegador (F12) para ver el detalle y recarga la página.');
   if (!document.querySelector('[data-zlan-fatal]')) { box.setAttribute('data-zlan-fatal', '1'); document.body.appendChild(box); }
 });

@@ -6,6 +6,7 @@
 
 import { PLAYER_COLORS, clamp } from '/shared/constants.js';
 import { MAP_NAME } from '/shared/map.js';
+import { tr } from './i18n.js';
 
 const noop = () => {};
 const soundHandle = () => ({ stop() {} });
@@ -110,13 +111,13 @@ export class FallbackMenus {
     const s = this.ctx.settings || {};
     const p = this._open('main');
     p.appendChild(el('h1', TITLE, 'ZOMBIES'));
-    p.appendChild(el('div', 'margin-bottom:18px;color:#aaa;letter-spacing:2px;', `Mapa: ${MAP_NAME}`));
-    p.appendChild(el('div', 'margin:6px 0 4px;color:#bbb;', 'Tu nombre'));
+    p.appendChild(el('div', 'margin-bottom:18px;color:#aaa;letter-spacing:2px;', tr('Mapa: {0}', MAP_NAME)));
+    p.appendChild(el('div', 'margin:6px 0 4px;color:#bbb;', tr('Tu nombre')));
     const name = el('input', 'width:220px;padding:8px;font-size:16px;background:#111;color:#fff;border:1px solid #444;text-align:center;');
     name.maxLength = 16;
     name.value = s.name || '';
     p.appendChild(name);
-    p.appendChild(el('div', 'margin:14px 0 6px;color:#bbb;', 'Color'));
+    p.appendChild(el('div', 'margin:14px 0 6px;color:#bbb;', tr('Color')));
     let color = PLAYER_COLORS.includes(s.color) ? s.color : PLAYER_COLORS[0];
     const row = el('div');
     const swatches = PLAYER_COLORS.map((c) => {
@@ -130,17 +131,17 @@ export class FallbackMenus {
     paint();
     p.appendChild(row);
     const go = () => {
-      const n = (name.value || '').trim().slice(0, 16) || 'Jugador';
+      const n = (name.value || '').trim().slice(0, 16) || tr('Jugador');
       if (typeof onJoin === 'function') onJoin(n, color);
     };
     name.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
     const b = el('div', 'margin-top:20px;');
-    b.appendChild(button('Unirse', go));
-    b.appendChild(button('Ajustes', () => this.showSettings(() => this.showMain(onJoin))));
+    b.appendChild(button(tr('Unirse'), go));
+    b.appendChild(button(tr('Ajustes'), () => this.showSettings(() => this.showMain(onJoin))));
     p.appendChild(b);
     p.appendChild(el('div', 'margin-top:16px;font-size:12px;color:#888;line-height:1.6;',
-      'WASD mover · Ratón mirar · Clic izq. disparar · Clic der. apuntar · Shift correr · C/Ctrl agacharse · Espacio saltar · ' +
-      'R recargar · F usar/comprar · V cuchillo · G granada · Q escudo · 1/2/3 o rueda cambiar de arma · Tab puntuaciones · T/Enter chat · Esc pausa'));
+      tr('WASD mover · Ratón mirar · Clic izq. disparar · Clic der. apuntar · Shift correr · C/Ctrl agacharse · Espacio saltar · ') +
+      tr('R recargar · F usar/comprar · V cuchillo · G granada · Q escudo · 1/2/3 o rueda cambiar de arma · Tab puntuaciones · T/Enter chat · Esc pausa')));
   }
 
   showLobby() {
@@ -157,42 +158,42 @@ export class FallbackMenus {
     if (sig === this._lobbySig && this.el.childElementCount) return;
     this._lobbySig = sig;
     const p = this._open('lobby');
-    p.appendChild(el('h1', TITLE.replace('64px', '40px'), 'SALA DE ESPERA'));
-    p.appendChild(el('div', 'margin-bottom:12px;color:#aaa;', `Mapa: ${MAP_NAME}`));
+    p.appendChild(el('h1', TITLE.replace('64px', '40px'), tr('SALA DE ESPERA')));
+    p.appendChild(el('div', 'margin-bottom:12px;color:#aaa;', tr('Mapa: {0}', MAP_NAME)));
     const list = el('div', 'text-align:left;margin:10px auto;max-width:320px;');
     const players = gs && gs.players ? Object.values(gs.players) : [];
     for (const pl of players) {
       const row = el('div', 'display:flex;justify-content:space-between;padding:6px 8px;border-bottom:1px solid #222;');
-      row.appendChild(el('span', `color:${pl.color || '#fff'};font-weight:600;`, `${pl.name || 'Jugador'}${pl.host ? ' (anfitrión)' : ''}`));
-      row.appendChild(el('span', `color:${pl.ready ? '#6f6' : '#999'};`, pl.ready ? 'LISTO' : 'esperando'));
+      row.appendChild(el('span', `color:${pl.color || '#fff'};font-weight:600;`, `${pl.name || tr('Jugador')}${pl.host ? ` (${tr('anfitrión')})` : ''}`));
+      row.appendChild(el('span', `color:${pl.ready ? '#6f6' : '#999'};`, pl.ready ? tr('LISTO') : tr('esperando')));
       list.appendChild(row);
     }
     p.appendChild(list);
     const self = ctx.self;
     if (self) this._ready = !!self.ready;
     const btns = el('div', 'margin-top:12px;');
-    btns.appendChild(button(this._ready ? 'No listo' : 'Listo', () => {
+    btns.appendChild(button(this._ready ? tr('No listo') : tr('Listo'), () => {
       this._ready = !this._ready;
       if (ctx.net) ctx.net.send({ t: 'ready', v: this._ready });
     }));
-    if (self && self.host) btns.appendChild(button('Iniciar partida', () => { if (ctx.net) ctx.net.send({ t: 'start' }); }));
+    if (self && self.host) btns.appendChild(button(tr('Iniciar partida'), () => { if (ctx.net) ctx.net.send({ t: 'start' }); }));
     p.appendChild(btns);
     if (Array.isArray(ctx.lan) && ctx.lan.length) {
-      p.appendChild(el('div', 'margin-top:16px;color:#bbb;', 'Comparte esta dirección con tus amigos:'));
+      p.appendChild(el('div', 'margin-top:16px;color:#bbb;', tr('Comparte esta dirección con tus amigos:')));
       for (const u of ctx.lan) p.appendChild(el('div', 'font:600 16px Consolas,monospace;color:#fc6;margin-top:4px;', u));
     }
-    if (!(self && self.host)) p.appendChild(el('div', 'margin-top:12px;font-size:13px;color:#888;', 'El anfitrión iniciará la partida.'));
+    if (!(self && self.host)) p.appendChild(el('div', 'margin-top:12px;font-size:13px;color:#888;', tr('El anfitrión iniciará la partida.')));
   }
 
   showGameOver(data) {
     const p = this._open('gameover');
     const round = data && data.round ? data.round : (this.ctx.gs && this.ctx.gs.round) || 0;
-    p.appendChild(el('h1', TITLE.replace('64px', '44px'), 'FIN DE LA PARTIDA'));
-    p.appendChild(el('div', 'font-size:20px;margin-bottom:14px;', `Sobreviviste ${round} ${round === 1 ? 'ronda' : 'rondas'}`));
+    p.appendChild(el('h1', TITLE.replace('64px', '44px'), tr('FIN DE LA PARTIDA')));
+    p.appendChild(el('div', 'font-size:20px;margin-bottom:14px;', (round === 1 ? tr('Sobreviviste {0} ronda', round) : tr('Sobreviviste {0} rondas', round))));
     const stats = data && Array.isArray(data.stats) ? data.stats : [];
     const t = el('table', 'margin:0 auto;border-collapse:collapse;font-size:14px;');
     const head = el('tr');
-    for (const h of ['Jugador', 'Puntos', 'Bajas', 'Cabezas', 'Caídas', 'Reanim.']) head.appendChild(el('th', 'padding:4px 10px;color:#c33;', h));
+    for (const h of [tr('Jugador'), tr('Puntos'), tr('Bajas'), tr('Cabezas'), tr('Caídas'), tr('Reanim.')]) head.appendChild(el('th', 'padding:4px 10px;color:#c33;', h));
     t.appendChild(head);
     for (const s of stats) {
       const r = el('tr');
@@ -201,7 +202,7 @@ export class FallbackMenus {
       t.appendChild(r);
     }
     p.appendChild(t);
-    p.appendChild(el('div', 'margin-top:14px;color:#888;font-size:13px;', 'Volviendo a la sala en unos segundos…'));
+    p.appendChild(el('div', 'margin-top:14px;color:#888;font-size:13px;', tr('Volviendo a la sala en unos segundos…')));
   }
 
   togglePause() {
@@ -214,12 +215,12 @@ export class FallbackMenus {
     if (!gs || gs.phase !== 'playing') return;
     if (this.ctx.input && this.ctx.input.exitLock) this.ctx.input.exitLock();
     const p = this._open('pause');
-    p.appendChild(el('h1', TITLE.replace('64px', '44px'), 'PAUSA'));
-    p.appendChild(el('div', 'color:#999;margin-bottom:12px;font-size:13px;', 'La partida sigue en marcha para los demás.'));
+    p.appendChild(el('h1', TITLE.replace('64px', '44px'), tr('PAUSA')));
+    p.appendChild(el('div', 'color:#999;margin-bottom:12px;font-size:13px;', tr('La partida sigue en marcha para los demás.')));
     const col = el('div', 'display:flex;flex-direction:column;align-items:center;');
-    col.appendChild(button('Continuar', () => this.togglePause()));
-    col.appendChild(button('Ajustes', () => this.showSettings(() => { this.mode = null; this.togglePause(); })));
-    col.appendChild(button('Salir al lobby', () => {
+    col.appendChild(button(tr('Continuar'), () => this.togglePause()));
+    col.appendChild(button(tr('Ajustes'), () => this.showSettings(() => { this.mode = null; this.togglePause(); })));
+    col.appendChild(button(tr('Salir al lobby'), () => {
       try { if (this.ctx.net) this.ctx.net.close(); } catch { /* nada */ }
       location.reload();
     }));
@@ -230,7 +231,7 @@ export class FallbackMenus {
     const ctx = this.ctx;
     const s = ctx.settings;
     const p = this._open('settings');
-    p.appendChild(el('h1', TITLE.replace('64px', '40px'), 'AJUSTES'));
+    p.appendChild(el('h1', TITLE.replace('64px', '40px'), tr('AJUSTES')));
     const grid = el('div', 'display:grid;grid-template-columns:auto 200px 50px;gap:10px 12px;align-items:center;text-align:left;margin:10px auto;');
     const emit = () => {
       if (ctx.saveSettings) ctx.saveSettings();
@@ -244,23 +245,23 @@ export class FallbackMenus {
       r.addEventListener('input', () => { s[key] = clamp(parseFloat(r.value), min, max); v.textContent = fmt(s[key]); emit(); });
       grid.appendChild(r); grid.appendChild(v);
     };
-    slider('Sensibilidad', 'sensitivity', 0.1, 4, 0.05, (x) => Number(x).toFixed(2));
-    slider('Campo de visión', 'fov', 60, 110, 1, (x) => String(Math.round(x)));
-    slider('Volumen', 'volume', 0, 1, 0.05, (x) => `${Math.round(x * 100)}%`);
-    slider('Música', 'music', 0, 1, 0.05, (x) => `${Math.round(x * 100)}%`);
-    grid.appendChild(el('label', '', 'Calidad'));
+    slider(tr('Sensibilidad'), 'sensitivity', 0.1, 4, 0.05, (x) => Number(x).toFixed(2));
+    slider(tr('Campo de visión'), 'fov', 60, 110, 1, (x) => String(Math.round(x)));
+    slider(tr('Volumen'), 'volume', 0, 1, 0.05, (x) => `${Math.round(x * 100)}%`);
+    slider(tr('Música'), 'music', 0, 1, 0.05, (x) => `${Math.round(x * 100)}%`);
+    grid.appendChild(el('label', '', tr('Calidad')));
     const q = el('select', 'background:#111;color:#fff;border:1px solid #444;padding:4px;');
-    for (const [val, txt] of [['high', 'Alta'], ['low', 'Baja']]) { const o = el('option', '', txt); o.value = val; q.appendChild(o); }
+    for (const [val, txt] of [['high', tr('Alta')], ['low', tr('Baja')]]) { const o = el('option', '', txt); o.value = val; q.appendChild(o); }
     q.value = s.quality === 'low' ? 'low' : 'high';
     q.addEventListener('change', () => { s.quality = q.value; emit(); });
     grid.appendChild(q); grid.appendChild(el('span'));
-    grid.appendChild(el('label', '', 'Invertir eje Y'));
+    grid.appendChild(el('label', '', tr('Invertir eje Y')));
     const inv = el('input');
     inv.type = 'checkbox'; inv.checked = !!s.invertY;
     inv.addEventListener('change', () => { s.invertY = inv.checked; emit(); });
     grid.appendChild(inv); grid.appendChild(el('span'));
     p.appendChild(grid);
-    p.appendChild(button('Volver', () => {
+    p.appendChild(button(tr('Volver'), () => {
       if (typeof onBack === 'function') onBack();
       else this.hideAll();
     }));
@@ -287,8 +288,8 @@ export class FallbackHUD {
     const ev = ctx && ctx.events;
     if (ev && ev.on) {
       ev.on('ev:msg', (e) => e && e.text && this.message(e.text));
-      ev.on('ev:roundStart', (e) => e && this.message(`Ronda ${e.round}`, 3));
-      ev.on('ev:deny', () => this.message('No puedes hacer eso ahora', 1.5));
+      ev.on('ev:roundStart', (e) => e && this.message(tr('Ronda {0}', e.round), 3));
+      ev.on('ev:deny', () => this.message(tr('No puedes hacer eso ahora'), 1.5));
     }
   }
 
@@ -300,13 +301,13 @@ export class FallbackHUD {
     if (!playing) return;
     const self = this.ctx.self;
     if (self) {
-      this.status.textContent = `RONDA ${gs.round || 0}\n${self.points || 0} puntos\nSalud ${Math.round(self.hp || 0)}/${self.maxHp || 100}`;
+      this.status.textContent = tr('RONDA {0}\n{1} puntos\nSalud {2}/{3}', gs.round || 0, self.points || 0, Math.round(self.hp || 0), self.maxHp || 100);
       this.status.style.color = self.color || '#fff';
     }
     const w = this.ctx.weapons;
     let info = null;
     try { info = w && typeof w.hudInfo === 'function' ? w.hudInfo() : null; } catch { info = null; }
-    this.ammo.textContent = info && info.name ? `${info.name}\n${info.mag} / ${info.reserve}\nGranadas: ${info.grenades}` : '';
+    this.ammo.textContent = info && info.name ? tr('{0}\n{1} / {2}\nGranadas: {3}', info.name, info.mag, info.reserve, info.grenades) : '';
   }
 
   setPrompt(text) {

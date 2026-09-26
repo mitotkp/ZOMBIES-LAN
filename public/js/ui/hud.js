@@ -7,14 +7,15 @@ import { POWERUP_INFO, PLAYER, MEDS, MED_KEYS, ZOMBIE_TYPES, angleDiff, yawTo, c
 import { weaponName, meleeStats } from '/shared/weapons.js';
 import { MAP_NAME, SHIELD_PARTS } from '/shared/map.js';
 import { esc, safeColor, mulberry32, serverNow, sfx, ensureChalkDefs, isDebugUrl } from './uiutil.js';
+import { tr } from '../i18n.js';
 
 const DENY_TEXT = {
-  points: 'No tienes suficientes puntos',
-  power: 'Se requiere electricidad',
-  limit: 'Solo puedes tener 4 ventajas',
-  full: 'Ya tienes el máximo',
-  busy: 'Está en uso, espera un momento',
-  owned: 'Ya lo tienes',
+  points: tr('No tienes suficientes puntos'),
+  power: tr('Se requiere electricidad'),
+  limit: tr('Solo puedes tener 4 ventajas'),
+  full: tr('Ya tienes el máximo'),
+  busy: tr('Está en uso, espera un momento'),
+  owned: tr('Ya lo tienes'),
 };
 
 const ICONS = {
@@ -48,8 +49,8 @@ const TEMPLATE = `
 <div class="hud-prompt"><div class="hud-prompt-text"></div><div class="hud-progress"><i></i></div></div>
 <div class="hud-reload"></div>
 <div class="hud-downpanel"><div class="dp-title"></div><div class="dp-sub"></div><div class="dp-bar"><i></i></div></div>
-<div class="hud-chat"><div class="chat-feed"></div><div class="chat-entry"><span class="chat-label">Decir:</span><input class="chat-input" type="text" maxlength="120" autocomplete="off" spellcheck="false"></div></div>
-<div class="hud-bl"><div class="hud-parts"></div><div class="hud-perks"></div><div class="hud-round"></div><div class="hud-health"><div class="hp-row"><span class="hp-label">Salud</span><span class="hp-num"></span><span class="hp-inf">Infectado</span></div><div class="hp-bar"><i class="hp-fill"></i><i class="hp-cap"></i></div><div class="hp-heal"><span class="hp-heal-t"></span><div class="hp-heal-bar"><i></i></div></div><div class="hud-meds"></div></div></div>
+<div class="hud-chat"><div class="chat-feed"></div><div class="chat-entry"><span class="chat-label">${tr('Decir:')}</span><input class="chat-input" type="text" maxlength="120" autocomplete="off" spellcheck="false"></div></div>
+<div class="hud-bl"><div class="hud-parts"></div><div class="hud-perks"></div><div class="hud-round"></div><div class="hud-health"><div class="hp-row"><span class="hp-label">${tr('Salud')}</span><span class="hp-num"></span><span class="hp-inf">${tr('Infectado')}</span></div><div class="hp-bar"><i class="hp-fill"></i><i class="hp-cap"></i></div><div class="hp-heal"><span class="hp-heal-t"></span><div class="hp-heal-bar"><i></i></div></div><div class="hud-meds"></div></div></div>
 <div class="hud-br">
   <div class="hud-scores"></div>
   <div class="hud-ammo">
@@ -69,7 +70,7 @@ const TEMPLATE = `
 
 // Texto con la tecla resaltada: "Pulsa F para..." -> "Pulsa [F] para..."
 function formatKeys(text) {
-  return esc(text).replace(/\b(Pulsa|Mantén|Mant&eacute;n)\s+([A-Z])\b/, '$1 <span class="key">$2</span>');
+  return esc(text).replace(/\b(Pulsa|Mantén|Mant&eacute;n|Press|Hold)\s+([A-Z])\b/, '$1 <span class="key">$2</span>');
 }
 
 // Marcas de conteo (1-5) o número de ronda, dibujados en SVG con trazo irregular de tiza.
@@ -289,7 +290,7 @@ export class HUD {
 
   _name(pid) {
     const p = this._player(pid);
-    return p && p.name ? String(p.name) : `Jugador ${pid}`;
+    return p && p.name ? String(p.name) : tr('Jugador {0}', pid);
   }
 
   _bindEvents() {
@@ -317,7 +318,7 @@ export class HUD {
 
     this._on('ev:pu', (e) => {
       const info = POWERUP_INFO[e.type];
-      if (info) this._showPowerupName(info.name);
+      if (info) this._showPowerupName(tr(info.name));
       if (e.type === 'nuke') this._flash('#fff8e0', 1.4);
       else this._flash('rgba(120,255,140,0.35)', 0.5);
     });
@@ -329,7 +330,7 @@ export class HUD {
         this.setScope(false);
       } else {
         const p = this._player(e.pid);
-        this._banner(`${this._name(e.pid)} ha caído`, '¡Reanímalo antes de que se desangre!', p && p.color);
+        this._banner(tr('{0} ha caído', this._name(e.pid)), tr('¡Reanímalo antes de que se desangre!'), p && p.color);
       }
     });
 
@@ -337,18 +338,18 @@ export class HUD {
       const self = this._isSelf(e.pid);
       if (self) {
         sfx(this.ctx, 'revive');
-        this.message(e.by == null ? 'Te has reanimado con Quick Revive' : `${this._name(e.by)} te ha reanimado`, 3);
+        this.message(e.by == null ? tr('Te has reanimado con Quick Revive') : tr('{0} te ha reanimado', this._name(e.by)), 3);
       } else if (this._isSelf(e.by)) {
         sfx(this.ctx, 'revive');
-        this.message(`Has reanimado a ${this._name(e.pid)}`, 3);
+        this.message(tr('Has reanimado a {0}', this._name(e.pid)), 3);
       } else {
-        this.message(e.by == null ? `${this._name(e.pid)} se ha reanimado` : `${this._name(e.by)} ha reanimado a ${this._name(e.pid)}`, 3);
+        this.message(e.by == null ? tr('{0} se ha reanimado', this._name(e.pid)) : tr('{0} ha reanimado a {1}', this._name(e.by), this._name(e.pid)), 3);
       }
     });
 
     this._on('ev:bleedout', (e) => {
-      if (this._isSelf(e.pid)) this._banner('Te has desangrado', 'Reaparecerás al comienzo de la próxima ronda', '#ff4040');
-      else this._banner(`${this._name(e.pid)} se ha desangrado`, 'Volverá en la próxima ronda', this._player(e.pid) && this._player(e.pid).color);
+      if (this._isSelf(e.pid)) this._banner(tr('Te has desangrado'), tr('Reaparecerás al comienzo de la próxima ronda'), '#ff4040');
+      else this._banner(tr('{0} se ha desangrado', this._name(e.pid)), tr('Volverá en la próxima ronda'), this._player(e.pid) && this._player(e.pid).color);
     });
 
     this._on('ev:respawn', (e) => {
@@ -362,9 +363,9 @@ export class HUD {
     this._on('ev:chat', (e) => this._addChat(e));
     this._on('ev:deny', (e) => {
       sfx(this.ctx, 'deny');
-      this.message(DENY_TEXT[e.reason] || 'No puedes hacer eso ahora', 2.2);
+      this.message(DENY_TEXT[e.reason] || tr('No puedes hacer eso ahora'), 2.2);
     });
-    this._on('ev:msg', (e) => { if (e.text) this.message(e.text, 3); });
+    this._on('ev:msg', (e) => { if (e.text) this.message(tr(e.text), 3); });
 
     this._on('local:damage', (e) => {
       this.damage(+e.fromX, +e.fromZ);
@@ -373,47 +374,47 @@ export class HUD {
       sfx(this.ctx, 'hurt');
     });
 
-    this._on('ev:power', () => this.message('¡Electricidad activada!', 3));
+    this._on('ev:power', () => this.message(tr('¡Electricidad activada!'), 3));
     this._on('ev:boss', (e) => {
       const T = ZOMBIE_TYPES[e.key] || {};
       this._flash('rgba(150,0,0,0.4)', 1);
-      this._banner(`Jefe: ${T.name || '???'}`, `Nivel ${e.level | 0} · ${T.desc || ''}`, '#ff3b30');
+      this._banner(tr('Jefe: {0}', T.name || '???'), tr('Nivel {0} · {1}', e.level | 0, T.desc || ''), '#ff3b30');
     });
     this._on('ev:bossDown', (e) => {
       const T = ZOMBIE_TYPES[e.key] || {};
-      this._banner(`¡${T.name || 'El jefe'} ha caído!`, e.pid != null ? `Lo remató ${this._name(e.pid)} · Busca el botiquín y el potenciador` : '', '#ffd23f');
+      this._banner(tr('¡{0} ha caído!', T.name || 'El jefe'), e.pid != null ? tr('Lo remató {0} · Busca el botiquín y el potenciador', this._name(e.pid)) : '', '#ffd23f');
     });
     this._on('ev:tank', () => {
       this._flash('rgba(120,0,0,0.35)', 0.8);
-      this._banner('¡Un Tanque se acerca!', 'Mucha vida y golpes brutales · Mantén la distancia', '#ff3b30');
+      this._banner(tr('¡Un Tanque se acerca!'), tr('Mucha vida y golpes brutales · Mantén la distancia'), '#ff3b30');
     });
     this._on('ev:infected', (e) => {
       if (!this._isSelf(e.pid)) return;
       this._flash('rgba(90,220,70,0.35)', 0.9);
-      this._banner('¡Estás infectado!', 'Pierdes salud poco a poco · Pulsa H para usar un antídoto o un botiquín', '#6fe04a');
+      this._banner(tr('¡Estás infectado!'), tr('Pierdes salud poco a poco · Pulsa H para usar un antídoto o un botiquín'), '#6fe04a');
     });
     this._on('ev:healed', (e) => {
       if (!this._isSelf(e.pid)) return;
       const def = MEDS[e.item];
       sfx(this.ctx, 'revive');
       this._flash('rgba(255,255,255,0.18)', 0.5);
-      if (def) this.message(def.cures ? `${def.name}: infección curada` : `${def.name}: +${def.heal} de salud`, 2);
+      if (def) this.message(def.cures ? tr('{0}: infección curada', def.name) : tr('{0}: +{1} de salud', def.name, def.heal), 2);
     });
     this._on('ev:itemPick', (e) => {
       if (!this._isSelf(e.pid)) return;
       const def = MEDS[e.type];
-      if (def) this.message(`Has recogido: ${def.name}`, 1.8);
+      if (def) this.message(tr('Has recogido: {0}', def.name), 1.8);
     });
-    this._on('ev:boxMove', () => this.message('La Caja Misteriosa se ha movido a otro lugar', 3.5));
+    this._on('ev:boxMove', () => this.message(tr('La Caja Misteriosa se ha movido a otro lugar'), 3.5));
     this._on('ev:part', (e) => {
       const part = SHIELD_PARTS.find((p) => p.id === +e.id);
       const gs = this.ctx.gs;
       const have = gs && gs.shield && Array.isArray(gs.shield.parts) ? gs.shield.parts.filter(Boolean).length : 0;
-      const who = this._isSelf(e.pid) ? 'Has recogido' : `${this._name(e.pid)} ha recogido`;
+      const who = this._isSelf(e.pid) ? tr('Has recogido') : tr('{0} ha recogido', this._name(e.pid));
       this.message(`${who}: ${part ? part.name : 'pieza del escudo'} (${Math.max(have, 1)}/3)`, 3);
     });
-    this._on('ev:built', (e) => this.message(this._isSelf(e.pid) ? 'Has construido el Escudo Antidisturbios' : `${this._name(e.pid)} ha construido el Escudo Antidisturbios`, 3));
-    this._on('ev:shieldBreak', (e) => { if (this._isSelf(e.pid)) this.message('¡Tu escudo se ha roto!', 2.5); });
+    this._on('ev:built', (e) => this.message(this._isSelf(e.pid) ? tr('Has construido el Escudo Antidisturbios') : tr('{0} ha construido el Escudo Antidisturbios', this._name(e.pid)), 3));
+    this._on('ev:shieldBreak', (e) => { if (this._isSelf(e.pid)) this.message(tr('¡Tu escudo se ha roto!'), 2.5); });
 
     this._on('ev:gameover', () => { this._closeChat(false); this.setScope(false); this.setPrompt(null); this.setProgress(null); });
 
@@ -595,7 +596,7 @@ export class HUD {
       const p = PERKS[k];
       const col = safeColor(p ? p.color : '#888888', '#888888');
       const fresh = prev.has(k) ? '' : ' fresh';
-      return `<div class="perk-icon${fresh}" style="--pk:${col}" title="${esc(p ? p.name : k)}"><span>${esc(p ? p.icon : k.slice(0, 2).toUpperCase())}</span></div>`;
+      return `<div class="perk-icon${fresh}" style="--pk:${col}" title="${esc(p ? tr(p.name) : k)}"><span>${esc(p ? p.icon : k.slice(0, 2).toUpperCase())}</span></div>`;
     }).join('');
   }
 
@@ -608,8 +609,8 @@ export class HUD {
     this._cache.parts = key;
     if (sh.built || !any) { this.el.parts.innerHTML = ''; this.el.parts.classList.remove('on'); return; }
     this.el.parts.classList.add('on');
-    this.el.parts.innerHTML = '<span class="parts-label">Escudo</span>' + SHIELD_PARTS.map((p, i) =>
-      `<span class="part-slot${parts[i] ? ' got' : ''}" title="${esc(p.name)}">${ICONS.part}</span>`).join('');
+    this.el.parts.innerHTML = `<span class="parts-label">${tr('Escudo')}</span>` + SHIELD_PARTS.map((p, i) =>
+      `<span class="part-slot${parts[i] ? ' got' : ''}" title="${esc(tr(p.name))}">${ICONS.part}</span>`).join('');
   }
 
   // ------------------------------------------------------------------ munición
@@ -643,7 +644,7 @@ export class HUD {
     const key = [info.name, info.up, info.mag, info.reserve, nades, shieldHp, info.shieldOut, info.lowAmmo, info.noAmmo, melee, self.state].join('|');
     if (this._cache.ammo === key) return info;
     this._cache.ammo = key;
-    el.amName.textContent = info.name || 'Sin arma';
+    el.amName.textContent = info.name ? tr(info.name) : tr('Sin arma');
     el.amName.classList.toggle('is-up', !!info.up);
     const hasGun = !!info.name && info.mag != null;
     el.amMag.textContent = num(info.mag);
@@ -662,7 +663,7 @@ export class HUD {
       el.amShieldBar.style.transform = `scaleX(${f.toFixed(3)})`;
       el.amShield.classList.toggle('low', f < 0.3);
     }
-    el.amMelee.innerHTML = melee && melee !== 'knife' ? `${ICONS.knife}<span>${esc(meleeStats(melee).name)}</span>` : '';
+    el.amMelee.innerHTML = melee && melee !== 'knife' ? `${ICONS.knife}<span>${esc(tr(meleeStats(melee).name))}</span>` : '';
     return info;
   }
 
@@ -671,15 +672,15 @@ export class HUD {
     if (info && self && self.state !== 'dead' && info.name && info.mag != null) {
       const w = this.ctx.weapons;
       const reloading = !!(w && w.isReloading);
-      if (info.noAmmo) hint = 'Sin munición';
-      else if (!reloading && (info.lowAmmo || info.mag === 0) && info.reserve > 0) hint = 'Pulsa R para recargar';
-      else if (!reloading && info.lowAmmo && info.reserve === 0) hint = 'Poca munición';
+      if (info.noAmmo) hint = tr('Sin munición');
+      else if (!reloading && (info.lowAmmo || info.mag === 0) && info.reserve > 0) hint = tr('Pulsa R para recargar');
+      else if (!reloading && info.lowAmmo && info.reserve === 0) hint = tr('Poca munición');
     }
     if (this._cache.reload === hint) return;
     this._cache.reload = hint;
     this.el.reload.innerHTML = hint ? formatKeys(hint) : '';
     this.el.reload.classList.toggle('on', !!hint);
-    this.el.reload.classList.toggle('warn', hint === 'Sin munición');
+    this.el.reload.classList.toggle('warn', hint === tr('Sin munición'));
   }
 
   // ------------------------------------------------------------------ potenciadores activos
@@ -773,7 +774,7 @@ export class HUD {
     this.el.bosses.innerHTML = list.map((b) => {
       const T = ZOMBIE_TYPES[b.key] || {};
       const f = clamp((+b.hp || 0) / Math.max(1, +b.maxHp || 1), 0, 1);
-      return `<div class="boss-row"><div class="boss-name">${esc(T.name || 'Jefe')} <span>Nivel ${b.level | 0}</span></div>`
+      return `<div class="boss-row"><div class="boss-name">${esc(tr(T.name || 'Jefe'))} <span>${tr('Nivel {0}', b.level | 0)}</span></div>`
         + `<div class="boss-bar"><i style="transform:scaleX(${f.toFixed(3)})"></i></div></div>`;
     }).join('');
   }
@@ -788,13 +789,13 @@ export class HUD {
     let main = '', sub = '', mode = '';
     if (gs.roundState === 'active' && gs.roundStartAt) {
       mode = 'active';
-      main = `Ronda ${gs.round} · ${fmt(now - gs.roundStartAt)}`;
+      main = tr('Ronda {0} · {1}', gs.round, fmt(now - gs.roundStartAt));
     } else if ((gs.roundState === 'pre' || gs.roundState === 'intermission') && gs.roundUntil) {
       mode = 'count';
       const left = gs.roundUntil - now;
       const secs = Math.max(0, Math.ceil(left / 1000));
-      main = `${gs.round > 0 ? 'Siguiente ronda' : 'La partida empieza'} en <b>${secs}</b>`;
-      if (gs.round > 0 && gs.lastRoundTime) sub = `Ronda ${gs.round} superada en ${fmt(gs.lastRoundTime)}`;
+      main = gs.round > 0 ? tr('Siguiente ronda en {0}', `<b>${secs}</b>`) : tr('La partida empieza en {0}', `<b>${secs}</b>`);
+      if (gs.round > 0 && gs.lastRoundTime) sub = tr('Ronda {0} superada en {1}', gs.round, fmt(gs.lastRoundTime));
       // aviso sonoro en los últimos 3 segundos
       if (secs > 0 && secs <= 3 && this._lastTick !== secs) { this._lastTick = secs; sfx(this.ctx, 'round_tick'); }
       if (secs > 3) this._lastTick = null;
@@ -838,7 +839,7 @@ export class HUD {
       c.meds = mkey;
       el.meds.innerHTML = MED_KEYS.map((k) => {
         const n = meds[k] | 0;
-        return `<span class="med ${n ? '' : 'none'}" style="--mc:${MEDS[k].color}"><i></i>${esc(MEDS[k].name)} <b>${n}</b></span>`;
+        return `<span class="med ${n ? '' : 'none'}" style="--mc:${MEDS[k].color}"><i></i>${esc(tr(MEDS[k].name))} <b>${n}</b></span>`;
       }).join('') + '<span class="med-key">H</span>';
     }
     // cura en curso
@@ -847,7 +848,7 @@ export class HUD {
     if (h) {
       const def = MEDS[h.item];
       const p = clamp(1 - ((+h.until || now) - now) / (def.useTime * 1000), 0, 1);
-      if (c.healT !== h.item) { c.healT = h.item; el.hpHealT.textContent = `Usando: ${def.name}`; }
+      if (c.healT !== h.item) { c.healT = h.item; el.hpHealT.textContent = tr('Usando: {0}', def.name); }
       el.hpHealBar.style.transform = `scaleX(${p.toFixed(3)})`;
     } else c.healT = null;
   }
@@ -934,7 +935,7 @@ export class HUD {
         const qr = Array.isArray(reviver.perks) && reviver.perks.includes('quickrevive');
         const total = PLAYER.reviveTime * (qr ? 0.5 : 1) * 1000;
         frac = clamp(1 - (self.reviveUntil - now) / total, 0, 1);
-        title = 'Te están reanimando';
+        title = tr('Te están reanimando');
         sub = String(reviver.name || '');
         kind = 'revive';
       } else if (self.selfReviveAt > 0) {
@@ -942,20 +943,20 @@ export class HUD {
         const rem = Math.max(0, self.selfReviveAt - now);
         frac = clamp(1 - rem / total, 0, 1);
         title = 'Quick Revive';
-        sub = `Te levantarás en ${Math.ceil(rem / 1000)} s`;
+        sub = tr('Te levantarás en {0} s', Math.ceil(rem / 1000));
         kind = 'qr';
       } else {
         const total = PLAYER.bleedoutTime * 1000;
         const rem = Math.max(0, (+self.bleedUntil || now) - now);
         frac = clamp(rem / total, 0, 1);
         const others = Object.values(gs.players || {}).filter((p) => !this._isSelf(p.id) && p.state === 'alive').length;
-        title = 'Has caído';
-        sub = others > 0 ? `Te desangras en ${Math.ceil(rem / 1000)} s · Espera a que un compañero te reanime` : `Te desangras en ${Math.ceil(rem / 1000)} s`;
+        title = tr('Has caído');
+        sub = others > 0 ? tr('Te desangras en {0} s · Espera a que un compañero te reanime', Math.ceil(rem / 1000)) : tr('Te desangras en {0} s', Math.ceil(rem / 1000));
         kind = 'bleed';
       }
     } else if (st === 'dead') {
-      title = 'Has muerto';
-      sub = 'Reaparecerás al comienzo de la próxima ronda · Modo espectador: haz clic para cambiar de jugador';
+      title = tr('Has muerto');
+      sub = tr('Reaparecerás al comienzo de la próxima ronda · Modo espectador: haz clic para cambiar de jugador');
       kind = 'dead';
     }
     const key = `${title}|${sub}|${kind}`;
@@ -1075,14 +1076,14 @@ export class HUD {
     const rows = players.map((p) => {
       const col = safeColor(p.color);
       const me = this._isSelf(p.id) ? ' me' : '';
-      const st = p.state === 'down' ? '<span class="sb-st down">caído</span>' : p.state === 'dead' ? '<span class="sb-st dead">muerto</span>' : '';
-      return `<tr class="sb-row${me}" style="--pc:${col}"><td class="sb-name"><i class="sb-dot"></i>${esc(p.name || 'Jugador')}${p.host ? '<span class="sb-host">anfitrión</span>' : ''}${st}</td>` +
+      const st = p.state === 'down' ? `<span class="sb-st down">${tr('caído')}</span>` : p.state === 'dead' ? `<span class="sb-st dead">${tr('muerto')}</span>` : '';
+      return `<tr class="sb-row${me}" style="--pc:${col}"><td class="sb-name"><i class="sb-dot"></i>${esc(p.name || tr('Jugador'))}${p.host ? `<span class="sb-host">${tr('anfitrión')}</span>` : ''}${st}</td>` +
         `<td>${(p.points | 0).toLocaleString('es')}</td><td>${p.kills | 0}</td><td>${p.headshots | 0}</td><td>${p.downs | 0}</td><td>${p.revives | 0}</td><td class="sb-ping">${Math.round(+p.ping || 0)} ms</td></tr>`;
     }).join('');
-    const zl = gs.zLeft != null ? `<span class="sb-zl">Zombis restantes: ${gs.zLeft | 0}</span>` : '';
+    const zl = gs.zLeft != null ? `<span class="sb-zl">${tr('Zombis restantes: {0}', gs.zLeft | 0)}</span>` : '';
     this.el.scoreboard.innerHTML = `
-      <div class="sb-head"><span class="sb-round">Ronda ${gs.round | 0}</span><span class="sb-map">${esc(MAP_NAME)}</span>${this.dev ? zl : ''}</div>
-      <table class="sb-table"><thead><tr><th>Jugador</th><th>Puntos</th><th>Bajas</th><th>A la cabeza</th><th>Caídas</th><th>Reanimaciones</th><th>Ping</th></tr></thead><tbody>${rows}</tbody></table>`;
+      <div class="sb-head"><span class="sb-round">${tr('Ronda {0}', gs.round | 0)}</span><span class="sb-map">${esc(tr(MAP_NAME))}</span>${this.dev ? zl : ''}</div>
+      <table class="sb-table"><thead><tr><th>${tr('Jugador')}</th><th>${tr('Puntos')}</th><th>${tr('Bajas')}</th><th>${tr('A la cabeza')}</th><th>${tr('Caídas')}</th><th>${tr('Reanimaciones')}</th><th>Ping</th></tr></thead><tbody>${rows}</tbody></table>`;
   }
 
   // ------------------------------------------------------------------ chat
@@ -1148,7 +1149,7 @@ export class HUD {
     }
     const tx = document.createElement('span');
     tx.className = 'chat-text';
-    tx.textContent = String(e.msg || '');
+    tx.textContent = sys ? tr(String(e.msg || '')) : String(e.msg || '');   // los avisos del servidor llegan en español
     line.appendChild(tx);
     this.el.chatFeed.appendChild(line);
     this.chatLines.push({ el: line, age: 0 });
@@ -1175,11 +1176,11 @@ export class HUD {
     if (this.dev || this.ctx.dev) parts.push('<b>DEV</b>');
     parts.push(`${this.fps} FPS`);
     if (gs && gs.phase === 'playing') {
-      parts.push(`Ronda ${gs.round | 0}`);
-      parts.push(`Zombis restantes: ${gs.zLeft | 0}`);
+      parts.push(tr('Ronda {0}', gs.round | 0));
+      parts.push(tr('Zombis restantes: {0}', gs.zLeft | 0));
       const ents = this.ctx.entities;
       if (ents && typeof ents.getZombieTargets === 'function') {
-        try { parts.push(`Visibles: ${ents.getZombieTargets().length}`); } catch { /* nada */ }
+        try { parts.push(tr('Visibles: {0}', ents.getZombieTargets().length)); } catch { /* nada */ }
       }
     }
     try { if (this.ctx.net && typeof this.ctx.net.rtt === 'number') parts.push(`RTT ${Math.round(this.ctx.net.rtt)} ms`); } catch { /* nada */ }

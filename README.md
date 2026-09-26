@@ -8,6 +8,9 @@ Mapa: **Pueblo Olvidado**, con Terminal, Calle, Bar, Almacén y Planta Eléctric
 Pack-a-Punch, 6 Perk-a-Colas, armas de pared, escudo construible y potenciadores.
 Todo el arte y el sonido se generan por código, así que no hace falta internet para jugar.
 
+> **English:** the game is available in Spanish and English. Choose the language with the *English / Español*
+> button on the title screen or in *Settings → Language*. The first time, it follows your browser's language.
+
 ## Requisitos
 
 - **Node.js 20 o superior** en el PC del anfitrión ([nodejs.org](https://nodejs.org)).
@@ -93,6 +96,9 @@ golpes) y, jugando solo, pegan un 30 % menos y tienen un 20 % menos de vida. Su 
 Además del Cuchillo Bowie, en las paredes hay (dibujos de tiza) un **bate con clavos** (Terminal, golpea a varios y los
 empuja), un **machete** (Almacén) y un **hacha de bombero** (Planta Eléctrica). Sustituyen al cuchillo en la tecla V.
 
+El juego está en **español e inglés**: cambia el idioma con el botón *English / Español* de la pantalla de título o en
+*Ajustes → Idioma* (la página se recarga). La primera vez usa el idioma del navegador.
+
 Si lo ves muy oscuro, sube el **Brillo** en *Ajustes* (menú de pausa con Esc) o enciende la linterna con **L**.
 
 ### Controles
@@ -124,6 +130,10 @@ Si lo ves muy oscuro, sube el **Brillo** en *Ajustes* (menú de pausa con Esc) o
   Atajos: F disparar, R recargar, V cuerpo a cuerpo, G granada, H venda, J botiquín, Q escudo, espacio congelar.
 - `npm run validate-map`: comprueba el mapa.
 - `npm run bots -- --bots 2 --seconds 120 --url ws://localhost:3000`: prueba automática del servidor con bots.
+
+Traducciones: `public/js/i18n.js` + `public/js/lang/en.js`. El texto fuente es el español: en el código se escribe
+`tr('Texto en español')` (o `tr('{0} ha caído', nombre)` con variables) y la traducción se añade a `en.js` con esa
+misma clave. Los mensajes del servidor se envían en español y el cliente los traduce con esas plantillas.
 
 Estructura: `server/` (servidor autoritativo: reglas, zombis, rondas), `shared/` (mapa, armas, constantes y
 protocolo, compartidos con el cliente) y `public/` (cliente Three.js sin empaquetador: módulos ES nativos).

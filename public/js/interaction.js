@@ -5,6 +5,7 @@ import { INTERACTABLES, DOORS, SHIELD_PARTS } from '/shared/map.js';
 import { WEAPONS, weaponName, ammoPrice } from '/shared/weapons.js';
 import { PERKS, PERK_LIMIT, perkPrice } from '/shared/perks.js';
 import { PLAYER, BOX, PAP, SHIELD, MELEE, MEDS, REPAIR_TIME, BOARDS_PER_WINDOW, clamp } from '/shared/constants.js';
+import { tr } from './i18n.js';
 
 const LOOK_ANGLE = (70 * Math.PI) / 180;   // puertas y armas de pared: hay que mirarlas
 const ANGLE_WEIGHT = 0.35;                  // desempate por ángulo entre objetivos casi equidistantes
@@ -116,7 +117,7 @@ export class Interaction {
         bestRD = d;
         bestRevive = {
           id: `revive:${pid}`, kind: 'revive', mode: 'hold', pid,
-          text: `Mantén F para reanimar a ${pl.name || 'tu compañero'}`,
+          text: tr('Mantén F para reanimar a {0}', pl.name || 'tu compañero'),
         };
       }
     }
@@ -182,8 +183,8 @@ export class Interaction {
         const d = DOOR_BY_ID[it.door];
         const cost = d ? d.cost : 0;
         const text = d && d.kind === 'debris'
-          ? `Pulsa F para despejar los escombros [Costo: ${cost}]`
-          : `Pulsa F para abrir la puerta [Costo: ${cost}]`;
+          ? tr('Pulsa F para despejar los escombros [Costo: {0}]', cost)
+          : tr('Pulsa F para abrir la puerta [Costo: {0}]', cost);
         return { ...base, mode: 'use', text, cost };
       }
       case 'wallbuy': {
@@ -193,16 +194,16 @@ export class Interaction {
         if (key === 'bowie' || def.melee) {
           if (self.melee === key) return null;
           const cost = def.price || MELEE.bowiePrice;
-          return { ...base, mode: 'use', text: `Pulsa F para comprar el ${def.name} [Costo: ${cost}]`, cost };
+          return { ...base, mode: 'use', text: tr('Pulsa F para comprar el {0} [Costo: {1}]', def.name, cost), cost };
         }
         const owned = (Array.isArray(self.weapons) ? self.weapons : []).find((w) => w && w.k === key);
         if (!owned) {
-          return { ...base, mode: 'use', text: `Pulsa F para comprar ${def.name} [Costo: ${def.price}]`, cost: def.price || 0 };
+          return { ...base, mode: 'use', text: tr('Pulsa F para comprar {0} [Costo: {1}]', def.name, def.price), cost: def.price || 0 };
         }
         const cost = ammoPrice(key, !!owned.up);
         const text = owned.up
-          ? `Pulsa F para comprar munición mejorada [Costo: ${cost}]`
-          : `Pulsa F para comprar munición [Costo: ${cost}]`;
+          ? tr('Pulsa F para comprar munición mejorada [Costo: {0}]', cost)
+          : tr('Pulsa F para comprar munición [Costo: {0}]', cost);
         return { ...base, mode: 'use', text, cost };
       }
       case 'perk': {
@@ -210,16 +211,16 @@ export class Interaction {
         if (!perk) return null;
         const perks = Array.isArray(self.perks) ? self.perks : [];
         if (perks.includes(it.perk)) return null;
-        if (!gs.power) return { ...base, mode: 'info', text: 'Se requiere electricidad' };
+        if (!gs.power) return { ...base, mode: 'info', text: tr('Se requiere electricidad') };
         const nPlayers = Object.keys(gs.players || {}).length;
         if (it.perk === 'quickrevive' && nPlayers <= 1 && (self.qrUses || 0) >= PLAYER.soloQuickReviveUses) return null;
-        if (perks.length >= PERK_LIMIT) return { ...base, mode: 'info', text: `Solo puedes tener ${PERK_LIMIT} ventajas` };
+        if (perks.length >= PERK_LIMIT) return { ...base, mode: 'info', text: tr('Solo puedes tener {0} ventajas', PERK_LIMIT) };
         const cost = perkPrice(it.perk, nPlayers);
-        return { ...base, mode: 'use', text: `Pulsa F para comprar ${perk.name} [Costo: ${cost}]`, cost };
+        return { ...base, mode: 'use', text: tr('Pulsa F para comprar {0} [Costo: {1}]', perk.name, cost), cost };
       }
       case 'power': {
         if (gs.power) return null;
-        return { ...base, mode: 'use', text: 'Pulsa F para activar la electricidad' };
+        return { ...base, mode: 'use', text: tr('Pulsa F para activar la electricidad') };
       }
       case 'box': {
         const slots = gs.box && Array.isArray(gs.box.slots) ? gs.box.slots : null;
@@ -227,25 +228,25 @@ export class Interaction {
         if (!slot) return null;
         if (slot.state === 'idle') {
           const cost = this._fireSale(gs) ? BOX.fireSalePrice : BOX.price;
-          return { ...base, mode: 'use', text: `Pulsa F para abrir la Caja Misteriosa [Costo: ${cost}]`, cost };
+          return { ...base, mode: 'use', text: tr('Pulsa F para abrir la Caja Misteriosa [Costo: {0}]', cost), cost };
         }
         if (slot.state === 'ready' && sameId(slot.user, this.ctx.selfId) && slot.weapon) {
-          return { ...base, mode: 'use', text: `Pulsa F para tomar ${weaponName(slot.weapon)}` };
+          return { ...base, mode: 'use', text: tr('Pulsa F para tomar {0}', weaponName(slot.weapon)) };
         }
         return null;
       }
       case 'pap': {
         const pap = gs.pap || {};
-        if (!gs.power) return { ...base, mode: 'info', text: 'Se requiere electricidad' };
+        if (!gs.power) return { ...base, mode: 'info', text: tr('Se requiere electricidad') };
         if (pap.state === 'ready' && sameId(pap.user, this.ctx.selfId) && pap.weapon) {
-          return { ...base, mode: 'use', text: `Pulsa F para tomar ${weaponName(pap.weapon, true)}` };
+          return { ...base, mode: 'use', text: tr('Pulsa F para tomar {0}', weaponName(pap.weapon, true)) };
         }
         if (!pap.state || pap.state === 'idle') {
           const cur = this._currentWeapon(self);
           if (!cur || cur.up) return null;
           const def = WEAPONS[cur.k];
           if (!def || !def.pap) return null;
-          return { ...base, mode: 'use', text: `Pulsa F para mejorar tu arma [Costo: ${PAP.price}]`, cost: PAP.price };
+          return { ...base, mode: 'use', text: tr('Pulsa F para mejorar tu arma [Costo: {0}]', PAP.price), cost: PAP.price };
         }
         return null;
       }
@@ -253,30 +254,30 @@ export class Interaction {
         const def = MEDS[it.item];
         if (!def) return null;
         const have = self.meds ? (self.meds[it.item] | 0) : 0;
-        if (have >= def.max) return { ...base, mode: 'info', text: `Ya llevas el máximo de ${def.plural.toLowerCase()} (${def.max})` };
-        const what = def.pack > 1 ? `${def.plural} x${def.pack}` : def.name;
-        return { ...base, mode: 'use', text: `Pulsa F para comprar: ${what} [Costo: ${def.price}]`, cost: def.price };
+        if (have >= def.max) return { ...base, mode: 'info', text: tr('Ya llevas el máximo de {0} ({1})', tr(def.plural).toLowerCase(), def.max) };
+        const what = def.pack > 1 ? `${tr(def.plural)} x${def.pack}` : tr(def.name);
+        return { ...base, mode: 'use', text: tr('Pulsa F para comprar: {0} [Costo: {1}]', what, def.price), cost: def.price };
       }
       case 'part': {
         const parts = gs.shield && Array.isArray(gs.shield.parts) ? gs.shield.parts : null;
         if (!parts || parts[it.part]) return null;
-        return { ...base, mode: 'use', text: `Pulsa F para recoger: ${PART_NAME[it.part] || 'pieza del escudo'}` };
+        return { ...base, mode: 'use', text: tr('Pulsa F para recoger: {0}', PART_NAME[it.part] || 'pieza del escudo') };
       }
       case 'bench': {
         const sh = gs.shield || {};
         const parts = Array.isArray(sh.parts) ? sh.parts : [];
         const n = parts.filter(Boolean).length;
         if (!sh.built) {
-          if (n < SHIELD.parts) return { ...base, mode: 'info', text: `Faltan piezas del escudo (${n}/${SHIELD.parts})` };
-          return { ...base, mode: 'hold', text: 'Mantén F para construir el Escudo Antidisturbios' };
+          if (n < SHIELD.parts) return { ...base, mode: 'info', text: tr('Faltan piezas del escudo ({0}/{1})', n, SHIELD.parts) };
+          return { ...base, mode: 'hold', text: tr('Mantén F para construir el Escudo Antidisturbios') };
         }
         if (self.shield) return null;
-        return { ...base, mode: 'use', text: 'Pulsa F para tomar el Escudo Antidisturbios' };
+        return { ...base, mode: 'use', text: tr('Pulsa F para tomar el Escudo Antidisturbios') };
       }
       case 'window': {
         const n = Array.isArray(gs.windows) ? gs.windows[it.window] : undefined;
         if (typeof n !== 'number' || n >= BOARDS_PER_WINDOW) return null;
-        return { ...base, mode: 'hold', text: 'Mantén F para reconstruir la barricada' };
+        return { ...base, mode: 'hold', text: tr('Mantén F para reconstruir la barricada') };
       }
       default:
         return null;
@@ -294,7 +295,7 @@ export class Interaction {
   // ------------------------------------------------------------------ acciones
   _doUse(target, self) {
     if (target.cost > 0 && (Number(self.points) || 0) < target.cost) {
-      this._deny('No tienes suficientes puntos');
+      this._deny(tr('No tienes suficientes puntos'));
       return;
     }
     const t = nowMs();
