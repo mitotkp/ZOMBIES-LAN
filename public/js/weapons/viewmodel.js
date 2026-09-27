@@ -20,6 +20,24 @@ export const BASH_HIT = 0.12;
 export const SHIELD_TOGGLE = 0.3;
 export const DRINK_DUR = 1.6;
 
+const ADS_MIN_RELIEF = 0.32;   // m entre el ojo y la mira de hierro al apuntar
+// Retroceso del arma en pantalla por arquetipo: golpe hacia atrás (z), cabeceo (rx), subida (y), giro aleatorio (rz)
+// y temblor (jit, para automáticas). Se aplica como impulso a un muelle que se pasa un poco y se asienta.
+const VM_RECOIL = {
+  pistol: { z: 0.8, rx: 1.35, y: 0.5, rz: 0.5, jit: 0 },
+  revolver: { z: 1.1, rx: 2.1, y: 0.8, rz: 0.6, jit: 0 },
+  raygun: { z: 0.7, rx: 1.0, y: 0.4, rz: 0.4, jit: 0 },
+  smg: { z: 0.55, rx: 0.5, y: 0.2, rz: 0.35, jit: 1 },
+  raygun2: { z: 0.6, rx: 0.6, y: 0.25, rz: 0.35, jit: 0.6 },
+  rifle: { z: 0.75, rx: 0.75, y: 0.25, rz: 0.4, jit: 0.7 },
+  lmg: { z: 0.85, rx: 0.65, y: 0.25, rz: 0.45, jit: 1.1 },
+  shotgun: { z: 1.6, rx: 2.2, y: 0.7, rz: 0.7, jit: 0 },
+  doublebarrel: { z: 1.8, rx: 2.5, y: 0.8, rz: 0.8, jit: 0 },
+  sniper: { z: 1.8, rx: 2.6, y: 0.9, rz: 0.6, jit: 0 },
+  launcher: { z: 1.7, rx: 1.8, y: 0.9, rz: 0.5, jit: 0 },
+};
+const SPRING_K = 240, SPRING_C = 17;     // muelle del retroceso (subamortiguado: pequeño rebote)
+const backOut = (u) => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * (u - 1) ** 3 + c1 * (u - 1) ** 2; };
 const PI = Math.PI;
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -410,6 +428,10 @@ export class ViewModel {
     this.bashT = -1;
     this.shieldTarget = false; this.shieldBlend = 0; this.shieldJolt = 0;
     this.kickZ = 0; this.kickRx = 0; this.kickRz = 0; this.kickZt = 0; this.kickRxt = 0; this.kickRzt = 0;
+    // muelles del retroceso: posición (p) y velocidad (v) por canal
+    this.rp = { z: 0, rx: 0, y: 0, rz: 0, ry: 0 };
+    this.rv = { z: 0, rx: 0, y: 0, rz: 0, ry: 0 };
+    this.strafeS = 0; this.slideS = 0;
     this.slideShot = 0;
     this.flashT = 0;
     this.flash.visible = false;
@@ -489,10 +511,15 @@ export class ViewModel {
 
   // Efectos visuales de un disparo
   fire({ kick = 1, flash = 1, color = 0xffc070, slide = true, noFlash = false } = {}) {
-    const k = kick * (1 - this.adsBlend * 0.45);
-    this.kickZt = Math.min(0.09, this.kickZt + 0.028 * k);
-    this.kickRxt = Math.min(0.3, this.kickRxt + 0.05 * k);
-    this.kickRzt += (Math.random() - 0.5) * 0.05 * k;
+    const k = kick * (1 - this.adsBlend * 0.5);
+    const P = VM_RECOIL[this.model] || VM_RECOIL.rifle;
+    const v = this.rv, rnd = () => Math.random() * 2 - 1;
+    v.z += 0.75 * P.z * k * (0.9 + Math.random() * 0.2);
+    v.rx += 1.35 * P.rx * k * (0.85 + Math.random() * 0.3);
+    v.y += 0.22 * P.y * k;
+    v.rz += 0.9 * P.rz * k * rnd();
+    v.ry += 0.35 * P.rz * k * rnd();
+    if (P.jit) { v.z += 0.15 * P.jit * k * rnd(); v.rx += 0.3 * P.jit * k * rnd(); }
     if (slide) this.slideShot = 1;
     if (!noFlash && this.mounted) {
       this.flashT = 0.05;
@@ -559,7 +586,7 @@ export class ViewModel {
     return out;
   }
 
-  // s: { visible, hide, ads, sprint, speed01, onGround, crouch, down, yaw, pitch, velY,
+  // s: { visible, hide, ads, sprint, speed01, onGround, crouch, down, yaw, pitch, velY, strafe (-1..1), slide,
   //      reload: { style, p, wasEmpty } | { style:'shell', tilt, shell, pump } | null,
   //      cycle: { style:'pump'|'bolt', p } | null, slideLocked, shieldOut }
   update(dt, s = {}) {
@@ -637,7 +664,9 @@ export class ViewModel {
     let px = hip[0], py = hip[1], pz = hip[2], rx = 0, ry = oneHand ? 0.14 : 0.035, rz = 0;
     if (this.ud && adsE > 0) {
       const sg = this.ud.sight;
-      const ax = -sg.x, ay = -sg.y, az = -this.ud.eyeRelief - sg.z;
+      // Distancia mínima del ojo a la mira: más cerca, el cajón y la culata tapan media pantalla
+      const relief = model === 'sniper' ? this.ud.eyeRelief : Math.max(this.ud.eyeRelief, ADS_MIN_RELIEF);
+      const ax = -sg.x, ay = -sg.y, az = -relief - sg.z;
       px += (ax - px) * adsE; py += (ay - py) * adsE; pz += (az - pz) * adsE;
       ry *= 1 - adsE;
     }
@@ -649,6 +678,13 @@ export class ViewModel {
     if (dn > 0.001) { px -= 0.01 * dn; py -= 0.03 * dn; pz += 0.02 * dn; rx += 0.05 * dn; ry += 0.05 * dn; rz += 0.14 * dn; }
     const cr = this.crouchBlend * (1 - adsE);
     py -= 0.008 * cr; rz += 0.03 * cr;
+    // de lado: el arma se inclina hacia donde vas; deslizándose: se ladea y baja
+    this.strafeS = damp(this.strafeS, clamp01(Math.abs(s.strafe || 0)) * Math.sign(s.strafe || 0), 7, dt);
+    this.slideS = damp(this.slideS, s.slide ? 1 : 0, 10, dt);
+    const noAds = 1 - adsE * 0.8;
+    rz -= 0.07 * this.strafeS * noAds; px += 0.008 * this.strafeS * noAds;
+    const sl = this.slideS * (1 - adsE * 0.6);
+    rz += 0.4 * sl; ry += 0.12 * sl; px -= 0.035 * sl; py -= 0.025 * sl; rx += 0.08 * sl;
     this.pose.position.set(px, py, pz);
     this.pose.rotation.set(rx, ry, rz);
 
@@ -686,17 +722,27 @@ export class ViewModel {
     this.landDip = Math.max(0, this.landDip - dt * 4);
     const jumpY = Math.max(-0.03, Math.min(0.03, -this.velYs * 0.005)) - Math.sin(this.landDip * PI) * 0.02 * (1 - adsE * 0.7);
     this.sway.position.set(bx + brx + this.swayX, by + bry + this.swayY + jumpY, 0);
-    this.sway.rotation.set(this.swayY * 1.2, -this.swayX * 1.5, broll + this.swayRoll);
+    // al correr el arma va más suelta: cabecea y gira con cada zancada
+    const sprB = this.sprintBlend * (1 - adsE) * this.bobAmt;
+    const sprRx = Math.sin(this.bobPhase * 2) * 0.035 * sprB, sprRy = Math.sin(this.bobPhase) * 0.07 * sprB;
+    this.sway.rotation.set(this.swayY * 1.2 + sprRx, -this.swayX * 1.5 + sprRy, broll + this.swayRoll);
 
     // ---------------- retroceso (muelle rápido)
-    const dec = Math.exp(-dt * 9);
-    this.kickZt *= dec; this.kickRxt *= dec; this.kickRzt *= dec;
-    const fk = 1 - Math.exp(-dt * 38);
-    this.kickZ += (this.kickZt - this.kickZ) * fk;
-    this.kickRx += (this.kickRxt - this.kickRx) * fk;
-    this.kickRz += (this.kickRzt - this.kickRz) * fk;
-    this.kick.position.set(0, this.kickRx * 0.04, this.kickZ);
-    this.kick.rotation.set(this.kickRx * (1 - adsE * 0.6), 0, this.kickRz);
+    {
+      const rp = this.rp, rv = this.rv;
+      const steps = Math.max(1, Math.ceil(dt / (1 / 240)));   // integración estable aunque bajen los FPS
+      const h = dt / steps;
+      for (let i = 0; i < steps; i++) {
+        for (const c in rp) {
+          rv[c] += (-SPRING_K * rp[c] - SPRING_C * rv[c]) * h;
+          rp[c] += rv[c] * h;
+        }
+      }
+      rp.z = Math.min(0.11, rp.z); rp.rx = Math.min(0.4, rp.rx);
+      this.kickZ = rp.z; this.kickRx = rp.rx; this.kickRz = rp.rz;
+      this.kick.position.set(0, rp.y + rp.rx * 0.03, rp.z);
+      this.kick.rotation.set(rp.rx * (1 - adsE * 0.6), rp.ry, rp.rz);
+    }
     this.slideShot = Math.max(0, this.slideShot - dt / 0.07);
 
     // ---------------- animaciones de recarga, ciclo y bajar el arma
@@ -708,12 +754,17 @@ export class ViewModel {
     if (s.reload && this.ud) this._reloadPose(s.reload, R);
     if (s.cycle && this.ud) this._cyclePose(s.cycle, R);
     const lower = smooth(Math.max(this.switchLower, this.actionLower, s.visible ? 0 : 1));
+    // al subir el arma nueva entra girando desde abajo a la derecha y se pasa un poco (rebote)
+    const raising = this.switchState === 'raising';
+    const sw = raising ? 1 - backOut(1 - this.switchLower) : smooth(this.switchLower);
+    const twist = Math.max(0, sw) * (raising ? 1 : 0.6);
     // suavizado para que cancelar una recarga no provoque saltos
     const A = this._animS;
     A.px = damp(A.px, R.px, 22, dt); A.py = damp(A.py, R.py, 22, dt); A.pz = damp(A.pz, R.pz, 22, dt);
     A.rx = damp(A.rx, R.rx, 22, dt); A.ry = damp(A.ry, R.ry, 22, dt); A.rz = damp(A.rz, R.rz, 22, dt);
-    this.anim.position.set(A.px - 0.03 * lower, A.py - 0.32 * lower, A.pz + 0.05 * lower);
-    this.anim.rotation.set(A.rx - 0.7 * lower, A.ry, A.rz - 0.25 * lower);
+    const over = raising ? Math.min(0, sw) : 0;           // tramo del rebote (negativo = por encima del reposo)
+    this.anim.position.set(A.px - 0.03 * lower + 0.06 * twist, A.py - 0.32 * lower - 0.05 * over, A.pz + 0.05 * lower);
+    this.anim.rotation.set(A.rx - 0.7 * lower - 0.35 * over, A.ry + 0.35 * twist, A.rz - 0.25 * lower - 0.55 * twist);
     this.holder.visible = lower < 0.995;
 
     // piezas animadas del arma

@@ -964,6 +964,12 @@ export class WeaponSystem {
     s.yaw = player && Number.isFinite(player.yaw) ? player.yaw : 0;
     s.pitch = player && Number.isFinite(player.pitch) ? player.pitch : 0;
     s.velY = player && player.velocity ? player.velocity.y : 0;
+    // velocidad lateral relativa a la vista (derecha = +)
+    if (player && player.velocity) {
+      const cy = Math.cos(s.yaw), sy = Math.sin(s.yaw);
+      s.strafe = (player.velocity.x * cy - player.velocity.z * sy) / 4.6;
+    } else s.strafe = 0;
+    s.slide = !!(player && player.isSliding);
     s.reload = this._reloadAnim();
     if (this.cycle) {
       this._cs.style = this.cycle.style;

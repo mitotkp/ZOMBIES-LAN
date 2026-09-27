@@ -1,7 +1,7 @@
 // Barreras con estado: puertas/escombros comprables y ventanas con barricada de 6 tablas.
 // El aspecto se deriva de gs (gs.doors, gs.windows); los eventos solo animan.
 import * as THREE from 'three';
-import { DOORS, WINDOW_INFO } from '/shared/map.js';
+import { DOORS, WINDOW_INFO, MAP } from '/shared/map.js';
 import { BOARDS_PER_WINDOW } from '/shared/constants.js';
 import { StaticBatch, sfx, fx, easeOutBack, easeInOut, TAU } from './kit.js';
 import { getTex, doorPriceTexture, makeRng } from './textures.js';
@@ -43,7 +43,43 @@ export class Doors {
     // Parte móvil (se construye como grupo propio con materiales compartidos)
     const lb = new StaticBatch(this.world.mats);
     const P = lb.at(0, 0, 0, 0);
-    if (d.kind === 'door') {
+    const base = MAP.baseY(d.lv || 0);
+    const castle = MAP.theme === 'castillo';
+    if (d.kind === 'sealed') {
+      // puerta de piedra sellada con runas (la abre el easter egg)
+      const w = span - 0.04, h = DOOR_H + 0.4;
+      P.box('c_ashlar_dark', w, h, 0.4, 0, h / 2, 0, {});
+      P.box('c_iron', w + 0.2, 0.25, 0.5, 0, h + 0.1, 0, {});
+      for (const s of [-1, 1]) for (let k = 0; k < 5; k++) {
+        P.box('c_telepad', 0.08, 0.3 + r() * 0.3, 0.02, (k - 2) * (w / 5), 0.6 + r() * 1.8, s * 0.21, { rz: (r() - 0.5) * 0.8 });
+      }
+      P.cyl('c_telepad', 0.35, 0.35, 0.02, 0, h * 0.55, 0.21, { rx: Math.PI / 2, seg: 24 });
+      P.cyl('c_telepad', 0.35, 0.35, 0.02, 0, h * 0.55, -0.21, { rx: Math.PI / 2, seg: 24 });
+    } else if (d.kind === 'gate') {
+      // reja de hierro forjado con puntas
+      const w = span - 0.04, h = DOOR_H;
+      P.box('c_iron', w, 0.08, 0.08, 0, 0.12, 0, {});
+      P.box('c_iron', w, 0.08, 0.08, 0, h - 0.3, 0, {});
+      P.box('c_iron', w, 0.06, 0.06, 0, h * 0.5, 0, {});
+      for (let x = -w / 2 + 0.08; x <= w / 2 - 0.05; x += 0.14) {
+        P.box('c_iron', 0.035, h, 0.035, x, h / 2, 0, {});
+        P.cyl('c_iron', 0, 0.035, 0.14, x, h + 0.06, 0, { seg: 4 });
+      }
+      P.box('c_brass', 0.12, 0.2, 0.12, 0, h * 0.5, 0, {});
+    } else if (d.kind === 'door' && castle) {
+      // puerta victoriana de madera tallada, de dos hojas, con herrajes de latón
+      const w = span - 0.04, h = DOOR_H - 0.02;
+      for (const side of [-1, 1]) {
+        const lx = side * w / 4;
+        P.box('c_darkwood', w / 2 - 0.02, h, 0.12, lx, h / 2, 0, {});
+        for (const py of [0.5, 1.35, 2.1]) {
+          P.box('c_darkwood', w / 2 - 0.3, py === 1.35 ? 0.7 : 0.5, 0.16, lx, py, 0, { color: 0x8a6a50 });
+        }
+        P.sphere('c_brass', 0.05, side * 0.12, 1.1, 0.1, { seg: 8 });
+        P.sphere('c_brass', 0.05, side * 0.12, 1.1, -0.1, { seg: 8 });
+      }
+      P.box('c_iron', w, 0.06, 0.14, 0, h - 0.1, 0, {});
+    } else if (d.kind === 'door') {
       const w = span - 0.04, h = DOOR_H - 0.02;
       P.box('metal', w, h, 0.14, 0, h / 2, 0, { color: 0x6c7479 });
       for (let y = 0.35; y < h; y += 0.42) P.box('metal', w, 0.06, 0.18, 0, y, 0, { color: 0x4a5055 });
@@ -69,12 +105,12 @@ export class Doors {
     }
     const group = lb.toGroup({ shadows: true });
     group.name = 'door:' + d.id;
-    group.position.set(cx, 0, cz);
+    group.position.set(cx, base, cz);
     group.rotation.y = yaw;
 
-    // Placas de precio en ambos lados
-    const tex = doorPriceTexture(d.cost, d.kind);
-    for (const s of [-1, 1]) {
+    // Placas de precio en ambos lados (la sellada no se compra)
+    const tex = d.sealed ? null : doorPriceTexture(d.cost, d.kind);
+    if (tex) for (const s of [-1, 1]) {
       const sign = priceSign(tex, 0.62, 0.39);
       const out = d.kind === 'door' ? 0.1 : 0.52;
       sign.position.set(0, 1.55, s * out);
@@ -83,7 +119,7 @@ export class Doors {
     }
     this.world.root.add(group);
     void B;
-    return { d, group, cx, cz, yaw, open: false, anim: -1 };
+    return { d, group, cx, cz, yaw, base, open: false, anim: -1 };
   }
 
   sync(gs) {
@@ -95,7 +131,7 @@ export class Doors {
       if (!open) {
         e.anim = -1;
         e.group.visible = true;
-        e.group.position.y = 0;
+        e.group.position.y = e.base;
         e.group.scale.set(1, 1, 1);
         e.group.rotation.z = 0;
       } else if (e.anim < 0) {
@@ -111,10 +147,10 @@ export class Doors {
     e.open = true;
     e.anim = 0;
     e.group.visible = true;
-    sfx(this.ctx, e.d.kind === 'debris' ? 'debris' : 'door_open', e.cx, 1.3, e.cz);
+    sfx(this.ctx, e.d.kind === 'debris' ? 'debris' : 'door_open', e.cx, e.base + 1.3, e.cz);
     if (e.d.kind === 'debris') {
       for (let i = 0; i < 4; i++) {
-        _v.set(e.cx + (Math.random() - 0.5) * 1.5, 0.4 + Math.random(), e.cz + (Math.random() - 0.5) * 1.5);
+        _v.set(e.cx + (Math.random() - 0.5) * 1.5, e.base + 0.4 + Math.random(), e.cz + (Math.random() - 0.5) * 1.5);
         fx(this.ctx, 'dust', _v.clone(), _n.set(0, 1, 0).clone());
       }
     }
@@ -125,12 +161,15 @@ export class Doors {
       if (e.anim < 0) continue;
       e.anim += dt;
       const k = Math.min(1, e.anim / (e.d.kind === 'door' ? 1.1 : 0.9));
-      if (e.d.kind === 'door') {
-        // la persiana sube al techo con un pequeño tirón inicial
-        e.group.position.y = easeInOut(k) * (DOOR_H + 0.1) + Math.sin(k * 40) * 0.01 * (1 - k);
+      if (e.d.kind === 'door' || e.d.kind === 'gate') {
+        // la persiana / reja sube al techo con un pequeño tirón inicial
+        e.group.position.y = e.base + easeInOut(k) * (DOOR_H + 0.1) + Math.sin(k * 40) * 0.01 * (1 - k);
+      } else if (e.d.kind === 'sealed') {
+        // la losa sellada se hunde en el suelo entre destellos
+        e.group.position.y = e.base - easeInOut(k) * (DOOR_H + 0.6);
       } else {
         // los escombros se hunden y encogen
-        e.group.position.y = -easeInOut(k) * 2.2;
+        e.group.position.y = e.base - easeInOut(k) * 2.2;
         const s = 1 - 0.4 * k;
         e.group.scale.set(s, 1, s);
         e.group.rotation.z = Math.sin(k * 30) * 0.02 * (1 - k);
@@ -167,7 +206,7 @@ export class Windows {
     const f = windowFrame(w);
     const group = new THREE.Group();
     group.name = 'window:' + w.id;
-    group.position.set(f.x, 0, f.z);
+    group.position.set(f.x, w.y || 0, f.z);
     group.rotation.y = f.yaw;
     const boards = [];
     const r = makeRng(w.id * 71 + 5);
@@ -229,9 +268,9 @@ export class Windows {
     if (!e) return;
     const repaired = ev.pid != null;
     this._setCount(e, ev.n, true);
-    sfx(this.ctx, repaired ? 'board_repair' : 'board_tear', e.w.cx, 1.4, e.w.cz);
+    sfx(this.ctx, repaired ? 'board_repair' : 'board_tear', e.w.cx, (e.w.y || 0) + 1.4, e.w.cz);
     if (!repaired) {
-      _v.set(e.w.cx, 1.2 + Math.random() * 0.8, e.w.cz);
+      _v.set(e.w.cx, (e.w.y || 0) + 1.2 + Math.random() * 0.8, e.w.cz);
       fx(this.ctx, 'dust', _v.clone(), _n.set(e.f.inX, 0, e.f.inZ).clone());
     }
   }

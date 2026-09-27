@@ -81,7 +81,7 @@ export class Powerups {
 
   _add(pu, live) {
     const group = new THREE.Group();
-    group.position.set(pu.x, 0, pu.z);
+    group.position.set(pu.x, pu.y || 0, pu.z);
     const spin = new THREE.Group();
     spin.position.y = 0.75;
     spin.add(this._proto(pu.type).clone());
@@ -123,13 +123,13 @@ export class Powerups {
 
   onEvent(name, e) {
     if (name === 'puSpawn') {
-      sfx(this.ctx, 'powerup_spawn', e.x, 0.8, e.z);
-      if (!this.items.has(e.id)) this._add({ id: e.id, type: e.type, x: e.x, z: e.z, until: 0 }, true);
+      sfx(this.ctx, 'powerup_spawn', e.x, (e.y || 0) + 0.8, e.z);
+      if (!this.items.has(e.id)) this._add({ id: e.id, type: e.type, x: e.x, y: e.y || 0, z: e.z, until: 0 }, true);
     } else if (name === 'pu') {
       // quitar el que se recogió (el gs llegará después)
       for (const [id, it] of this.items) {
         if (it.type === e.type && Math.abs(it.group.position.x - e.x) < 0.2 && Math.abs(it.group.position.z - e.z) < 0.2) {
-          _v.set(e.x, 0.8, e.z);
+          _v.set(e.x, (e.y || 0) + 0.8, e.z);
           fx(this.ctx, 'flash', _v.clone(), GREEN, 2.4);
           this._remove(id);
           break;

@@ -11,6 +11,7 @@ export const CONTROL_GROUPS = [
       [['Ratón'], 'Mirar'],
       [['Shift'], 'Correr'],
       [['C', 'Ctrl'], 'Agacharse'],
+      [['Shift', 'C'], 'Deslizarse (corriendo)'],
       [['Espacio'], 'Saltar'],
     ],
   },
@@ -43,6 +44,27 @@ export const CONTROL_GROUPS = [
       [['Esc'], 'Pausa'],
     ],
   },
+  {
+    title: 'Mando (PS5 / Xbox)',
+    rows: [
+      [['Stick izq.'], 'Moverse'],
+      [['Stick der.'], 'Mirar'],
+      [['L3'], 'Correr'],
+      [['○ / B'], 'Agacharse (corriendo: deslizarse)'],
+      [['✕ / A'], 'Saltar'],
+      [['R2 / RT'], 'Disparar'],
+      [['L2 / LT'], 'Apuntar'],
+      [['□ / X'], 'Recargar / usar / comprar'],
+      [['△ / Y', '→'], 'Cambiar de arma'],
+      [['R3'], 'Cuchillo'],
+      [['R1 / RB'], 'Granada'],
+      [['L1 / LB'], 'Curarse'],
+      [['↓'], 'Escudo'],
+      [['↑'], 'Linterna'],
+      [['Panel táctil'], 'Puntuaciones'],
+      [['Options'], 'Pausa'],
+    ],
+  },
 ];
 
 // Versión corta para la pantalla de título
@@ -65,13 +87,13 @@ export const CONTROLS_SHORT = [
 ];
 
 export const CONTROLS_LINE =
-  'WASD mover · Ratón mirar · Clic izq. disparar · Clic der. apuntar · Shift correr · C/Ctrl agacharse · Espacio saltar · ' +
+  'WASD mover · Ratón mirar · Clic izq. disparar · Clic der. apuntar · Shift correr · C/Ctrl agacharse (corriendo: deslizarse) · Espacio saltar · ' +
   'R recargar · F usar/comprar (mantener para reconstruir, construir y reanimar) · V cuchillo · G granada · Q escudo · L linterna · H curarse · ' +
   '1/2/3 o rueda cambiar de arma · Tab puntuaciones · T/Enter chat · Esc pausa';
 
 export const TIPS = [
   'Reconstruye las barricadas manteniendo F: ganas 10 puntos por cada tabla.',
-  'Activa la electricidad en la Planta Eléctrica para usar las Perk-a-Colas y el Pack-a-Punch.',
+  'Activa la electricidad en la Planta Eléctrica para usar las Perk-a-Colas y el Pack-a-Punch (Quick Revive funciona sin ella).',
   'La Caja Misteriosa cuesta 950 puntos. Si aparece el osito, la caja se muda a otro lugar.',
   'Reúne las 3 piezas del escudo y constrúyelo en la mesa de trabajo de la calle.',
   'Pulsa H para curarte: vendas, antídotos y botiquines se compran en los armarios con una cruz roja.',

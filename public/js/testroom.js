@@ -5,11 +5,17 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ViewModel, KNIFE_DUR, THROW_DUR, DRINK_DUR, BASH_DUR } from './weapons/viewmodel.js';
 import { updateCamo } from './weapons/models.js';
 import { ZombieModel } from './entities/zombieModel.js';
+import { DogModel } from './entities/dogModel.js';
 import { PlayerModel } from './entities/playerModel.js';
 import { World } from './world/level.js';
 import { WEAPONS, MELEE_WEAPONS, weaponDef } from '/shared/weapons.js';
 import { MEDS, ZOMBIE_TYPES, PLAYER } from '/shared/constants.js';
 import { ZA, ZF, PF } from '/shared/protocol.js';
+import { setActiveMap, isMapId, PLAYER_SPAWNS } from '/shared/map.js';
+
+// /test/?map=castillo carga otro mapa como fondo (para recorrerlo: window.testroom.camera)
+const MAP_PARAM = new URLSearchParams(location.search).get('map');
+if (isMapId(MAP_PARAM)) setActiveMap(MAP_PARAM);
 
 const $ = (id) => document.getElementById(id);
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
@@ -30,8 +36,8 @@ $('view').appendChild(renderer.domElement);
 // ------------------------------------------------------------------ escena del mundo (fondo en 1.ª persona)
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, 1, 0.05, 200);
-const SPAWN = { x: 10.5, z: 24.5 };
-camera.position.set(SPAWN.x, PLAYER.eyeHeight || 1.62, SPAWN.z);
+const SPAWN = isMapId(MAP_PARAM) && PLAYER_SPAWNS[0] ? { x: PLAYER_SPAWNS[0].x, z: PLAYER_SPAWNS[0].z, y: PLAYER_SPAWNS[0].y } : { x: 10.5, z: 24.5, y: 0 };
+camera.position.set(SPAWN.x, (SPAWN.y || 0) + (PLAYER.eyeHeight || 1.62), SPAWN.z);
 camera.rotation.set(-0.05, 0, 0, 'YXZ');
 scene.add(camera);
 const ctx = { scene, camera, renderer, settings: { quality: 'high', brightness: 1.2 }, gs: null, events: null };
@@ -283,7 +289,8 @@ function makeModel(sel, x) {
   }
   const type = sel.startsWith('z:') ? sel.slice(2) : 'normal';
   const variant = sel.startsWith('v:') ? +sel.slice(2) : undefined;
-  const m = new ZombieModel({ quality: 'high', seed: variant != null ? 1000 + variant * 7919 : 4242 + x * 13, type, variant });
+  const seed = variant != null ? 1000 + variant * 7919 : 4242 + x * 13;
+  const m = type === 'dog' ? new DogModel({ quality: 'high', seed }) : new ZombieModel({ quality: 'high', seed, type, variant });
   m.group.position.set(x, 0, 0);
   m.group.rotation.y = Math.PI;                    // de cara a la cámara
   m.group.traverse((o) => { if (o.isMesh) o.castShadow = true; });
@@ -341,14 +348,39 @@ resize();
 
 let last = performance.now();
 let walkT = 0;
+// Medición de rendimiento: /test/?bench=24 añade N zombis caminando delante (en 1.ª persona) y guarda
+// en window.testroom.bench el tiempo medio de fotograma (CPU + GPU) de los últimos 3 s.
+const BENCH_N = Math.min(60, Number(new URLSearchParams(location.search).get('bench')) || 0);
+const benchZ = [];
+for (let i = 0; i < BENCH_N; i++) {
+  const z = new ZombieModel({ quality: 'high', seed: 500 + i * 31 });
+  z.group.position.set(SPAWN.x - 2.5 + (i % 6) * 1.0, 0, SPAWN.z - 3 - Math.floor(i / 6) * 1.3);
+  scene.add(z.group);
+  benchZ.push(z);
+}
+const benchT = [];
+let benchGl = null;
+const benchPx = new Uint8Array(4);
+
 function frame(now) {
   requestAnimationFrame(frame);
   const realDt = Math.min(0.05, (now - last) / 1000);
   last = now;
   const dt = realDt * (+$('speed').value);
+  const t0 = performance.now();
   if (mode === 'weapons') updateWeapons(dt);
   else updateModels(dt);
+  for (const z of benchZ) z.update(dt, { anim: ZA.WALK, flags: 0, speed: 1 });
+  if (BENCH_N) { renderer.info.autoReset = false; renderer.info.reset(); }
   render();
+  if (BENCH_N) {
+    benchGl = benchGl || renderer.getContext();
+    benchGl.readPixels(0, 0, 1, 1, benchGl.RGBA, benchGl.UNSIGNED_BYTE, benchPx);   // espera a la GPU
+    benchT.push(performance.now() - t0);
+    if (benchT.length > 180) benchT.shift();
+    const inf = renderer.info.render;
+    window.testroom.bench = { ms: benchT.reduce((a, b) => a + b, 0) / benchT.length, n: benchT.length, calls: inf.calls, tris: inf.triangles };
+  }
 }
 
 function updateWeapons(dt) {
@@ -394,7 +426,7 @@ function updateWeapons(dt) {
   if (world) { try { world.update(dt); } catch { /* nada */ } }
   for (const z of extras) z.update(dt, { anim: ZA.IDLE, flags: 0, speed: 0 });
   // balanceo de cámara al caminar (solo en 1.ª persona, como referencia)
-  camera.position.y = (PLAYER.eyeHeight || 1.62) - (state.crouch ? 0.5 : 0) + (moving ? Math.sin(walkT * 9) * 0.02 : 0);
+  camera.position.y = (window.testroom.camBaseY || 0) + (PLAYER.eyeHeight || 1.62) - (state.crouch ? 0.5 : 0) + (moving ? Math.sin(walkT * 9) * 0.02 : 0);
 }
 
 // progreso de recarga en el formato que espera el visor
@@ -458,4 +490,4 @@ function lastModel() {
   const box = new THREE.Box3().setFromObject(o.m.group);
   return Math.max(0.5, box.max.y);
 }
-window.testroom = { vm, ACTIONS, setMode, vmCamera, controls, mCamera, mControls, lastModel, models: () => models };
+window.testroom = { vm, ACTIONS, setMode, vmCamera, controls, mCamera, mControls, lastModel, models: () => models, camera, world, renderer, camBaseY: SPAWN.y || 0 };

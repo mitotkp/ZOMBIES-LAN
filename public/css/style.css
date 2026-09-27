@@ -754,6 +754,7 @@ kbd {
 .mn-menu { display: flex; flex-direction: column; gap: 0.6em; width: 100%; }
 .mn-menu .mn-btn { justify-content: flex-start; padding-left: 1.3em; font-size: 1.1em; min-height: 2.6em; }
 .mn-pause-note { margin-top: 1.2em; font-size: 0.8em; color: rgba(239, 232, 216, 0.5); font-style: italic; text-align: center; }
+.mn-pause-by { margin-top: 0.6em; color: #ffcf6a; letter-spacing: 0.04em; }
 
 /* ---------- ajustes y controles ---------- */
 .mn-panel-box {
@@ -1007,3 +1008,34 @@ kbd {
 .boss-name span { font: 0.7em var(--f-ui); letter-spacing: 0.08em; color: var(--chalk-dim); margin-left: 0.4em; }
 .boss-bar { height: calc(var(--u) * 1.2); background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(255, 80, 60, 0.5); overflow: hidden; }
 .boss-bar i { display: block; height: 100%; transform-origin: 0 50%; background: linear-gradient(90deg, #7a0a08, #e0302a); transition: transform 0.15s linear; }
+
+/* ---------- easter egg del Castillo: objetivo y victoria ---------- */
+.hud-quest {
+  position: absolute; left: calc(var(--u) * 1.6); top: calc(var(--u) * 1.6);
+  max-width: min(34vw, calc(var(--u) * 44)); padding: 0.4em 0.8em 0.45em;
+  background: linear-gradient(90deg, rgba(40, 0, 6, 0.62), rgba(0, 0, 0, 0));
+  border-left: 3px solid #c0202a; font-family: var(--f-ui); color: var(--chalk);
+  text-shadow: 0 1px 3px #000; opacity: 0; transition: opacity 0.6s;
+}
+.hud-quest.on { opacity: 1; }
+.q-head { font-size: 0.7em; letter-spacing: 0.14em; text-transform: uppercase; color: #ff7a7a; }
+.q-text { font-size: 0.95em; font-weight: 600; margin-top: 0.1em; }
+.q-bar { margin-top: 0.35em; height: 0.3em; background: rgba(255, 255, 255, 0.15); }
+.q-bar i { display: block; height: 100%; width: 0; background: #6aff9a; box-shadow: 0 0 6px #6aff9a; transition: width 0.4s; }
+.hud-victory {
+  position: absolute; left: 50%; top: 30%; transform: translateX(-50%);
+  width: max-content; max-width: 90vw; text-align: center; opacity: 0; pointer-events: none;
+}
+.hud-victory.on { animation: hud-victory 9s ease-out forwards; }
+.vc-title {
+  font: 4.2em/1 var(--f-display); letter-spacing: 0.08em; text-transform: uppercase; color: #ffe6a0;
+  text-shadow: 0 0 0.25em #ffb02a, 0 0 0.7em rgba(255, 150, 30, 0.6), 0 0.05em 0.1em #000;
+}
+.vc-sub { margin-top: 0.35em; font-size: 1.15em; color: var(--chalk); letter-spacing: 0.04em; text-shadow: 0 1px 3px #000; }
+.vc-reward { margin-top: 0.5em; font-size: 0.95em; color: #d7c6ff; text-shadow: 0 1px 3px #000; }
+@keyframes hud-victory {
+  0% { opacity: 0; transform: translateX(-50%) scale(1.4); }
+  6% { opacity: 1; transform: translateX(-50%) scale(1); }
+  85% { opacity: 1; }
+  100% { opacity: 0; }
+}

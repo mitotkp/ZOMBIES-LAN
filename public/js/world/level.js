@@ -13,6 +13,8 @@ import { Powerups } from './powerups.js';
 import { Flashlight } from './flashlight.js';
 import { MedItems } from './medical.js';
 import { POWERUP_INFO } from '/shared/constants.js';
+import { MAP } from '/shared/map.js';
+import { buildCastle, CastleLighting, castleChunk } from './castle/castle.js';
 
 // Eventos del servidor que se reenvían a los objetos interactivos
 const FORWARD = [
@@ -49,15 +51,25 @@ export class World {
     scene.fog = new THREE.FogExp2(FOG_COLOR, FOG_DENSITY);
     scene.background = new THREE.Color(FOG_COLOR);
 
+    this.theme = MAP.theme;
     this.sky = new Sky(this);
     this.sky.addTo(scene);
 
     const B = new StaticBatch(this.mats);
-    buildLevelGeometry(B);
-    this._try('props', () => buildStaticProps(B, this));
-    this.lighting = new Lighting(this);
+    let extra = [];
+    if (this.theme === 'castillo') {
+      // Castillo: geometría, decoración e iluminación propias. La geometría estática se trocea por planta y por
+      // celdas de 24 m para que la cámara descarte lo que no ve (ver CastleCull)
+      B.chunkOf = castleChunk;
+      extra = this._try('castle', () => buildCastle(B, this)) || [];
+      this.lighting = new CastleLighting(this);
+    } else {
+      buildLevelGeometry(B);
+      this._try('props', () => buildStaticProps(B, this));
+      this.lighting = new Lighting(this);
+    }
     this._try('lighting', () => this.lighting.build(B));
-    this.interactives = createInteractives(this, B);
+    this.interactives = createInteractives(this, B).concat(extra);
     this.powerups = new Powerups(this);
     this.interactives.push(this.powerups);
     this.medItems = new MedItems(this);
@@ -82,6 +94,12 @@ export class World {
       }));
     }
     if (ctx.gs) this._sync(ctx.gs, null);
+  }
+
+  // ¿Recalcular este fotograma el mapa de sombras? (lo decide la iluminación del mapa si quiere)
+  wantShadowUpdate() {
+    const l = this.lighting;
+    return !l || typeof l.wantShadowUpdate !== 'function' || l.wantShadowUpdate();
   }
 
   _try(name, fn) {
@@ -133,7 +151,7 @@ export class World {
         break;
       case 'pu': {
         const info = POWERUP_INFO[e.type];
-        if (info) announce(ctx, info.announce);
+        if (info) announce(ctx, info.announce, e.type);
         sfx(ctx, e.type === 'nuke' ? 'nuke' : 'powerup_grab', e.x, 0.6, e.z);
         break;
       }
@@ -142,6 +160,28 @@ export class World {
     for (const it of this.interactives) {
       if (typeof it.onEvent === 'function') this._try(`${it.name}.${name}`, () => it.onEvent(name, e));
     }
+  }
+
+  // Desmonta el mundo (al cambiar de mapa se construye otro). Las texturas se comparten y no se liberan.
+  dispose() {
+    for (const u of this._unsub) { try { if (typeof u === 'function') u(); } catch { /* nada */ } }
+    this._unsub = [];
+    const scene = this.ctx.scene;
+    if (this.sky) { scene.remove(this.sky.group); scene.remove(this.sky.beaconGroup); }
+    if (this.flashlight) {
+      const cam = this.ctx.camera;
+      if (cam) { cam.remove(this.flashlight.light); cam.remove(this.flashlight.target); }
+    }
+    scene.remove(this.root);
+    const mats = new Set(this.mats.all());
+    this.root.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+      const m = o.material;
+      if (m) for (const mm of Array.isArray(m) ? m : [m]) mats.add(mm);
+    });
+    for (const m of mats) { try { m.dispose(); } catch { /* nada */ } }
+    this.interactives = [];
+    this.built = false;
   }
 
   // ------------------------------------------------------------------ bucle

@@ -1,24 +1,21 @@
 // Colisiones y raycast sobre la cuadrícula del mapa (compartido servidor/cliente).
 // `doors` es el objeto gs.doors: { A: true, ... } con las puertas ABIERTAS.
 
-import { C, W, H, cellType, cellHeight, cellDoor, cellZone, idx, ZONES, CEIL_H } from './map.js';
+import { C, W, H, MAP } from './map.js';
 
-// ¿La celda bloquea a un jugador?
-export function solidForPlayer(x, z, doors) {
-  if (x < 0 || z < 0 || x >= W || z >= H) return true;
-  const t = cellType[idx(x, z)];
-  if (t === C.FLOOR) return false;
-  if (t === C.DOOR) return !(doors && doors[cellDoor[idx(x, z)]]);
-  return true; // VOID, WALL, WINDOW, OUTSIDE, PROP
+// ¿La celda bloquea a un jugador que está a la altura y? (y por defecto: suelo de la planta 0)
+// En mapas de varias plantas la altura decide en qué planta se mira la celda (y las escaleras).
+// (ex, ez): posición actual de quien se mueve (aplica la regla de entrar/salir de las escaleras solo por sus extremos)
+export function solidForPlayer(x, z, doors, y, ex, ez) {
+  return !MAP.walkable(x, z, doors, y === undefined ? MAP.levels[0].y : y, ex, ez);
 }
 
 // ¿La celda bloquea a un zombi que ya está DENTRO del área de juego? (igual que el jugador)
 export const solidForZombieInside = solidForPlayer;
 
-// ¿La celda bloquea a un zombi que está FUERA, en un callejón? (solo puede pisar OUTSIDE)
-export function solidForZombieOutside(x, z) {
-  if (x < 0 || z < 0 || x >= W || z >= H) return true;
-  return cellType[idx(x, z)] !== C.OUTSIDE;
+// ¿La celda bloquea a un zombi que está FUERA, en un callejón? (solo puede pisar OUTSIDE de su planta)
+export function solidForZombieOutside(x, z, y) {
+  return !MAP.isOutside(x, z, y === undefined ? MAP.levels[0].y : y);
 }
 
 // Empuja un círculo fuera de las celdas sólidas. Devuelve [x, z].
@@ -85,23 +82,23 @@ export function circleBlocked(x, z, r, solidFn) {
   return false;
 }
 
-const indoorZone = ZONES.map((zn) => zn.indoor);
-
-// Raycast 3D contra el mapa (muros, puertas cerradas, props con altura, suelo y techos interiores).
-// Las ventanas y los callejones NO bloquean balas (se puede disparar a través de las barricadas).
+// Raycast 3D contra el mapa (muros, puertas cerradas, props con altura, escaleras, suelos de cada planta y techos
+// interiores). Las ventanas, los callejones y los huecos entre plantas NO bloquean balas.
 // Devuelve { dist, x, y, z, nx, ny, nz, what } o null si no choca antes de maxDist.
 // what: 'wall' | 'door' | 'prop' | 'floor' | 'ceiling'
 export function raycastMap(ox, oy, oz, dx, dy, dz, maxDist, doors, opts = {}) {
   const len = Math.hypot(dx, dy, dz) || 1;
   dx /= len; dy /= len; dz /= len;
   const ignoreCeiling = !!opts.ignoreCeiling;
+  const M = MAP, L = M.levels, NL = M.NL;
+  const TL = M.cellTypeL, HL = M.cellHeightL, DL = M.cellDoorL, ZL = M.cellZoneL, ZONES = M.ZONES;
 
   let best = maxDist;
   let hit = null;
 
-  // Suelo
+  // Suelo de la planta más baja
   if (dy < 0) {
-    const t = -oy / dy;
+    const t = (L[0].y - oy) / dy;
     if (t >= 0 && t < best) { best = t; hit = { what: 'floor', nx: 0, ny: 1, nz: 0 }; }
   }
 
@@ -114,6 +111,9 @@ export function raycastMap(ox, oy, oz, dx, dy, dz, maxDist, doors, opts = {}) {
   let tMaxZ = Math.abs(dz) > 1e-9 ? ((dz > 0 ? cz + 1 - oz : oz - cz) * tDeltaZ) : Infinity;
   let tEnter = 0;
   let enterNx = 0, enterNz = 0;
+  // tramo [ta, tb] del segmento de celda que queda dentro de la franja de altura de la planta l
+  const bandLo = (l) => (l === 0 ? -Infinity : L[l].y);
+  const bandHi = (l) => (l === NL - 1 ? Infinity : L[l + 1].y);
 
   for (let guard = 0; guard < 512; guard++) {
     if (tEnter > best) break;
@@ -122,36 +122,62 @@ export function raycastMap(ox, oy, oz, dx, dy, dz, maxDist, doors, opts = {}) {
     if (cx < 0 || cz < 0 || cx >= W || cz >= H) {
       blocked = true;
     } else {
-      const i = idx(cx, cz);
-      const t = cellType[i];
-      if (t === C.WALL || t === C.VOID) {
-        if (tEnter < best) { best = tEnter; hit = { what: 'wall', nx: enterNx, ny: 0, nz: enterNz }; }
-        blocked = true;
-      } else if (t === C.DOOR && !(doors && doors[cellDoor[i]])) {
-        if (tEnter < best) { best = tEnter; hit = { what: 'door', nx: enterNx, ny: 0, nz: enterNz }; }
-        blocked = true;
-      } else if (t === C.PROP) {
-        const h = cellHeight[i];
-        const yIn = oy + dy * tEnter;
-        const yOut = oy + dy * tExit;
-        if (yIn <= h) {
-          if (tEnter < best) { best = tEnter; hit = { what: 'prop', nx: enterNx, ny: 0, nz: enterNz }; }
-          blocked = true;
-        } else if (yOut <= h && dy < 0) {
-          const tTop = (h - oy) / dy;
-          if (tTop < best) { best = tTop; hit = { what: 'prop', nx: 0, ny: 1, nz: 0 }; }
-          blocked = true;
+      const i = cz * W + cx;
+      const yIn = oy + dy * tEnter, yOut = oy + dy * tExit;
+      const yMin = Math.min(yIn, yOut), yMax = Math.max(yIn, yOut);
+      for (let l = 0; l < NL && !blocked; l++) {
+        const lo = bandLo(l), hi = bandHi(l);
+        if (yMax < lo || yMin >= hi) continue;
+        // tramo del segmento dentro de la franja
+        let ta = tEnter, tb = tExit;
+        if (Math.abs(dy) > 1e-9) {
+          const t0 = (lo - oy) / dy, t1 = (hi - oy) / dy;
+          ta = Math.max(tEnter, Math.min(t0, t1));
+          tb = Math.min(tExit, Math.max(t0, t1));
+          if (tb < ta) continue;
         }
-      }
-      // Techo de zonas interiores
-      if (!blocked && !ignoreCeiling && dy > 0) {
-        const zn = cellZone[i];
-        const indoor = (t === C.FLOOR || t === C.DOOR || t === C.PROP) && zn >= 0 && indoorZone[zn];
-        if (indoor) {
-          const tc = (CEIL_H - oy) / dy;
-          if (tc >= tEnter - 1e-6 && tc <= tExit && tc < best) {
-            best = tc; hit = { what: 'ceiling', nx: 0, ny: -1, nz: 0 };
+        const side = ta <= tEnter + 1e-9;   // entra por el lado de la celda (no por arriba o abajo)
+        const t = TL[l][i];
+        const base = L[l].y;
+        if (t === C.WALL || t === C.VOID) {
+          if (ta < best) { best = ta; hit = side ? { what: 'wall', nx: enterNx, ny: 0, nz: enterNz } : { what: dy < 0 ? 'floor' : 'ceiling', nx: 0, ny: dy < 0 ? 1 : -1, nz: 0 }; }
+          blocked = true;
+        } else if (t === C.DOOR && !(doors && doors[DL[l][i]])) {
+          if (ta < best) { best = ta; hit = { what: 'door', nx: enterNx, ny: 0, nz: enterNz }; }
+          blocked = true;
+        } else if (t === C.PROP || t === C.STAIR) {
+          // obstáculo (o la parte maciza bajo la rampa de una escalera) hasta la altura top
+          let top = base + HL[l][i];
+          if (t === C.STAIR) { const st = M.STAIRS[M.stairIdx[i]]; top = st ? M.rampY(st, cx + 0.5, cz + 0.5) : base; }
+          const ya = oy + dy * ta, yb = oy + dy * tb;
+          if (ya <= top) {
+            if (ta < best) { best = ta; hit = side ? { what: t === C.STAIR ? 'floor' : 'prop', nx: enterNx, ny: 0, nz: enterNz } : { what: 'floor', nx: 0, ny: 1, nz: 0 }; }
             blocked = true;
+          } else if (yb <= top && dy < 0) {
+            const tTop = (top - oy) / dy;
+            if (tTop < best) { best = tTop; hit = { what: t === C.STAIR ? 'floor' : 'prop', nx: 0, ny: 1, nz: 0 }; }
+            blocked = true;
+          }
+        }
+        // Suelo de esta planta (losa entre la planta de abajo y esta): cruza y = base dentro del segmento
+        if (!blocked && l > 0 && Math.abs(dy) > 1e-9 && t !== C.HOLE && t !== C.OPEN) {
+          const tf = (base - oy) / dy;
+          if (tf >= tEnter - 1e-9 && tf <= tExit && tf < best) {
+            best = tf; hit = dy < 0 ? { what: 'floor', nx: 0, ny: 1, nz: 0 } : { what: 'ceiling', nx: 0, ny: -1, nz: 0 };
+            blocked = true;
+          }
+        }
+        // Techo de zonas interiores (altura propia de la zona o de la planta)
+        if (!blocked && !ignoreCeiling && dy > 0 && (t === C.FLOOR || t === C.DOOR || t === C.PROP)) {
+          const zn = ZL[l][i];
+          const Z = zn >= 0 ? ZONES[zn] : null;
+          if (Z && Z.indoor) {
+            const ceil = base + (Z.ceil || (NL === 1 ? M.CEIL_H : L[l].h));
+            const tc = (ceil - oy) / dy;
+            if (tc >= tEnter - 1e-6 && tc <= tExit && tc < best) {
+              best = tc; hit = { what: 'ceiling', nx: 0, ny: -1, nz: 0 };
+              blocked = true;
+            }
           }
         }
       }
@@ -235,6 +261,8 @@ export const ZOMBIE_HITBOX = {
   crawlerHeadY: 0.35, crawlerHeadFwd: 0.55, crawlerBodyR: 0.34, crawlerBodyY1: 0.5,
 };
 
+export const DOG_HITBOX = { headY: 0.6, headFwd: 0.62, headR: 0.17, bodyY: 0.5, bodyR: 0.24, legsR: 0.2 };
+
 export function rayZombie(ox, oy, oz, dx, dy, dz, zb) {
   const k = zb.scale > 0 ? zb.scale : 1;   // tamaño relativo (tanque = 1.5)
   const B = ZOMBIE_HITBOX;
@@ -246,7 +274,15 @@ export function rayZombie(ox, oy, oz, dx, dy, dz, zb) {
   const yo = zb.yOff || 0;
   let best = null;
   const consider = (t, part) => { if (t >= 0 && (!best || t < best.t)) best = { t, part }; };
-  if (zb.crawler) {
+  if (zb.type === 'dog') {
+    // perro: cuerpo bajo y alargado con la cabeza adelantada
+    const fx = -Math.sin(zb.rot || 0), fz = -Math.cos(zb.rot || 0);
+    consider(raySphere(ox, oy, oz, dx, dy, dz, zb.x + fx * DOG_HITBOX.headFwd, DOG_HITBOX.headY + yo, zb.z + fz * DOG_HITBOX.headFwd, DOG_HITBOX.headR), 'h');
+    for (const k of [-0.3, 0.05, 0.35]) {
+      consider(raySphere(ox, oy, oz, dx, dy, dz, zb.x + fx * k, DOG_HITBOX.bodyY + yo, zb.z + fz * k, DOG_HITBOX.bodyR), 'b');
+    }
+    consider(rayCylinder(ox, oy, oz, dx, dy, dz, zb.x, zb.z, DOG_HITBOX.legsR, yo, DOG_HITBOX.bodyY + yo), 'l');
+  } else if (zb.crawler) {
     const fx = -Math.sin(zb.rot || 0), fz = -Math.cos(zb.rot || 0);
     consider(raySphere(ox, oy, oz, dx, dy, dz, zb.x + fx * hb.crawlerHeadFwd, hb.crawlerHeadY + yo, zb.z + fz * hb.crawlerHeadFwd, hb.headR), 'h');
     consider(rayCylinder(ox, oy, oz, dx, dy, dz, zb.x, zb.z, hb.crawlerBodyR, yo, hb.crawlerBodyY1 + yo), 'b');

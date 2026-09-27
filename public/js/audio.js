@@ -1,9 +1,11 @@
-// Audio procedural de ZOMBIES LAN: todo se sintetiza con WebAudio (no hay archivos de sonido).
+// Audio procedural de ZOMBIES LAN: todo se sintetiza con WebAudio salvo las voces del locutor de potenciadores.
 //  play(nombre, {pos, volume, rate, loop}) -> { stop() }   efectos (con pos: espacializados con HRTF)
 //  weapon(arquetipo, {pos, upgraded, volume})             disparos por capas
 //  music(nombre)                                          música original sintetizada
-//  announce(texto)                                        locutor (speechSynthesis) + efecto
+//  announce(texto, tipo)                                  locutor: public/audio/announcer/<tipo>.mp3 (o speechSynthesis) + efecto
 //  setVolumes(master, music)
+
+import { POWERUPS } from '/shared/constants.js';
 
 const MAX_VOICES = 48;
 const DUMMY = Object.freeze({ stop() {}, setPos() {} });
@@ -388,6 +390,11 @@ const SFX = {
     s.noise({ color: 'pink', a: 0.03, d: 0.18, g: 0.2, filt: { type: 'bandpass', f: 600, f1: 1800, q: 0.8 } });
     s.osc({ f: 90, f1: 55, d: 0.06, g: 0.25 });
   },
+  slide(s) {
+    s.noise({ color: 'pink', a: 0.02, hold: 0.35, d: 0.4, g: 0.45, filt: { type: 'bandpass', f: 1400, f1: 500, q: 0.9 } });
+    s.noise({ a: 0.01, hold: 0.25, d: 0.3, g: 0.12, filt: { type: 'highpass', f: 3000 } });
+    s.osc({ f: 85, f1: 50, d: 0.12, g: 0.35 });
+  },
   land(s) {
     s.osc({ f: 110, f1: 40, d: 0.14, g: 0.8 });
     s.noise({ color: 'pink', d: 0.12, g: 0.35, filt: { type: 'lowpass', f: 1400 } });
@@ -646,6 +653,35 @@ const SFX = {
       s.noise({ color: 'pink', amp: [0, 0.6, 1, 0.7, 0.9, 0.4, 0], dur, g: 0.12, filt: { type: 'bandpass', f: 380, q: 6 }, am: { r: rnd(12, 18), d: 0.45, type: 'square' } });
     }
   },
+  // Perros infernales
+  dog_growl(s) {
+    voiceSyl(s, {
+      dur: rnd(0.6, 1.0), f0: rnd(80, 100), f1: rnd(70, 90), vowels: ['o', 'uh'], scale: 1.25, g: 0.7, noise: 0.45,
+      grit: 'growl', fry: rnd(26, 34), fryDepth: 0.65, jitter: 0.06, amp: [0, 0.8, 1, 0.9, 1, 0.8, 0.3, 0],
+    });
+  },
+  dog_bark(s) {
+    for (const [at, f] of [[0, rnd(430, 480)], [0.2, rnd(380, 430)]]) {
+      voiceSyl(s, { at, dur: 0.13, f0: f, f1: f * 0.6, vowels: ['a', 'o'], scale: 1.35, g: 0.85, noise: 0.35, grit: 'growl', amp: [0, 1, 0.8, 0.4, 0] });
+    }
+    s.noise({ color: 'pink', d: 0.08, g: 0.3, filt: { type: 'bandpass', f: 1500, q: 1 } });
+  },
+  dog_yelp(s) {
+    voiceSyl(s, { dur: 0.32, f0: rnd(720, 800), f1: 360, vowels: ['i', 'u'], scale: 1.45, g: 0.6, noise: 0.25, amp: [0, 1, 0.7, 0.3, 0] });
+    voiceSyl(s, { at: 0.3, dur: 0.5, f0: 140, f1: 90, vowels: ['uh', 'u'], scale: 1.2, g: 0.35, noise: 0.5, grit: 'growl', fry: 20 });
+  },
+  dog_howl(s) {
+    // aullido lejano que anuncia la ronda de perros (sube, se sostiene y cae)
+    voiceSyl(s, { dur: 0.9, f0: 330, f1: 520, vowels: ['u', 'o'], scale: 1.3, g: 0.55, noise: 0.12, amp: [0, 0.4, 0.8, 1, 1] });
+    voiceSyl(s, { at: 0.85, dur: 1.4, f0: 520, f1: 300, vowels: ['o', 'u', 'u'], scale: 1.3, g: 0.55, noise: 0.12, amp: [1, 1, 0.9, 0.6, 0.3, 0] });
+    voiceSyl(s, { at: 0.3, dur: 1.8, f0: 350, f1: 280, vowels: ['u', 'o'], scale: 1.25, g: 0.25, noise: 0.1, amp: [0, 0.6, 1, 0.8, 0.4, 0] });
+  },
+  thunder(s) {
+    s.noise({ d: 0.05, g: 1.0, filt: { type: 'highpass', f: 2500 } });
+    s.noise({ color: 'pink', d: 0.25, g: 0.8, filt: { type: 'bandpass', f: 1800, f1: 400, q: 0.8 } });
+    s.noise({ color: 'brown', at: 0.03, a: 0.04, d: 1.8, g: 1.0, filt: { type: 'lowpass', f: 500, f1: 90 } });
+    s.osc({ f: 55, f1: 30, d: 0.9, g: 0.6 });
+  },
   zombie_attack(s) {
     const f0 = rnd(170, 230);
     voiceSyl(s, {
@@ -744,7 +780,7 @@ const SFX = {
 
 // Ganancia, reverberación, distancia de referencia, variación de tono y periodo en bucle por sonido
 const META = {
-  footstep: { g: 0.35, verb: 0.05, jit: 0.08 }, jump: { g: 0.4, verb: 0.05 }, land: { g: 0.5, verb: 0.06 },
+  footstep: { g: 0.35, verb: 0.05, jit: 0.08 }, jump: { g: 0.4, verb: 0.05 }, slide: { g: 0.5, verb: 0.06 }, land: { g: 0.5, verb: 0.06 },
   hurt: { g: 0.8, verb: 0.08 }, heartbeat: { g: 0.9, verb: 0, period: 0.95 }, down: { g: 0.9, verb: 0.3 },
   revive: { g: 0.7, verb: 0.25 }, deny: { g: 0.7, verb: 0.05 }, buy: { g: 0.6, verb: 0.15 },
   reload_out: { g: 0.6, verb: 0.05, jit: 0.04 }, reload_in: { g: 0.6, verb: 0.05, jit: 0.04 },
@@ -761,6 +797,8 @@ const META = {
   power_on: { g: 0.9, verb: 0.4, ref: 8 }, powerup_spawn: { g: 0.6, verb: 0.3, ref: 4 },
   powerup_grab: { g: 0.7, verb: 0.3 }, powerup_loop: { g: 0.5, verb: 0.2, ref: 2, period: 1.2 },
   nuke: { g: 1.0, verb: 0.5 },
+  dog_growl: { g: 0.8, verb: 0.15, ref: 2.2, jit: 0.06 }, dog_bark: { g: 0.85, verb: 0.2, ref: 2.5, jit: 0.06 },
+  dog_yelp: { g: 0.8, verb: 0.2, ref: 2.2 }, dog_howl: { g: 0.9, verb: 0.7 }, thunder: { g: 1.0, verb: 0.55, ref: 6 },
   zombie_groan: { g: 0.75, verb: 0.18, ref: 2.2, period: 2.4 }, zombie_attack: { g: 0.85, verb: 0.15, ref: 2.2 },
   zombie_die: { g: 0.8, verb: 0.2, ref: 2.2 }, zombie_step: { g: 0.35, verb: 0.05, ref: 1.5, jit: 0.1 },
   explosion: { g: 1.0, verb: 0.45, ref: 6 }, grenade_throw: { g: 0.5, verb: 0.05 }, grenade_bounce: { g: 0.5, verb: 0.08, ref: 2, jit: 0.1 },
@@ -1162,6 +1200,41 @@ export class Audio {
     this.noiseBuf.brown = this._makeNoise(2, 'brown');
     this.noiseBuf.brownLong = this._makeNoise(7.3, 'brown');
     this.noiseBuf.pinkLong = this._makeNoise(6.7, 'pink');
+    this._loadAnnouncer();
+  }
+
+  // Voces grabadas del locutor de potenciadores (public/audio/announcer, generadas con tools/gen-announcer.sh)
+  _loadAnnouncer() {
+    this._annBuf = {};
+    if (typeof fetch !== 'function') return;
+    for (const key of POWERUPS.types) {
+      fetch(`/audio/announcer/${key}.mp3`)
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.status))))
+        .then((ab) => this.ac.decodeAudioData(ab))
+        .then((buf) => { this._annBuf[key] = buf; })
+        .catch(() => { /* sin archivo: se usa la voz del navegador */ });
+    }
+  }
+
+  _playAnnouncer(key) {
+    const buf = this._annBuf && this._annBuf[key];
+    if (!buf || !this._ready()) return false;
+    const ac = this.ac;
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    const g = ac.createGain();
+    g.gain.value = 1.1;
+    const send = ac.createGain();
+    send.gain.value = 0.25;
+    src.connect(g);
+    g.connect(this.master);
+    g.connect(send);
+    send.connect(this.reverbIn);
+    if (this._annSrc) { try { this._annSrc.stop(); } catch { /* ya parado */ } }
+    this._annSrc = src;
+    src.onended = () => { if (this._annSrc === src) this._annSrc = null; g.disconnect(); send.disconnect(); };
+    src.start();
+    return true;
   }
 
   _makeNoise(seconds, kind) {
@@ -1418,9 +1491,10 @@ export class Audio {
     for (const v of this.musicVoices) if (!name || v.tag === name) this._kill(v, 0.6);
   }
 
-  announce(text) {
+  announce(text, key) {
     if (!text) return;
     if (this._ready()) this.play('__announce');
+    if (key && this._playAnnouncer(key)) return;
     let spoke = false;
     try {
       const synth = typeof window !== 'undefined' ? window.speechSynthesis : null;

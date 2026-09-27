@@ -986,7 +986,7 @@ function buildRaygun(g, def, P, upgraded) {
   add(mag, CY(0.012, 0.012, 0.04, 10), accent, 0, -0.012, 0);
   add(mag, CY(0.009, 0.009, 0.006, 10), glow, 0, -0.034, 0);
   return {
-    muzzle: V(0, y, -0.22), sight: V(0, y + 0.055, 0.005), eyeRelief: 0.27,
+    muzzle: V(0, y, -0.22), sight: V(0, y + 0.085, 0.005), eyeRelief: 0.27,   // por encima del emisor: no tapa el centro
     leftHand: V(-0.012, -0.034, 0.014), mag, magDir: V(0, -1, 0),
   };
 }

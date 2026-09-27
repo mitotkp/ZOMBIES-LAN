@@ -6,7 +6,7 @@ y los demás se conectan desde su PC con el navegador.
 
 Mapa: **Pueblo Olvidado**, con Terminal, Calle, Bar, Almacén y Planta Eléctrica. Tiene caja misteriosa,
 Pack-a-Punch, 6 Perk-a-Colas, armas de pared, escudo construible y potenciadores.
-Todo el arte y el sonido se generan por código, así que no hace falta internet para jugar.
+Todo el arte y el sonido se generan por código (salvo las voces del locutor de potenciadores, en `public/audio/`), así que no hace falta internet para jugar.
 
 > **English:** the game is available in Spanish and English. Choose the language with the *English / Español*
 > button on the title screen or in *Settings → Language*. The first time, it follows your browser's language.
@@ -57,7 +57,7 @@ que la red wifi esté configurada como **privada** y no como pública.
 ### Salud, infección y curas
 
 - Un golpe de zombi normal quita 25 de salud: aguantas 4 golpes (10 con Juggernog).
-- La barra de **salud** está abajo a la izquierda. Sin curas solo se regenera hasta el 60 % (la marca blanca de la barra).
+- La barra de **salud** está abajo a la izquierda. Sin curas solo se regenera hasta el 50 % (la marca blanca de la barra).
 - Un golpe de zombi puede **infectarte**: la barra se pone verde y pierdes vida poco a poco hasta curarte o caer.
 - Pulsa **H** para curarte. Se usa la cura más adecuada: el antídoto si estás infectado, el botiquín si te queda poca vida
   y, si no, una venda.
@@ -108,6 +108,7 @@ Si lo ves muy oscuro, sube el **Brillo** en *Ajustes* (menú de pausa con Esc) o
 | Moverse / mirar | WASD / ratón |
 | Disparar / apuntar | Clic izquierdo / clic derecho |
 | Correr / agacharse / saltar | Shift / C o Ctrl / Espacio |
+| Deslizarse | C mientras corres (Espacio durante el deslizamiento: salto con inercia) |
 | Recargar | R |
 | Usar / comprar | F (mantener para reconstruir, construir y reanimar) |
 | Cuchillo / granada / escudo | V / G / Q |

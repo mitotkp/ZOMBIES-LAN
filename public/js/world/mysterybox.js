@@ -2,7 +2,7 @@
 // no está 'off'. Estados: idle (cerrada, rayo azul), spinning (armas girando), ready (arma ofrecida),
 // teddy (osito y la caja sale volando), arriving (cae del cielo).
 import * as THREE from 'three';
-import { BOX_LOCATIONS } from '/shared/map.js';
+import { BOX_LOCATIONS, MAP } from '/shared/map.js';
 import { BOX } from '/shared/constants.js';
 import { BOX_POOL } from '/shared/weapons.js';
 import { StaticBatch, yawForFace, makeGlow, sfx, music, fx, easeInOut, TAU } from './kit.js';
@@ -37,14 +37,15 @@ export class MysteryBoxes {
   _make(loc, B) {
     const cx = (loc.x0 + loc.x1 + 1) / 2, cz = (loc.z0 + loc.z1 + 1) / 2;
     const yaw = yawForFace(loc.face);
+    const base = MAP.baseY(loc.lv || 0);
     // Palé fijo
-    const P = B.at(cx, 0, cz, yaw);
+    const P = B.at(cx, base, cz, yaw);
     for (const z of [-0.3, 0, 0.3]) P.box('wood', 1.9, 0.1, 0.12, 0, 0.05, z, { color: 0x6a5238 });
     for (let x = -0.85; x <= 0.86; x += 0.21) P.box('wood', 0.16, 0.05, 0.86, x, 0.13, 0, { color: 0x8a6a48 });
     P.cyl('bulb', 0.03, 0.03, 0.1, 0.85, 0.2, 0.35, { seg: 6 });   // vela
 
     const group = new THREE.Group();
-    group.position.set(cx, 0, cz);
+    group.position.set(cx, base, cz);
     group.rotation.y = yaw;
     this.world.root.add(group);
 
@@ -107,7 +108,7 @@ export class MysteryBoxes {
     box.add(holder);
 
     return {
-      loc, cx, cz, yaw, group, box, lid, beam, innerGlow, holder,
+      loc, cx, cz, base, yaw, group, box, lid, beam, innerGlow, holder,
       state: 'off', until: 0, weapon: null, user: null,
       lidK: 0, showKey: null, teddy: null, cycleT: 0, cycleIdx: 0, flyT: -1, arriveT: -1, fly: false,
     };
@@ -152,10 +153,10 @@ export class MysteryBoxes {
       e.user = s.user;
       e.weapon = s.weapon;
       if (was === 'spinning' && s.state === 'ready') {
-        sfx(this.ctx, 'box_close', e.cx, 1, e.cz, { volume: 0.4 });
+        sfx(this.ctx, 'box_close', e.cx, e.base + 1, e.cz, { volume: 0.4 });
       }
       if ((was === 'ready' || was === 'spinning') && s.state === 'idle') {
-        sfx(this.ctx, 'box_close', e.cx, 1, e.cz);
+        sfx(this.ctx, 'box_close', e.cx, e.base + 1, e.cz);
       }
       if (s.state === 'off' && was === 'teddy' && e.flyT < 0) e.flyT = 0;   // se va volando
       if (s.state === 'arriving' && was !== 'arriving') e.arriveT = prev ? 0 : -1;
@@ -167,16 +168,16 @@ export class MysteryBoxes {
   onEvent(name, ev) {
     const e = this.list[ev.loc != null ? ev.loc : ev.from];
     if (name === 'boxOpen' && e) {
-      sfx(this.ctx, 'box_open', e.cx, 1, e.cz);
+      sfx(this.ctx, 'box_open', e.cx, e.base + 1, e.cz);
       if (this.world._isSelf(ev.pid)) music(this.ctx, 'box');
       e.cycleT = 0;
     } else if (name === 'boxTeddy' && e) {
-      sfx(this.ctx, 'teddy_laugh', e.cx, 1.2, e.cz);
+      sfx(this.ctx, 'teddy_laugh', e.cx, e.base + 1.2, e.cz);
     } else if (name === 'boxMove') {
       const from = this.list[ev.from];
       if (from) {
         from.flyT = 0;
-        sfx(this.ctx, 'box_whoosh', from.cx, 2, from.cz);
+        sfx(this.ctx, 'box_whoosh', from.cx, from.base + 2, from.cz);
       }
       const to = this.list[ev.to];
       if (to) to.arriveT = 0;
@@ -246,8 +247,8 @@ export class MysteryBoxes {
         ry = (1 - k) * TAU * 2;
         if (e.arriveT >= 0 && k >= 1) {
           e.arriveT = -1;
-          sfx(this.ctx, 'box_close', e.cx, 0.5, e.cz);
-          _v.set(e.cx, 0.3, e.cz);
+          sfx(this.ctx, 'box_close', e.cx, e.base + 0.5, e.cz);
+          _v.set(e.cx, e.base + 0.3, e.cz);
           fx(this.ctx, 'dust', _v.clone(), new THREE.Vector3(0, 1, 0));
         }
       }
@@ -266,7 +267,7 @@ export class MysteryBoxes {
     const pl = lights && lights[L.BOX];
     if (pl) {
       if (lightBox) {
-        pl.position.set(lightBox.cx, 1.3, lightBox.cz);
+        pl.position.set(lightBox.cx, lightBox.base + 1.3, lightBox.cz);
         pl.intensity = 3 + lightBox.lidK * (5 + 2 * Math.sin(t * 9));
       } else pl.intensity = 0;
     }

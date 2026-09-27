@@ -29,6 +29,20 @@ const ICONS = {
   part: '<svg viewBox="0 0 24 24"><path d="M3 5h11l7 7v7H3z"/></svg>',
 };
 
+// Avisos del easter egg: [título, subtítulo, color]
+const EE_TEXT = {
+  start: ['La sangre del Conde', 'Sus viales se han derramado por el castillo: encuentra 3', '#c0202a'],
+  vial: [], fangGot: [],
+  vials: ['El Conde huele su sangre', 'Vendrá a por ella en la próxima ronda', '#c0202a'],
+  noPap: ['El Conde se disuelve en niebla', 'Solo un arma del Pack-a-Punch puede arrancarle el colmillo · Volverá', '#9a60ff'],
+  fang: ['¡El colmillo del Conde!', 'Recógelo y llévalo a la centrifugadora del laboratorio', '#ffd23f'],
+  centri: ['La centrifugadora arranca', 'Defiéndela 90 segundos sin alejarte del laboratorio', '#6aff9a'],
+  centriDone: ['La sangre se ha separado', 'La pantalla del laboratorio muestra el orden de los braseros del patio', '#6aff9a'],
+  brazFail: ['Los braseros se apagan', 'Ese no era el orden', '#ff7a1a'],
+  ballroom: ['Los cuatro fuegos arden', 'Algo se ha abierto en lo más alto del castillo: el salón de baile', '#ffd23f'],
+  fight: ['Doctor Vorkhaus', 'Te esperaba en su salón · Acaba con él', '#b070ff'],
+};
+
 const TEMPLATE = `
 <svg class="hud-defs" width="0" height="0" aria-hidden="true"><defs><linearGradient id="zlDmgGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff2a1a"/><stop offset="1" stop-color="#7a0000" stop-opacity="0"/></linearGradient></defs></svg>
 <div class="hud-layer hud-vignette"></div>
@@ -45,6 +59,8 @@ const TEMPLATE = `
 <div class="hud-bosses"></div>
 <div class="hud-banner"><div class="bn-title"></div><div class="bn-sub"></div></div>
 <div class="hud-puname"></div>
+<div class="hud-quest"><div class="q-head"></div><div class="q-text"></div><div class="q-bar"><i></i></div></div>
+<div class="hud-victory"><div class="vc-title"></div><div class="vc-sub"></div><div class="vc-reward"></div></div>
 <div class="hud-msg"></div>
 <div class="hud-prompt"><div class="hud-prompt-text"></div><div class="hud-progress"><i></i></div></div>
 <div class="hud-reload"></div>
@@ -69,8 +85,9 @@ const TEMPLATE = `
 `;
 
 // Texto con la tecla resaltada: "Pulsa F para..." -> "Pulsa [F] para..."
-function formatKeys(text) {
-  return esc(text).replace(/\b(Pulsa|Mantén|Mant&eacute;n|Press|Hold)\s+([A-Z])\b/, '$1 <span class="key">$2</span>');
+// pad: jugando con mando se muestra el botón (□ = Cuadrado, el de usar) en lugar de la tecla
+function formatKeys(text, pad = false) {
+  return esc(text).replace(/\b(Pulsa|Mantén|Mant&eacute;n|Press|Hold)\s+([A-Z])\b/, (m, a, k) => `${a} <span class="key">${pad && k === 'F' ? '□' : k}</span>`);
 }
 
 // Marcas de conteo (1-5) o número de ronda, dibujados en SVG con trazo irregular de tiza.
@@ -152,7 +169,9 @@ export class HUD {
       vignette: q('.hud-vignette'), hurt: q('.hud-hurt'), splats: q('.hud-splats'), flash: q('.hud-flash'),
       scope: q('.hud-scope'), dmgdirs: q('.hud-dmgdirs'), cross: q('.hud-crosshair'), hit: q('.hud-hitmarker'),
       downicons: q('.hud-downicons'), banner: q('.hud-banner'), bnTitle: q('.bn-title'), bnSub: q('.bn-sub'),
-      puname: q('.hud-puname'), msg: q('.hud-msg'), prompt: q('.hud-prompt'), promptText: q('.hud-prompt-text'),
+      puname: q('.hud-puname'), msg: q('.hud-msg'),
+      quest: q('.hud-quest'), qHead: q('.q-head'), qText: q('.q-text'), qBar: q('.q-bar i'),
+      victory: q('.hud-victory'), vcTitle: q('.vc-title'), vcSub: q('.vc-sub'), vcReward: q('.vc-reward'), prompt: q('.hud-prompt'), promptText: q('.hud-prompt-text'),
       progress: q('.hud-progress'), progressBar: q('.hud-progress i'), reload: q('.hud-reload'),
       downpanel: q('.hud-downpanel'), dpTitle: q('.dp-title'), dpSub: q('.dp-sub'), dpBar: q('.dp-bar i'),
       chat: q('.hud-chat'), chatFeed: q('.chat-feed'), chatInput: q('.chat-input'),
@@ -210,9 +229,11 @@ export class HUD {
   // ================================================================== API pública
   setPrompt(text) {
     const t = text ? String(text) : null;
-    if (t === this.promptValue) return;
+    const pad = !!(this.ctx.input && this.ctx.input.padActive);
+    if (t === this.promptValue && pad === this.promptPad) return;
     this.promptValue = t;
-    if (t) this.el.promptText.innerHTML = formatKeys(t);
+    this.promptPad = pad;
+    if (t) this.el.promptText.innerHTML = formatKeys(t, pad);
     this.el.prompt.classList.toggle('on', !!t);
   }
 
@@ -375,6 +396,24 @@ export class HUD {
     });
 
     this._on('ev:power', () => this.message(tr('¡Electricidad activada!'), 3));
+    // Easter egg del Castillo (server/easteregg.js): un aviso por paso
+    this._on('ev:ee', (e) => {
+      const who = e.pid != null ? this._name(e.pid) : '';
+      const T = EE_TEXT[e.k];
+      if (!T) return;
+      if (e.k === 'vial') { this.message(tr('{0} ha encontrado un vial de sangre ({1}/3)', who, e.n | 0), 3.5); sfx(this.ctx, 'part_pickup'); return; }
+      if (e.k === 'fangGot') { this.message(tr('{0} tiene el colmillo del Conde', who), 3.5); sfx(this.ctx, 'part_pickup'); return; }
+      if (e.k === 'brazFail') { this._flash('rgba(0,0,0,0.5)', 0.8); }
+      if (e.k === 'fight') this._flash('rgba(120,60,255,0.45)', 1.2);
+      this._banner(tr(T[0]), tr(T[1]), T[2]);
+    });
+    this._on('ev:eeBrazier', (e) => {
+      if (e.ok) this.message(tr('El brasero arde'), 1.8);
+    });
+    this._on('ev:victory', (e) => this._showVictory(e));
+    this._on('ev:dogRound', () => {
+      this._banner(tr('¡Ronda de perros!'), tr('Aparecen entre rayos · El último deja una Munición Máxima'), '#ff7a1a');
+    });
     this._on('ev:boss', (e) => {
       const T = ZOMBIE_TYPES[e.key] || {};
       this._flash('rgba(150,0,0,0.4)', 1);
@@ -496,6 +535,7 @@ export class HUD {
     this._updateDownState(self, gs, now);
     this._updateDownIcons(gs, now);
     this._updateTimedTexts(dt);
+    this._updateQuest(gs, dt);
     this._updateScoreboard(gs, dt);
     this._updateChatFeed(dt);
     if (self && self.state !== 'alive' && this.promptValue) this.setPrompt(null);
@@ -1044,6 +1084,48 @@ export class HUD {
     void el.offsetWidth;
     el.classList.add('on');
     this.bannerT = 3.5;
+  }
+
+  // Objetivo actual del easter egg (esquina superior izquierda); oculto hasta que empieza
+  _updateQuest(gs, dt) {
+    const ee = gs && gs.ee;
+    const el = this.el.quest;
+    if (this.victoryT > 0) {
+      this.victoryT -= dt;
+      if (this.victoryT <= 0) this.el.victory.classList.remove('on');
+    }
+    if (!ee || ee.step < 1 || ee.step >= 8) { el.classList.remove('on'); return; }
+    let text = '', bar = -1;
+    switch (ee.step) {
+      case 1: text = tr('Encuentra los viales de sangre ({0}/3)', (ee.got || []).length); break;
+      case 2: text = tr('Mata al Conde con un arma del Pack-a-Punch'); break;
+      case 3: text = ee.fang ? tr('Recoge el colmillo del Conde') : tr('Lleva el colmillo a la centrifugadora del laboratorio'); break;
+      case 4: text = tr('Defiende la centrifugadora'); bar = Math.min(1, (ee.centri || 0) / 90); break;
+      case 5: text = tr('Enciende los braseros del patio en orden ({0}/4)', (ee.lit || []).length); break;
+      case 6: text = tr('Sube al salón de baile'); break;
+      case 7: text = tr('Derrota al Doctor Vorkhaus'); break;
+      default: break;
+    }
+    if (this._questText !== text) { this._questText = text; this.el.qHead.textContent = tr('Secretos del castillo'); this.el.qText.textContent = text; }
+    this.el.qBar.parentNode.style.display = bar >= 0 ? '' : 'none';
+    if (bar >= 0) this.el.qBar.style.width = `${Math.round(bar * 100)}%`;
+    el.classList.add('on');
+  }
+
+  _showVictory(e) {
+    const el = this.el.victory;
+    this.el.vcTitle.textContent = tr('¡Victoria!');
+    this.el.vcSub.textContent = e && e.pid != null
+      ? tr('{0} acabó con el Doctor Vorkhaus en la ronda {1}', this._name(e.pid), (e.round | 0))
+      : tr('El Doctor Vorkhaus ha sido derrotado');
+    this.el.vcReward.textContent = tr('Recompensa: todas las ventajas y {0} puntos · La noche continúa...', (e && e.reward) || 5000);
+    this._flash('rgba(255,230,160,0.6)', 2.2);
+    sfx(this.ctx, 'pap_ready');
+    try { if (this.ctx.audio && this.ctx.audio.music) this.ctx.audio.music('round_end'); } catch { /* nada */ }
+    el.classList.remove('on');
+    void el.offsetWidth;
+    el.classList.add('on');
+    this.victoryT = 9;
   }
 
   _flash(color, seconds = 1) {

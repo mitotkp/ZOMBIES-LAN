@@ -10,13 +10,14 @@ import {
 } from '../shared/constants.js';
 import {
   W, H, DOORS, WINDOW_INFO, INTERACTABLE_BY_ID, BOX_LOCATIONS, BOX_START, SHIELD_PARTS,
-  PLAYER_SPAWNS, PLAYER_SPAWN_YAW, START_ZONE,
+  PLAYER_SPAWNS, PLAYER_SPAWN_YAW, START_ZONE, setActiveMap, isMapId, DEFAULT_MAP, sameFloor, MAP,
 } from '../shared/map.js';
 import { solidForPlayer, lineOfSight } from '../shared/collision.js';
 import { WEAPONS, weaponDef, weaponName, BOX_POOL, ammoPrice, partMult, falloff, meleeStats } from '../shared/weapons.js';
-import { PERKS, PERK_LIMIT, perkPrice } from '../shared/perks.js';
+import { PERKS, PERK_LIMIT, perkPrice, perkNeedsPower } from '../shared/perks.js';
 import { PF, r2, safeParse } from '../shared/protocol.js';
 import { ZombieManager } from './zombies.js';
+import { EasterEgg, EE_STEP } from './easteregg.js';
 import crypto from 'node:crypto';
 
 const DEG = Math.PI / 180;
@@ -45,6 +46,7 @@ const SPAWN_INVULN = 2000;            // ms de invulnerabilidad tras reaparecer
 const NADE_WINDOW = 6000;             // ms de validez de una granada lanzada
 const MSG_RATE_LIMIT = 250;           // mensajes por segundo por conexión
 const PING_INTERVAL = 2000;
+const PAUSE_MAX_MS = 5 * 60 * 1000;   // una pausa dura como mucho 5 minutos
 const PING_TIMEOUT = 20000;
 const PERK_ORDER = Object.keys(PERKS);
 const POWERUP_TYPES = POWERUPS.types;
@@ -78,6 +80,9 @@ function weightedPick(pool) {
 
 export class Game {
   constructor(opts = {}) {
+    // Cada sala juega en su propio mapa; se activa al entrar en cualquier manejador de la sala (_use)
+    this.mapId = isMapId(opts.map) ? opts.map : DEFAULT_MAP;
+    this.M = setActiveMap(this.mapId);
     this.dev = !!opts.dev;
     this.lan = Array.isArray(opts.lan) ? opts.lan.slice() : [];
     this.quiet = !!opts.quiet;
@@ -92,16 +97,19 @@ export class Game {
     this.sessions = new Map();     // token -> pid (para reconexión)
     this.reconnectTimers = new Map(); // pid -> temporizador de limpieza tras desconexión
     this.nextPid = 1;
+    this.ee = new EasterEgg(this);
     this.gs = this._freshState();
     this.dirty = true;
     this.lastGsAt = 0;
     this.lastSnapAt = 0;
     this.lastPingAt = 0;
-    this.lastTick = Date.now();
+    this.pausedTotal = 0;          // ms acumulados en pausa (el reloj de juego no avanza en pausa)
+    this.pauseStart = 0;           // this.clock() real al pausar (0 = no hay pausa)
+    this.lastTick = this.clock();
     this.nextPuId = 1;
-    this.lastPuType = null;
     this.dropsThisRound = 0;
     this.medDropsThisRound = 0;
+    this._resetPowerupCycle();
     this.nextItemId = 1;
     this.gameOverAt = 0;
     this.boxPriv = BOX_LOCATIONS.map(() => ({ teddy: false, weapon: null, paid: 0 }));
@@ -114,8 +122,11 @@ export class Game {
 
   _freshState() {
     return {
+      map: this.mapId,              // id del mapa de la sala (el cliente carga ese mapa)
       phase: 'lobby',
       round: 0,
+      dogRound: false,              // ronda de perros en curso
+      pause: null,                  // { by, name, at, leftMs } mientras la partida está en pausa
       roundState: 'pre',
       roundUntil: 0,
       roundStartAt: 0,              // ms: cuándo empezó la ronda actual (en 'active')
@@ -123,7 +134,7 @@ export class Game {
       zLeft: 0,
       power: false,
       doors: {},
-      openZones: [START_ZONE],
+      openZones: this.M.expandZones([START_ZONE]),
       windows: WINDOW_INFO.map(() => BOARDS_PER_WINDOW),
       box: {
         loc: BOX_START,
@@ -136,6 +147,7 @@ export class Game {
       items: [],                     // curas en el suelo: { id, type, x, z, until }
       bosses: [],                    // jefes vivos: { id, key, level, hp, maxHp }
       timers: { instakill: 0, doublepoints: 0, firesale: 0 },
+      ee: this.ee ? this.ee.fresh() : null,   // easter egg del mapa (null si no tiene)
       players: {},
     };
   }
@@ -176,7 +188,7 @@ export class Game {
   _newPriv(spawn) {
     const sp = PLAYER_SPAWNS[spawn % PLAYER_SPAWNS.length];
     return {
-      x: sp.x, y: 0, z: sp.z, yaw: PLAYER_SPAWN_YAW, pitch: 0, flags: 0,
+      x: sp.x, y: sp.y || 0, z: sp.z, yaw: PLAYER_SPAWN_YAW, pitch: 0, flags: 0,
       hasPos: false, teleportUntil: 0, badPos: 0, lastMoveAt: 0,
       lastDamageAt: 0, invulnUntil: 0,
       hold: null, nades: [], lastMeleeAt: 0, boomTimes: [], fireTimes: [],
@@ -191,11 +203,44 @@ export class Game {
 
   _players() { return Object.values(this.gs.players); }
 
-  _timerActive(key, now = Date.now()) { return (this.gs.timers[key] || 0) > now; }
+  // Reloj de juego: this.clock() menos el tiempo pasado en pausa. Todo lo que es jugabilidad (rondas, temporizadores,
+  // desangrado, potenciadores, IA...) usa este reloj y por eso se congela solo durante la pausa. La red usa this.clock().
+  clock() {
+    const r = Date.now();
+    return r - this.pausedTotal - (this.pauseStart ? r - this.pauseStart : 0);
+  }
+
+  get paused() { return !!this.pauseStart; }
+
+  _pause(p) {
+    if (this.pauseStart || this.gs.phase !== 'playing') return;
+    this.pauseStart = Date.now();
+    this.gs.pause = { by: p.id, name: p.name, at: this.clock(), leftMs: PAUSE_MAX_MS };
+    this.markDirty();
+    this.flushGs();
+    this._ev({ e: 'pause', pid: p.id });
+    this._log(`${p.name} pausó la partida.`);
+  }
+
+  _resume(p, reason = 'player') {
+    if (!this.pauseStart) return;
+    const shift = Date.now() - this.pauseStart;
+    this.pausedTotal += shift;
+    this.pauseStart = 0;
+    this.gs.pause = null;
+    this.lastTick = this.clock();
+    this.markDirty();
+    this.flushGs();
+    this._ev({ e: 'resume', pid: p ? p.id : null, shift, reason });
+    this._log(p ? `${p.name} reanudó la partida.` : 'La pausa terminó (límite de 5 minutos).');
+  }
+
+  _timerActive(key, now = this.clock()) { return (this.gs.timers[key] || 0) > now; }
 
   // ------------------------------------------------------------------ conexiones
 
   addConnection(ws, req) {
+    this._use();
     const conn = {
       ws, pid: null,
       ip: (req && req.socket && req.socket.remoteAddress) || '?',
@@ -208,6 +253,7 @@ export class Game {
       return conn;
     }
     ws.on('message', (data, isBinary) => {
+      this._use();
       try {
         this._onMessage(conn, data, isBinary);
       } catch (e) {
@@ -224,6 +270,7 @@ export class Game {
       }
     });
     ws.on('close', (code, reason) => {
+      this._use();
       try { this._onClose(conn, code, String(reason || '')); } catch (e) { this._logError('desconexión', e); }
     });
     ws.on('error', () => { /* el cierre se gestiona en 'close' */ });
@@ -256,7 +303,7 @@ export class Game {
     const p = gs.players[pid];
     if (!p) return;
     const d = this.pd.get(pid);
-    const now = Date.now();
+    const now = this.clock();
     if (d) this._cancelHold(p, d, now);
     this._cancelHoldsTargeting(pid, now);
     gs.box.slots.forEach((s, i) => {
@@ -282,6 +329,7 @@ export class Game {
     if (gs.phase === 'playing') this._checkGameOver(now);
 
     const t = setTimeout(() => {
+      this._use();
       this.reconnectTimers.delete(pid);
       this._removePlayer(pid);
     }, RECONNECT_GRACE_MS);
@@ -293,7 +341,7 @@ export class Game {
     const p = gs.players[pid];
     if (!p) return;
     const d = this.pd.get(pid);
-    const now = Date.now();
+    const now = this.clock();
     const wasConnected = p.state !== 'disconnected';
     if (wasConnected) {
       if (d) this._cancelHold(p, d, now);
@@ -370,19 +418,19 @@ export class Game {
 
   _system(msg) { this._ev({ e: 'chat', pid: 0, name: 'Sistema', msg }); }
 
-  _gsPayload(now = Date.now()) {
+  _gsPayload(now = this.clock()) {
     return { t: 'gs', now, ...this.gs };
   }
 
-  _sendGs(now = Date.now()) {
+  _sendGs(now = this.clock()) {
     this.dirty = false;
-    this.lastGsAt = now;
+    this.lastGsAt = Date.now();
     this._broadcastRaw(JSON.stringify(this._gsPayload(now)));
   }
 
   // Envía el estado ya (antes de eventos que dependen de él: give, respawn, down...)
   flushGs() {
-    if (this.dirty) this._sendGs(Date.now());
+    if (this.dirty) this._sendGs(this.clock());
   }
 
   _sendSnap(now) {
@@ -405,7 +453,6 @@ export class Game {
       players.push([p.id, r2(d.x), r2(d.y), r2(d.z), r2(d.yaw), r2(d.pitch), flags, w, up]);
     }
     const snap = { t: 'snap', now, z: this.zombies.snapshot(), p: players };
-    this.lastSnapAt = now;
     this._broadcastRaw(JSON.stringify(snap), null, true);
   }
 
@@ -424,16 +471,26 @@ export class Game {
 
   // ------------------------------------------------------------------ bucle
 
+  // Activa el mapa de esta sala (el servidor puede tener salas con mapas distintos)
+  _use() { if (MAP !== this.M) setActiveMap(this.M); }
+
   _tickSafe() {
+    this._use();
     try { this._tick(); } catch (e) { this._logError('tick', e); }
   }
 
   _tick() {
-    const now = Date.now();
+    const real = Date.now();
+    if (this.pauseStart && (real - this.pauseStart >= PAUSE_MAX_MS || this.gs.phase !== 'playing' || this.playerCount() === 0)) this._resume(null, 'timeout');
+    const now = this.clock();
     const dt = clamp((now - this.lastTick) / 1000, 0, 0.1);
     this.lastTick = now;
     const gs = this.gs;
-    if (gs.phase === 'playing') {
+    if (gs.pause) {
+      // cuenta atrás visible para todos (se reenvía cada segundo)
+      const left = Math.max(0, PAUSE_MAX_MS - (real - this.pauseStart));
+      if (Math.floor(left / 1000) !== Math.floor(gs.pause.leftMs / 1000)) { gs.pause.leftMs = left; this.markDirty(); }
+    } else if (gs.phase === 'playing') {
       this._updatePlayers(dt, now);
       this._updateBox(now);
       this._updatePap(now);
@@ -441,21 +498,23 @@ export class Game {
       this._updateItems(now);
       this._updateTimers(now);
       try { this.zombies.update(dt); } catch (e) { this._logError('zombis', e); }
+      if (gs.ee) { try { this.ee.tick(now, dt); } catch (e) { this._logError('easter egg', e); } }
       if (gs.phase === 'playing') this._checkGameOver(now);
     } else if (gs.phase === 'gameover') {
       if (now >= this.gameOverAt) this._returnToLobby();
     }
-    if (this.gs.phase !== 'lobby' && now - this.lastSnapAt >= 1000 / SNAPSHOT_RATE - 5) this._sendSnap(now);
-    if (this.dirty && now - this.lastGsAt >= 1000 / GS_MAX_RATE - 2) this._sendGs(now);
-    if (now - this.lastPingAt >= PING_INTERVAL) this._pingAll(now);
+    if (this.gs.phase !== 'lobby' && real - this.lastSnapAt >= 1000 / SNAPSHOT_RATE - 5) { this._sendSnap(now); this.lastSnapAt = real; }
+    if (this.dirty && real - this.lastGsAt >= 1000 / GS_MAX_RATE - 2) this._sendGs(now);
+    if (real - this.lastPingAt >= PING_INTERVAL) this._pingAll(real);
   }
 
   // ------------------------------------------------------------------ mensajes
 
   _onMessage(conn, data, isBinary) {
     if (isBinary) return;
-    const now = Date.now();
-    if (now - conn.rateStart >= 1000) { conn.rateStart = now; conn.rateCount = 0; }
+    const real = Date.now();
+    if (real - conn.rateStart >= 1000) { conn.rateStart = real; conn.rateCount = 0; }
+    const now = this.clock();
     if (++conn.rateCount > MSG_RATE_LIMIT) return;
     const m = safeParse(data);
     if (!m || typeof m !== 'object' || Array.isArray(m) || typeof m.t !== 'string') return;
@@ -470,6 +529,11 @@ export class Game {
     const p = this.gs.players[conn.pid];
     const d = this.pd.get(conn.pid);
     if (!p || !d) return;
+
+    // Pausa compartida: cualquiera pausa o reanuda; en pausa solo se atienden chat y posición (sin moverse)
+    if (m.t === 'pause') { if (this.gs.phase === 'playing' && p.state !== 'disconnected') this._pause(p); return; }
+    if (m.t === 'resume') { this._resume(p); return; }
+    if (this.pauseStart && m.t !== 'chat' && m.t !== 'ready') return;
 
     switch (m.t) {
       case 'ready':
@@ -493,7 +557,7 @@ export class Game {
   }
 
   _roomInfo() {
-    return this.roomCode ? { code: this.roomCode, name: this.roomName, locked: !!this.roomPassword } : null;
+    return this.roomCode ? { code: this.roomCode, name: this.roomName, locked: !!this.roomPassword, map: this.mapId } : null;
   }
 
   // Intenta recuperar una sesión previa (reconexión tras un corte no voluntario). true si se resolvió.
@@ -509,7 +573,7 @@ export class Game {
     const d = this.pd.get(pid);
     if (p.state === 'disconnected') {
       p.state = p._prevState || 'alive';
-      if (p.state === 'down' && d) p.bleedUntil = Date.now() + (d.bleedRemain || 0);
+      if (p.state === 'down' && d) p.bleedUntil = this.clock() + (d.bleedRemain || 0);
     }
     conn.pid = pid;
     this.byPid.set(pid, conn);
@@ -518,7 +582,7 @@ export class Game {
     this._system(`${p.name} reconectó.`);
     try {
       conn.ws.send(JSON.stringify({
-        t: 'welcome', id: pid, host: p.host, gs: this._gsPayload(Date.now()),
+        t: 'welcome', id: pid, host: p.host, gs: this._gsPayload(this.clock()),
         lan: this.lan, dev: this.dev, session: token, room: this._roomInfo(),
       }));
     } catch { /* nada */ }
@@ -559,7 +623,7 @@ export class Game {
     this.pd.set(pid, this._newPriv(spawn));
     conn.pid = pid;
     this.byPid.set(pid, conn);
-    const now = Date.now();
+    const now = this.clock();
     const token = crypto.randomBytes(16).toString('hex');
     this.sessions.set(token, pid);
     try {
@@ -594,7 +658,8 @@ export class Game {
     if (p.state === 'dead') return; // espectador: su posición no importa
     const pos = vec3(m.p, 500);
     if (!pos) return;
-    const x = clamp(pos[0], 0, W), y = clamp(pos[1], -1, 10), z = clamp(pos[2], 0, H);
+    const topLv = this.M.levels[this.M.NL - 1];
+    const x = clamp(pos[0], 0, W), y = clamp(pos[1], this.M.levels[0].y - 1, topLv.y + topLv.h + 2), z = clamp(pos[2], 0, H);
     const jump = Math.hypot(x - d.x, z - d.z);
     if (d.hasPos && now > d.teleportUntil) {
       // Presupuesto de velocidad real (no una distancia fija por mensaje): tolera jitter/ráfagas
@@ -749,17 +814,18 @@ export class Game {
       for (const z of this.zombies.list().slice()) {
         if (z.dead || z.id === directId) continue;
         const dx = z.x - pos[0], dz = z.z - pos[2];
-        const dy = Math.max(0, Math.abs(pos[1] - 0.9) - 0.9);
+        const dy = Math.max(0, Math.abs(pos[1] - ((z.y || 0) + 0.9)) - 0.9);
         const dist = Math.hypot(dx, dz, dy);
         if (dist > radius) continue;
         // El punto de impacto puede estar sobre la superficie de un muro: retroceder un poco hacia el zombi
         const flat = Math.hypot(dx, dz) || 1;
         const sx = pos[0] + (dx / flat) * Math.min(0.3, flat * 0.5);
         const sz = pos[2] + (dz / flat) * Math.min(0.3, flat * 0.5);
-        const sy = clamp(pos[1], 0.2, 3.8);
-        if (!lineOfSight(sx, sy, sz, z.x, 1.0, z.z, doors)) continue;
+        const top = this.M.levels[this.M.NL - 1];
+        const sy = clamp(pos[1], this.M.levels[0].y + 0.2, top.y + top.h - 0.2);
+        if (!lineOfSight(sx, sy, sz, z.x, (z.y || 0) + 1.0, z.z, doors)) continue;
         const amount = splashDmg * (1 - 0.7 * dist / radius);
-        const res = this.zombies.damage(z.id, amount, p.id, info) || {};
+        const res = this.zombies.damage(z.id, amount, p.id, { ...info, edge: dist / radius }) || {};
         if (res.existed && !res.killed) survived.add(z.id);
       }
     }
@@ -785,7 +851,7 @@ export class Game {
     for (const zid of ids) {
       const z = this.zombies.get(zid);
       if (!z) continue;
-      if (Math.hypot(z.x - d.x, z.z - d.z) > range) continue;
+      if (Math.hypot(z.x - d.x, z.z - d.z) > range || Math.abs((z.y || 0) - (d.y || 0)) > 1.8) continue;
       if (shield) {
         if (!p.shield) break;
         const res = this.zombies.damage(zid, SHIELD.bashDamage, p.id, {
@@ -848,13 +914,14 @@ export class Game {
     if (d.god && p.hp <= 1) return;   // con /god la infección baja la vida pero no derriba
     d.infT += dt;
     const dps = Math.min(INFECTION.dpsMax, INFECTION.dps + INFECTION.ramp * d.infT);
+    const floor = Math.round(p.maxHp * INFECTION.floor);
+    if (p.hp <= floor) { d.infAcc = 0; return; }
     d.infAcc += dps * dt;
     if (d.infAcc < 1) return;
     const n = Math.floor(d.infAcc);
     d.infAcc -= n;
-    p.hp = Math.max(0, p.hp - n);
+    p.hp = Math.max(floor, p.hp - n);
     this.markDirty();
-    if (p.hp <= 0) this._goDown(p, d, now);
   }
 
   _useMed(p, item) {
@@ -870,14 +937,14 @@ export class Game {
   }
 
   // Cura en el suelo (la suelta un zombi); se recoge pasando por encima si hay hueco
-  spawnItem(type, x, z, now = Date.now()) {
+  spawnItem(type, x, z, now = this.clock(), y) {
     if (!MEDS[type]) return null;
-    const pt = this._walkablePoint(x, z);
+    const pt = this._walkablePoint(x, z, y);
     if (!pt) return null;
-    const it = { id: this.nextItemId++, type, x: r2(pt.x), z: r2(pt.z), until: now + MED_DROPS.lifetime * 1000 };
+    const it = { id: this.nextItemId++, type, x: r2(pt.x), y: pt.y, z: r2(pt.z), until: now + MED_DROPS.lifetime * 1000 };
     this.gs.items.push(it);
     this.markDirty();
-    this._ev({ e: 'itemSpawn', id: it.id, type, x: it.x, z: it.z });
+    this._ev({ e: 'itemSpawn', id: it.id, type, x: it.x, y: it.y, z: it.z });
     return it;
   }
 
@@ -893,7 +960,7 @@ export class Game {
         if (p.state !== 'alive' || !p.meds || (p.meds[it.type] | 0) >= def.max) continue;
         const d = this.pd.get(p.id);
         if (!d || !d.hasPos) continue;
-        if (Math.hypot(d.x - it.x, d.z - it.z) <= MED_DROPS.pickupRadius) { taker = p; break; }
+        if (Math.hypot(d.x - it.x, d.z - it.z) <= MED_DROPS.pickupRadius && Math.abs((d.y || 0) - (it.y || 0)) < 1.8) { taker = p; break; }
       }
       if (taker) {
         taker.meds[it.type] = (taker.meds[it.type] | 0) + 1;
@@ -912,7 +979,7 @@ export class Game {
   // ---- interacción
 
   _inRange(d, it) {
-    return d.hasPos && Math.hypot(d.x - it.x, d.z - it.z) <= (it.range || PLAYER.interactRange) + 0.8;
+    return d.hasPos && Math.hypot(d.x - it.x, d.z - it.z) <= (it.range || PLAYER.interactRange) + 0.8 && sameFloor(it, d.y);
   }
 
   _onUse(p, d, m, now) {
@@ -933,8 +1000,26 @@ export class Game {
       case 'part': this._usePart(p, it.part); break;
       case 'bench': this._useBench(p); break;
       case 'med': this._useMed(p, it.item); break;
+      case 'teleport': this._useTeleport(p, d, it, now); break;
+      case 'ee': if (this.gs.ee) this.ee.use(p, d, it, now); break;
       default: break; // ventanas: solo con 'hold'
     }
+  }
+
+  // Teletransporte: lleva al jugador a su destino (el cliente es autoritativo de su posición: se le ordena moverse)
+  _useTeleport(p, d, it, now) {
+    const tp = this.M.TELEPORTERS.find((t) => t.id === it.tp);
+    if (!tp) return;
+    if (tp.power && !this.gs.power) { this._deny(p.id, 'power'); return; }
+    if (d.tpCooldown && now < d.tpCooldown) return;
+    const to = tp.to;
+    const y = this.M.baseY(to.lv);
+    d.tpCooldown = now + 1500;
+    d.x = to.x; d.y = y; d.z = to.z;
+    d.teleportUntil = now + TELEPORT_GRACE;
+    d.badPos = 0;
+    this._cancelHold(p, d, now);
+    this._ev({ e: 'tp', pid: p.id, id: tp.id, fx: tp.x + 0.5, fy: this.M.baseY(tp.lv || 0), fz: tp.z + 0.5, x: to.x, y, z: to.z, yaw: to.yaw || 0 });
   }
 
   _spend(p, cost) {
@@ -953,6 +1038,7 @@ export class Game {
     let v = Math.round(n);
     if (scaled && this._timerActive('doublepoints')) v *= 2;
     p.points = Math.max(0, p.points + v);
+    if (v > 0) this.puScore += v;
     this.markDirty();
     this._ev({ e: 'pts', pid: p.id, n: v }, { to: p.id });
   }
@@ -961,6 +1047,7 @@ export class Game {
     const gs = this.gs;
     const door = DOORS.find((dd) => dd.id === it.door);
     if (!door || gs.doors[door.id]) return;
+    if (door.sealed) { this._deny(p.id, 'busy'); return; }   // solo la abre el easter egg
     if (!this._spend(p, door.cost)) return;
     this._openDoor(door, p.id);
     this._ev({ e: 'buy', pid: p.id, kind: 'door', item: door.id });
@@ -972,7 +1059,7 @@ export class Game {
     gs.doors[door.id] = true;
     const zones = new Set(gs.openZones);
     for (const zn of door.zones) zones.add(zn);
-    gs.openZones = [...zones].sort((a, b) => a - b);
+    gs.openZones = this.M.expandZones([...zones]);   // también las zonas unidas por escaleras y arcos
     this.markDirty();
     this._ev({ e: 'door', id: door.id, pid: pid || null });
   }
@@ -1036,7 +1123,7 @@ export class Game {
   _usePerk(p, key) {
     const perk = PERKS[key];
     if (!perk) return;
-    if (!this.gs.power) { this._deny(p.id, 'power'); return; }
+    if (!this.gs.power && perkNeedsPower(key)) { this._deny(p.id, 'power'); return; }
     if (p.perks.includes(key)) { this._deny(p.id, 'owned'); return; }
     if (p.perks.length >= PERK_LIMIT) { this._deny(p.id, 'limit'); return; }
     const solo = this.playerCount() <= 1;
@@ -1052,6 +1139,7 @@ export class Game {
     this.markDirty();
     this._ev({ e: 'power', pid: p.id });
     this._log(`${p.name} activó la electricidad.`);
+    if (this.gs.ee) this.ee.onPower();
   }
 
   _usePart(p, idx) {
@@ -1142,6 +1230,7 @@ export class Game {
           const user = s.user != null ? gs.players[s.user] : null;
           if (user && bp.paid > 0) this._addPoints(user, bp.paid, false); // se devuelve el dinero
           Object.assign(s, { state: 'teddy', weapon: null, until: now + BOX.teddyTime * 1000 });
+          this.boxMovedOnce = true;
           bp.teddy = false;
           this.markDirty();
           this._ev({ e: 'boxTeddy', loc: i });
@@ -1263,7 +1352,7 @@ export class Game {
     return REPAIR_TIME * (p.perks.includes('speedcola') ? 0.5 : 1) * 1000;
   }
 
-  _cancelHold(p, d, now = Date.now()) {
+  _cancelHold(p, d, now = this.clock()) {
     const h = d && d.hold;
     if (!h) return;
     d.hold = null;
@@ -1346,7 +1435,7 @@ export class Game {
       if (p.state !== 'alive') continue;
       const d = this.pd.get(p.id);
       if (!d) continue;
-      out.push({ pid: p.id, x: d.x, z: d.z });
+      out.push({ pid: p.id, x: d.x, z: d.z, y: d.y || 0, yaw: d.yaw || 0 });
     }
     return out;
   }
@@ -1357,18 +1446,23 @@ export class Game {
     for (const p of this._players()) {
       if (p.state !== 'alive' && p.state !== 'down') continue;
       const d = this.pd.get(p.id);
-      if (d && d.hasPos) out.push({ pid: p.id, x: d.x, z: d.z });
+      if (d && d.hasPos) out.push({ pid: p.id, x: d.x, z: d.z, y: d.y || 0 });
     }
     return out;
   }
 
   // API para ZombieManager: golpe que conecta. Devuelve { hit, blocked }
+  // Línea de visión entre un zombi y un objetivo (a la altura del pecho)
+  losBetween(z, t) {
+    return lineOfSight(z.x, (z.y || 0) + 1.4, z.z, t.x, (t.y || 0) + 1.3, t.z, this.gs.doors);
+  }
+
   damagePlayer(pid, amount, z) {
     const gs = this.gs;
     const p = gs.players[pid];
     const d = this.pd.get(pid);
     if (!p || !d || p.state !== 'alive' || gs.phase !== 'playing') return { hit: false, blocked: false };
-    const now = Date.now();
+    const now = this.clock();
     if (d.god || now < d.invulnUntil) return { hit: false, blocked: false };
     let amt = Math.max(0, Math.round(Number(amount) || 0));
     // golpes de jefes y tanques: menos daño jugando solo y nunca más de heavyHitCap de la salud máxima
@@ -1482,11 +1576,11 @@ export class Game {
       infected: false, meds: freshMeds(), healing: null,
     });
     d.infT = 0; d.infAcc = 0;
-    d.x = sp.x; d.y = 0; d.z = sp.z; d.yaw = PLAYER_SPAWN_YAW; d.pitch = 0; d.flags = 0;
+    d.x = sp.x; d.y = sp.y || 0; d.z = sp.z; d.yaw = PLAYER_SPAWN_YAW; d.pitch = 0; d.flags = 0;
     d.hasPos = true; d.teleportUntil = now + TELEPORT_GRACE; d.badPos = 0; d.lastMoveAt = now;
     d.lastDamageAt = 0; d.invulnUntil = now + SPAWN_INVULN; d.hold = null; d.nades = [];
     this.markDirty();
-    return { pid: p.id, x: sp.x, z: sp.z, yaw: PLAYER_SPAWN_YAW };
+    return { pid: p.id, x: sp.x, y: sp.y || 0, z: sp.z, yaw: PLAYER_SPAWN_YAW };
   }
 
   _updatePlayers(dt, now) {
@@ -1494,9 +1588,9 @@ export class Game {
       const d = this.pd.get(p.id);
       if (!d) continue;
       if (p.state === 'alive') {
-        // Regeneración natural solo hasta regenCap (y nunca infectado)
+        // Regeneración natural hasta regenCap, también infectado (la infección no baja de INFECTION.floor)
         const cap = Math.round(p.maxHp * PLAYER.regenCap);
-        if (!p.infected && p.hp < cap && now - d.lastDamageAt >= PLAYER.regenDelay * 1000) {
+        if (p.hp < cap && now - d.lastDamageAt >= PLAYER.regenDelay * 1000) {
           p.hp = Math.min(cap, Math.round(p.hp + PLAYER.regenRate * dt));
           this.markDirty();
         }
@@ -1513,42 +1607,77 @@ export class Game {
 
   // ------------------------------------------------------------------ potenciadores y temporizadores
 
+  _resetPowerupCycle() {
+    this.lastPuType = null;
+    this.puCycle = [];
+    this.puCycleIdx = 0;
+    this.boxMovedOnce = false;
+    this.puScore = 0;                       // puntos ganados por el equipo desde la última caída
+    this.puScoreStep = POWERUPS.scoreStep;
+  }
+
+  _shufflePowerupCycle() {
+    const list = POWERUP_TYPES.slice();
+    for (let i = list.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [list[i], list[j]] = [list[j], list[i]];
+    }
+    // Que el nuevo ciclo no empiece repitiendo el último potenciador
+    if (list.length > 1 && list[0] === this.lastPuType) [list[0], list[1]] = [list[1], list[0]];
+    this.puCycle = list;
+    this.puCycleIdx = 0;
+  }
+
+  _puAllowed(t, now) {
+    // La liquidación solo tras moverse la caja al menos una vez, y nunca mientras se mueve o ya está activa
+    if (t === 'firesale') return this.boxMovedOnce && !this._boxMoving() && !this._timerActive('firesale', now);
+    return true;
+  }
+
+  // Siguiente potenciador del ciclo. Si el que toca no está permitido, se adelanta el siguiente válido
+  // y el otro queda para más adelante en el mismo ciclo.
   _randomPowerupType(now) {
-    let types = POWERUP_TYPES.filter((t) => t !== this.lastPuType);
-    if (this._boxMoving() || this._timerActive('firesale', now)) types = types.filter((t) => t !== 'firesale');
-    if (!types.length) types = POWERUP_TYPES.filter((t) => t !== 'firesale');
-    return types[Math.floor(Math.random() * types.length)];
+    if (!this.puCycle || this.puCycleIdx >= this.puCycle.length) this._shufflePowerupCycle();
+    const c = this.puCycle;
+    for (let i = this.puCycleIdx; i < c.length; i++) {
+      if (!this._puAllowed(c[i], now)) continue;
+      [c[this.puCycleIdx], c[i]] = [c[i], c[this.puCycleIdx]];
+      return c[this.puCycleIdx++];
+    }
+    // Ninguno válido en lo que queda del ciclo: el primero permitido cualquiera
+    return POWERUP_TYPES.find((t) => this._puAllowed(t, now)) || null;
   }
 
   // Punto de suelo transitable para un potenciador (el centro de la celda más cercana si hace falta)
-  _walkablePoint(x, z) {
+  _walkablePoint(x, z, y = this.M.levels[0].y) {
     const doors = this.gs.doors;
     const cx = Math.floor(x), cz = Math.floor(z);
-    if (!solidForPlayer(cx, cz, doors)) return { x, z };
+    const ground = (px, pz) => r2(this.M.groundY(px, pz, y));
+    if (!solidForPlayer(cx, cz, doors, y)) return { x, z, y: ground(x, z) };
     let best = null, bd = Infinity;
     for (let r = 1; r <= 3 && !best; r++) {
       for (let dz = -r; dz <= r; dz++) {
         for (let dx = -r; dx <= r; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
-          if (solidForPlayer(cx + dx, cz + dz, doors)) continue;
+          if (solidForPlayer(cx + dx, cz + dz, doors, y)) continue;
           const px = cx + dx + 0.5, pz = cz + dz + 0.5;
           const dd = (px - x) ** 2 + (pz - z) ** 2;
-          if (dd < bd) { bd = dd; best = { x: px, z: pz }; }
+          if (dd < bd) { bd = dd; best = { x: px, z: pz, y: ground(px, pz) }; }
         }
       }
     }
     return best;
   }
 
-  spawnPowerup(type, x, z, now = Date.now()) {
+  spawnPowerup(type, x, z, now = this.clock(), y) {
     if (!POWERUP_TYPES.includes(type)) return null;
-    const pt = this._walkablePoint(x, z);
+    const pt = this._walkablePoint(x, z, y);
     if (!pt) return null;
-    const pu = { id: this.nextPuId++, type, x: r2(pt.x), z: r2(pt.z), until: now + POWERUPS.lifetime * 1000 };
+    const pu = { id: this.nextPuId++, type, x: r2(pt.x), y: pt.y, z: r2(pt.z), until: now + POWERUPS.lifetime * 1000 };
     this.gs.powerups.push(pu);
     this.lastPuType = type;
     this.markDirty();
-    this._ev({ e: 'puSpawn', id: pu.id, type, x: pu.x, z: pu.z });
+    this._ev({ e: 'puSpawn', id: pu.id, type, x: pu.x, y: pu.y, z: pu.z });
     return pu;
   }
 
@@ -1564,7 +1693,7 @@ export class Game {
         if (p.state !== 'alive') continue;
         const d = this.pd.get(p.id);
         if (!d || !d.hasPos) continue;
-        if (Math.hypot(d.x - pu.x, d.z - pu.z) <= POWERUPS.pickupRadius) { taker = p; break; }
+        if (Math.hypot(d.x - pu.x, d.z - pu.z) <= POWERUPS.pickupRadius && Math.abs((d.y || 0) - (pu.y || 0)) < 1.8) { taker = p; break; }
       }
       if (taker) taken.push([pu, taker]);
       else keep.push(pu);
@@ -1631,6 +1760,7 @@ export class Game {
     const kind = info.kind || 'bullet';
     const part = info.part === 'h' || info.part === 'l' ? info.part : 'b';
     const p = pid != null ? gs.players[pid] : null;
+    if (gs.ee) { try { this.ee.onKill(z, p, info); } catch (e) { this._logError('easter egg', e); } }
     let fx = 'normal';
     if (kind === 'nuke') fx = 'nuke';
     else if (kind === 'explosion') fx = 'explode';
@@ -1656,26 +1786,31 @@ export class Game {
         this._addPoints(p, BOSS_RULES.killPoints, true);
         for (const q of this._players()) if (q !== p && q.state !== 'dead') this._addPoints(q, BOSS_RULES.teamPoints, true);
       }
-      const t = this._randomPowerupType(Date.now());
-      if (t) this.spawnPowerup(t, z.x, z.z);
-      this.spawnItem('medkit', z.x + 0.8, z.z + 0.4);
+      const t = this._randomPowerupType(this.clock());
+      if (t) this.spawnPowerup(t, z.x, z.z, undefined, z.y);
+      this.spawnItem('medkit', z.x + 0.8, z.z + 0.4, undefined, z.y);
       this._ev({ e: 'bossDown', id: z.id, key: z.boss, pid: p ? p.id : null });
     }
     // El tanque deja siempre un potenciador
     if (z.type === 'tank' && kind !== 'dev') {
-      const t = this._randomPowerupType(Date.now());
-      if (t) this.spawnPowerup(t, z.x, z.z);
+      const t = this._randomPowerupType(this.clock());
+      if (t) this.spawnPowerup(t, z.x, z.z, undefined, z.y);
     }
     this._ev({ e: 'zdie', id: z.id, pid: p ? p.id : null, part, fx });
     // Potenciadores
-    if (scoring && this.dropsThisRound < POWERUPS.maxPerRound && Math.random() < POWERUPS.dropChance) {
+    const scoreDrop = this.puScore >= this.puScoreStep;
+    if (scoring && this.dropsThisRound < POWERUPS.maxPerRound && (scoreDrop || Math.random() < POWERUPS.dropChance)) {
       let x = z.x, zz = z.z;
       if (z.state === 'outside' || z.state === 'tearing' || z.state === 'climbing') {
         const w = WINDOW_INFO[z.win];
         if (w) { x = w.land[0] + 0.5; zz = w.land[1] + 0.5; }
       }
-      const type = this._randomPowerupType(Date.now());
-      if (type && this.spawnPowerup(type, x, zz)) this.dropsThisRound++;
+      const type = this._randomPowerupType(this.clock());
+      if (type && this.spawnPowerup(type, x, zz, undefined, z.y)) {
+        this.dropsThisRound++;
+        this.puScore = 0;
+        this.puScoreStep = Math.round(this.puScoreStep * POWERUPS.scoreStepGrowth);
+      }
     }
     // Curas
     if (scoring && this.medDropsThisRound < MED_DROPS.maxPerRound && Math.random() < MED_DROPS.chance) {
@@ -1684,7 +1819,7 @@ export class Game {
         const w = WINDOW_INFO[z.win];
         if (w) { x = w.land[0] + 0.5; zz = w.land[1] + 0.5; }
       }
-      if (this.spawnItem(pickWeighted(MED_DROPS.weights), x, zz)) this.medDropsThisRound++;
+      if (this.spawnItem(pickWeighted(MED_DROPS.weights), x, zz, undefined, z.y)) this.medDropsThisRound++;
     }
   }
 
@@ -1703,23 +1838,23 @@ export class Game {
   zombieExplosion(z, pid) {
     const T = ZOMBIE_TYPES.bomber;
     const R = T.radius;
-    this._ev({ e: 'boom', pid: pid || 0, w: 'bomber', up: false, p: [r2(z.x), 1, r2(z.z)], r: R });
+    this._ev({ e: 'boom', pid: pid || 0, w: 'bomber', up: false, p: [r2(z.x), r2((z.y || 0) + 1), r2(z.z)], r: R });
     for (const p of this._players()) {
       if (p.state !== 'alive') continue;
       const d = this.pd.get(p.id);
       if (!d || !d.hasPos) continue;
-      const dist = Math.hypot(d.x - z.x, d.z - z.z);
+      const dist = Math.hypot(d.x - z.x, d.z - z.z, ((d.y || 0) - (z.y || 0)) * 1.5);
       if (dist > R) continue;
-      if (!lineOfSight(z.x, 1, z.z, d.x, 1.2, d.z, this.gs.doors)) continue;
+      if (!lineOfSight(z.x, (z.y || 0) + 1, z.z, d.x, (d.y || 0) + 1.2, d.z, this.gs.doors)) continue;
       const amt = Math.round(T.playerDamage * (1 - 0.6 * dist / R));
       this.damagePlayer(p.id, amt, z);
     }
     const killer = pid != null && this.gs.players[pid] ? pid : null;
     for (const o of this.zombies.list().slice()) {
       if (o.dead || o === z) continue;
-      const dist = Math.hypot(o.x - z.x, o.z - z.z);
+      const dist = Math.hypot(o.x - z.x, o.z - z.z, ((o.y || 0) - (z.y || 0)) * 1.5);
       if (dist > R) continue;
-      this.zombies.damage(o.id, T.zombieDamage * (1 - 0.5 * dist / R), killer, { kind: 'explosion', part: 'b' });
+      this.zombies.damage(o.id, T.zombieDamage * (1 - 0.5 * dist / R), killer, { kind: 'explosion', part: 'b', edge: dist / R });
     }
   }
 
@@ -1734,7 +1869,7 @@ export class Game {
   }
 
   onRoundStart(round) {
-    const now = Date.now();
+    const now = this.clock();
     this.dropsThisRound = 0;
     this.medDropsThisRound = 0;
     for (const d of this.pd.values()) d.repairPts = 0;
@@ -1754,12 +1889,25 @@ export class Game {
     this._ev({ e: 'roundEnd', round });
   }
 
+  // Fin de una ronda de perros: el último perro deja una Munición Máxima (fuera del ciclo y del tope por ronda)
+  onDogRoundEnd(pos) {
+    const spots = [];
+    if (pos && Number.isFinite(pos.x) && Number.isFinite(pos.z)) spots.push(pos);
+    for (const q of this._players()) {
+      const d = q.state === 'alive' && this.pd.get(q.id);
+      if (d && d.hasPos) spots.push({ x: d.x, z: d.z, y: d.y || 0 });
+    }
+    const keep = this.lastPuType;
+    for (const sp of spots) if (this.spawnPowerup('maxammo', sp.x, sp.z, undefined, sp.y)) break;
+    this.lastPuType = keep;   // no altera el ciclo de potenciadores
+  }
+
   // ------------------------------------------------------------------ fases
 
   startGame() {
     const gs = this.gs;
     if (gs.phase !== 'lobby' || this.playerCount() === 0) return;
-    const now = Date.now();
+    const now = this.clock();
     const players = gs.players;
     const fresh = this._freshState();
     fresh.players = players;
@@ -1767,9 +1915,9 @@ export class Game {
     this.gs.phase = 'playing';
     for (const bp of this.boxPriv) { bp.teddy = false; bp.weapon = null; bp.paid = 0; }
     this.nextPuId = 1;
-    this.lastPuType = null;
     this.dropsThisRound = 0;
     this.medDropsThisRound = 0;
+    this._resetPowerupCycle();
     this.nextItemId = 1;
     const respawns = [];
     for (const p of this._players()) {
@@ -1852,7 +2000,7 @@ export class Game {
     this._log(`[dev] ${p.name}: ${msg}`);
     switch (cmd) {
       case 'help':
-        say('Comandos: /points N, /round N, /power, /give ARMA [up], /god, /killall, /pu TIPO, /parts, /doors, /perk VENTAJA, /meds, /infect, /item TIPO, /spawn TIPO');
+        say('Comandos: /points N, /round N, /power, /give ARMA [up], /god, /killall, /pu TIPO, /parts, /doors, /perk VENTAJA, /meds, /infect, /item TIPO, /spawn TIPO, /ee PASO');
         break;
       case 'points': {
         if (!needPlay()) break;
@@ -1868,6 +2016,21 @@ export class Game {
         if (!Number.isFinite(n) || n < 1) { say('Uso: /round N'); break; }
         this.zombies.setRound(n);
         say(`Saltando a la ronda ${Math.min(255, n)}.`);
+        break;
+      }
+      case 'ee': {
+        // /ee N: salta al paso N del easter egg (0 electricidad … 6 salón abierto)
+        if (!needPlay()) break;
+        if (!gs.ee) { say('Este mapa no tiene easter egg.'); break; }
+        const n = Math.max(0, Math.min(EE_STEP.BALLROOM, Math.floor(Number(args[0])) || 0));
+        if (n >= 1 && !gs.power) this._usePower(p);
+        if (n >= EE_STEP.VAMPIRE) gs.ee.got = gs.ee.vials.slice();
+        if (n === EE_STEP.BALLROOM) { gs.ee.lit = gs.ee.order.slice(); this.ee._openBallroom(); break; }
+        gs.ee.step = n;
+        gs.ee.fang = null;
+        if (n === EE_STEP.VAMPIRE) this.zombies.forceBoss = 'vampire';
+        this.markDirty();
+        say(`Easter egg en el paso ${n}.`);
         break;
       }
       case 'power':
@@ -1901,7 +2064,7 @@ export class Game {
         const type = (args[0] || '').toLowerCase();
         if (!POWERUP_TYPES.includes(type)) { say(`Tipos: ${POWERUP_TYPES.join(', ')}`); break; }
         const f = forwardXZ(d.yaw);
-        const pu = this.spawnPowerup(type, d.x + f.x * 2, d.z + f.z * 2, now);
+        const pu = this.spawnPowerup(type, d.x + f.x * 2, d.z + f.z * 2, now, d.y);
         if (!pu) say('No hay espacio para el potenciador.');
         break;
       }
@@ -1930,7 +2093,7 @@ export class Game {
         const type = (args[0] || 'bandage').toLowerCase();
         if (!MEDS[type]) { say(`Tipos: ${MED_KEYS.join(', ')}`); break; }
         const f = forwardXZ(d.yaw);
-        if (!this.spawnItem(type, d.x + f.x * 2, d.z + f.z * 2, now)) say('No hay espacio.');
+        if (!this.spawnItem(type, d.x + f.x * 2, d.z + f.z * 2, now, d.y)) say('No hay espacio.');
         break;
       }
       case 'parts':

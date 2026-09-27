@@ -28,11 +28,15 @@ export const PLAYER = {
   gravity: 14,
   sprintDuration: 4.0,      // segundos de sprint continuo (Stamin-Up lo duplica)
   sprintRecover: 2.0,       // segundos para recuperar el sprint completo
+  slideSpeed: 8.6,          // velocidad al empezar a deslizarse (C mientras corres); por debajo de MAX_SPEED_MPS del servidor
+  slideDuration: 0.8,       // segundos que dura el deslizamiento
+  slideCooldown: 0.6,       // segundos entre deslizamientos
+  slideEyeHeight: 0.85,
   health: 100,
   jugHealth: 250,
   regenDelay: 2.5,          // segundos sin daño antes de regenerar
   regenRate: 100,           // puntos de salud por segundo
-  regenCap: 0.6,            // la regeneración natural solo llega hasta este % de la salud máxima (el resto, con curas)
+  regenCap: 0.5,            // la regeneración natural solo llega hasta este % de la salud máxima (el resto, con curas)
   startBandages: 1,         // vendas al aparecer
   startPoints: 500,
   startGrenades: 2,
@@ -96,11 +100,15 @@ export const ZOMBIE_TYPES = {
     twoFrom: 16,           // desde esta ronda pueden venir dos tanques
   },
 };
-// Jefes: uno por ronda desde BOSS_RULES.from (dos desde twoFrom), elegidos al azar sin repetir el anterior.
+// Jefes: el primero en la ronda firstRound (10) y cada uno de los siguientes 8, 9 o 10 rondas después.
+// Si un jefe cae en una ronda de perros, los perros pasan a la ronda siguiente. Dos a la vez desde twoFrom.
+// Elegidos al azar sin repetir el anterior.
+// `from` solo sirve de referencia para escalar la vida y el daño.
 // Vida = (hpBase + vida normal · hpMult) · (1 + hpPerRound·(ronda − from)) · (1 + 0.5 por jugador extra)
 // Daño = damage · min(dmgMax, 1 + dmgPerRound·(ronda − from))
 export const BOSS_RULES = {
-  from: 5, twoFrom: 20, spawnAt: 0.2,        // aparece tras el 20 % de la ronda
+  from: 5, twoFrom: 38, spawnAt: 0.2,        // aparece tras el 20 % de la ronda
+  firstRound: 10, gapMin: 8, gapMax: 10,     // rondas de jefe: 10, luego +8/+9/+10 cada vez
   hpPerRound: 0.12, hpPerExtraPlayer: 0.5, dmgPerRound: 0.05, dmgMax: 2.2,
   killPoints: 1000, teamPoints: 300,         // al que lo mata / al resto del equipo
 };
@@ -131,6 +139,24 @@ Object.assign(ZOMBIE_TYPES, {
     hpBase: 4200, hpMult: 10, damage: 35, speed: 3.6, scale: 1.2, attackRange: 1.8, windup: 0.4, cooldown: 1.2, tearMult: 0.4,
     cloak: { visible: 6, hidden: 4, speedMult: 1.6, damageTaken: 0.5 },
   },
+  vampire: {
+    code: 10, boss: true, name: 'El Conde', desc: 'Se deshace en murciélagos y reaparece a tu espalda. Cada mordisco lo cura.',
+    hpBase: 5000, hpMult: 11, damage: 34, speed: 2.9, scale: 1.25, attackRange: 1.8, windup: 0.38, cooldown: 1.15, tearMult: 0.3,
+    bats: { every: 8, min: 4.5, time: 0.9, behind: 2.2 },     // en forma de murciélagos es invulnerable
+    drain: 6,                                                 // vida que recupera por cada punto de daño que hace
+  },
+  // Jefe final del Castillo: no entra en el sorteo de jefes (final: true)
+  scientist: {
+    code: 12, boss: true, final: true, name: 'El Doctor Vorkhaus', desc: 'Se teletransporta por el salón, invoca vampiros y lanza descargas.',
+    hpBase: 26000, hpMult: 20, damage: 38, speed: 2.4, scale: 1.2, attackRange: 1.9, windup: 0.5, cooldown: 1.3, tearMult: 0.3,
+    blink: { every: 7, radius: 9 },
+    summon: { every: 12, count: 3, maxAlive: 6, radius: 3.5, type: 'vampling' },
+    zap: { every: 5, range: 14, damage: 22, windup: 0.9 },
+  },
+  // Vampiro menor (lo invoca el científico)
+  vampling: {
+    code: 11, name: 'Vampiro', hpMult: 0.9, hpAdd: 350, speed: 5.0, damage: 22, scale: 0.95,
+  },
 });
 // Equilibrio de los golpes fuertes (jefes y tanques). Un golpe nunca quita más de heavyHitCap de la salud máxima
 // (con la salud llena hacen falta al menos 3), tras un golpe fuerte hay un instante de invulnerabilidad para que
@@ -142,7 +168,24 @@ export const BALANCE = {
   soloHeavyDamage: 0.7,     // multiplicador de daño de jefes y tanques con un solo jugador
   soloBossHp: 0.8,          // multiplicador de vida de jefes y tanques con un solo jugador
 };
-export const BOSS_KEYS = Object.keys(ZOMBIE_TYPES).filter((k) => ZOMBIE_TYPES[k].boss);
+// Perros infernales: salen en las rondas múltiplo de 5 (y solo ellos; si esa ronda es de jefe, en la siguiente). Aparecen con un rayo dentro del mapa,
+// cerca de los jugadores. El último perro deja una Munición Máxima.
+Object.assign(ZOMBIE_TYPES, {
+  dog: {
+    code: 9, name: 'Perro infernal', dog: true,
+    hpBase: 160, hpPerRound: 24, speed: 6.3, damage: 18, attackRange: 1.15, windup: 0.22, cooldown: 0.85, scale: 1,
+  },
+});
+export const DOG_ROUND = {
+  every: 5,
+  base: 6, perPlayer: 2, perDogRound: 2, max: 34,   // perros por ronda
+  aliveBase: 3, alivePerPlayer: 2,                    // perros vivos a la vez
+  spawnDelay: 1.2,                                    // s entre apariciones
+  minDist: 6, maxDist: 16,                            // m de camino desde el jugador al aparecer
+};
+export function isDogRound(round) { return round > 0 && round % DOG_ROUND.every === 0; }
+
+export const BOSS_KEYS = Object.keys(ZOMBIE_TYPES).filter((k) => ZOMBIE_TYPES[k].boss && !ZOMBIE_TYPES[k].final);
 
 export const ZOMBIE_TYPE_BY_CODE = Object.fromEntries(Object.entries(ZOMBIE_TYPES).map(([k, v]) => [v.code, k]));
 
@@ -180,8 +223,8 @@ export const POINTS = {
   hit: 10,
   killBody: 60,
   killNeck: 70,
-  killHead: 100,
-  killMelee: 130,
+  killHead: 150,
+  killMelee: 150,
   repairBoard: 10,
   repairCapPerRound: 500,
   nuke: 400,
@@ -277,12 +320,17 @@ export const INFECTION = {
   dps: 1.0,                 // daño por segundo al empezar
   ramp: 0.03,               // el daño por segundo crece esto cada segundo
   dpsMax: 4.0,
+  floor: 0.5,               // la infección no baja la salud por debajo de este % de la salud máxima
 };
 
 // Potenciadores
 export const POWERUPS = {
   types: ['maxammo', 'instakill', 'doublepoints', 'nuke', 'carpenter', 'firesale'],
-  dropChance: 0.03,         // por baja
+  // Ciclo como en CoD: la lista se baraja y sale cada potenciador una vez antes de volver a barajar.
+  // Caen al superar un umbral de puntos del equipo (que crece tras cada caída) o por azar.
+  dropChance: 0.02,         // por baja, además del umbral de puntos
+  scoreStep: 2000,          // puntos ganados por el equipo para garantizar la siguiente caída
+  scoreStepGrowth: 1.14,    // el umbral crece así tras cada caída
   maxPerRound: 4,
   lifetime: 30,             // segundos en el suelo
   blinkAt: 8,               // empieza a parpadear cuando quedan estos segundos

@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { PLAYER, clamp, lerp, angleDiff } from '/shared/constants.js';
 import { moveCircle, resolveCircle, solidForPlayer, raycastMap } from '/shared/collision.js';
 import { PF } from '/shared/protocol.js';
-import { PLAYER_SPAWNS, PLAYER_SPAWN_YAW, ZONES } from '/shared/map.js';
+import { PLAYER_SPAWNS, PLAYER_SPAWN_YAW, ZONES, MAP } from '/shared/map.js';
 
 const LOOK_SCALE = 0.0022;        // rad por píxel con sensibilidad 1
 const PITCH_LIMIT = 1.5;
@@ -40,6 +40,7 @@ export class PlayerController {
     this.onGround = true;
     this.isSprinting = false;
     this.isCrouching = false;
+    this.isSliding = false;
     this.isMoving = false;
     this.speed01 = 0;
     this.adsZoom = 1;       // los fija WeaponSystem cada frame
@@ -58,6 +59,10 @@ export class PlayerController {
     this._exhausted = false;
     this._regenDelay = 0;
     this._sprintT = 0;
+    this._slideT = 0;         // tiempo restante del deslizamiento
+    this._slideFx = 0;        // 0..1 suavizado para la cámara
+    this._slideCd = 0;
+    this._slideDir = new THREE.Vector2();
     this._bobPhase = 0;
     this._bobAmp = 0;
     this._roll = 0;
@@ -70,7 +75,8 @@ export class PlayerController {
     this._shakeSeed = Math.random() * 100;
     this._t = 0;
     this._doors = {};
-    this._solid = (cx, cz) => solidForPlayer(cx, cz, this._doors);
+    // la altura decide la planta y las escaleras
+    this._solid = (cx, cz) => solidForPlayer(cx, cz, this._doors, this.position.y, this.position.x, this.position.z);
     this._spec = {
       angle: 0, elev: 0.35, dist: 4.2, idle: 0, init: false,
       cam: new THREE.Vector3(), focus: new THREE.Vector3(), lastPid: null,
@@ -99,13 +105,15 @@ export class PlayerController {
   }
 
   // ------------------------------------------------------------------ API pública
-  spawn(x, z, yaw) {
-    const sp = PLAYER_SPAWNS[0] || { x: 0, z: 0 };
-    x = Number(x); z = Number(z);
-    if (!isFinite(x) || !isFinite(z)) { x = sp.x; z = sp.z; }
+  spawn(x, z, yaw, y) {
+    const sp = PLAYER_SPAWNS[0] || { x: 0, z: 0, y: 0 };
+    x = Number(x); z = Number(z); y = Number(y);
+    if (!isFinite(x) || !isFinite(z)) { x = sp.x; z = sp.z; y = sp.y; }
+    if (!isFinite(y)) y = sp.y || 0;
     this._doors = (this.ctx.gs && this.ctx.gs.doors) || {};
+    this.position.y = y;
     [x, z] = resolveCircle(x, z, PLAYER.radius, this._solid);
-    this.position.set(x, 0, z);
+    this.position.set(x, MAP.groundY(x, z, y), z);
     this.velocity.set(0, 0, 0);
     this.yaw = isFinite(Number(yaw)) ? wrapAngle(Number(yaw)) : PLAYER_SPAWN_YAW;
     this.pitch = 0;
@@ -113,6 +121,9 @@ export class PlayerController {
     this.isSprinting = false;
     this.isCrouching = false;
     this._crouchWanted = false;
+    this.isSliding = false;
+    this._slideT = 0;
+    this._slideCd = 0;
     this.stamina01 = 1;
     this._exhausted = false;
     this._recoilP = 0; this._recoilY = 0;
@@ -288,10 +299,29 @@ export class PlayerController {
     if (isDown('back')) fwd -= 1;
     if (isDown('right')) str += 1;
     if (isDown('left')) str -= 1;
+    // stick izquierdo del mando (analógico): manda si no se usa el teclado; la inclinación regula la velocidad
+    let analogK = 1;
+    const pm = input && input.enabled ? input.padMove : null;
+    if (pm && fwd === 0 && str === 0 && (pm.x || pm.y)) { fwd = -pm.y; str = pm.x; analogK = Math.min(1, Math.hypot(pm.x, pm.y)); }
     const wantsMove = fwd !== 0 || str !== 0;
 
+    // Deslizarse: agacharse mientras se corre (como en CoD). Termina agachado.
+    if (this._slideCd > 0) this._slideCd -= dt;
+    if (!down && pressed('crouch') && this.isSprinting && this.onGround && this._slideCd <= 0 && !this.isSliding) {
+      const hv = Math.hypot(this.velocity.x, this.velocity.z);
+      if (hv > 0.5) this._slideDir.set(this.velocity.x / hv, this.velocity.z / hv);
+      else this._slideDir.set(-Math.sin(this.yaw), -Math.cos(this.yaw));
+      this._slideT = PLAYER.slideDuration;
+      this._slideCd = PLAYER.slideDuration + PLAYER.slideCooldown;
+      this.isSliding = true;
+      this._crouchWanted = true;
+      this._crouchPressOn = false;     // al soltar la C se sigue agachado
+      this._sound('slide', { volume: 0.8 });
+    }
+    if (this.isSliding && (down || this._slideT <= 0)) this.isSliding = false;
+
     // Agacharse: pulsación = alternar; mantener y soltar = agacharse solo mientras se mantiene
-    if (!down) {
+    if (!down && !this.isSliding) {
       if (pressed('crouch')) {
         this._crouchWanted = !this._crouchWanted;
         this._crouchPressT = 0;
@@ -299,7 +329,7 @@ export class PlayerController {
       }
       if (isDown('crouch')) this._crouchPressT += dt;
       if (released('crouch') && this._crouchPressOn && this._crouchPressT > 0.3) this._crouchWanted = false;
-    } else {
+    } else if (down) {
       this._crouchWanted = false;
     }
 
@@ -308,7 +338,7 @@ export class PlayerController {
     const adsActive = isDown('ads') || (w && typeof w.adsAmount === 'number' ? w.adsAmount : this.adsAmount) > 0.5;
     const wantSprint = !down && isDown('sprint') && fwd > 0 && !adsActive;
     if (wantSprint && this._crouchWanted && pressed('sprint')) this._crouchWanted = false;
-    let sprint = wantSprint && !this._crouchWanted && !this._exhausted && this.stamina01 > 0;
+    let sprint = wantSprint && !this.isSliding && !this._crouchWanted && !this._exhausted && this.stamina01 > 0;
     const dur = PLAYER.sprintDuration * (staminUp ? 2 : 1);
     if (sprint) {
       this.stamina01 -= dt / dur;
@@ -322,10 +352,20 @@ export class PlayerController {
     this.isSprinting = sprint;
     this.isCrouching = this._crouchWanted && !down;
     this._sprintT += ((sprint ? 1 : 0) - this._sprintT) * (1 - Math.exp(-6 * dt));
+    this._slideFx += ((this.isSliding ? 1 : 0) - this._slideFx) * (1 - Math.exp(-10 * dt));
 
     // Saltar (agachado: primero se levanta)
     if (!down && pressed('jump')) {
-      if (this._crouchWanted) {
+      if (this.isSliding) {
+        // Salto desde el deslizamiento: conserva la inercia
+        this.isSliding = false;
+        this._slideT = 0;
+        this._crouchWanted = false;
+        this.isCrouching = false;
+        this.velocity.y = PLAYER.jumpVelocity;
+        this.onGround = false;
+        this._sound('jump', { volume: 0.7 });
+      } else if (this._crouchWanted) {
         this._crouchWanted = false;
         this.isCrouching = false;
       } else if (this.onGround) {
@@ -354,23 +394,38 @@ export class PlayerController {
     let wx = fx * fwd + rx * str, wz = fz * fwd + rz * str;
     const wl = Math.hypot(wx, wz);
     if (wl > 0) { wx /= wl; wz /= wl; }
-    const tx = wx * speed, tz = wz * speed;
+    const k = sprint ? 1 : Math.max(0.3, analogK);
+    const tx = wx * speed * k, tz = wz * speed * k;
 
-    const accel = this.onGround ? (wantsMove ? GROUND_ACCEL : GROUND_DECEL) : AIR_ACCEL;
-    const k = 1 - Math.exp(-accel * dt);
     const v = this.velocity;
-    v.x += (tx - v.x) * k;
-    v.z += (tz - v.z) * k;
+    if (this.isSliding) {
+      // Impulso inicial que se frena hasta la velocidad agachado; se puede torcer un poco con A/D
+      const f = 1 - this._slideT / PLAYER.slideDuration;        // 0 → 1
+      const sp = lerp(PLAYER.slideSpeed * (staminUp ? STAMINUP_SPEED : 1), PLAYER.crouchSpeed, f * f);
+      const steer = -str * 1.6 * dt;   // girar a la derecha = yaw negativo
+      const c = Math.cos(steer), s = Math.sin(steer);
+      const dx = this._slideDir.x, dz = this._slideDir.y;
+      this._slideDir.set(dx * c + dz * s, dz * c - dx * s).normalize();
+      v.x = this._slideDir.x * sp;
+      v.z = this._slideDir.y * sp;
+      this._slideT -= dt;
+    } else {
+      const accel = this.onGround ? (wantsMove ? GROUND_ACCEL : GROUND_DECEL) : AIR_ACCEL;
+      const k = 1 - Math.exp(-accel * dt);
+      v.x += (tx - v.x) * k;
+      v.z += (tz - v.z) * k;
+    }
 
-    // Vertical (solo visual: no hay plataformas)
+    // Vertical: suelo de la planta o rampa de la escalera bajo los pies
     const p = this.position;
+    const ground = MAP.groundY(p.x, p.z, p.y);
     if (down) {
-      p.y = 0; v.y = 0;
+      p.y = ground; v.y = 0;
       this.onGround = true;
     } else {
       if (!this.onGround) v.y -= PLAYER.gravity * dt;
       p.y += v.y * dt;
-      if (p.y <= 0) {
+      if (p.y <= ground) {
         if (!this.onGround) {
           const impact = -v.y;
           if (impact > 2) {
@@ -378,7 +433,7 @@ export class PlayerController {
             this._sound('land', { volume: clamp(impact / 7, 0.3, 1) });
           }
         }
-        p.y = 0; v.y = 0;
+        p.y = ground; v.y = 0;
         this.onGround = true;
       }
     }
@@ -395,6 +450,12 @@ export class PlayerController {
       v.set(0, 0, 0);
     }
     p.x = nx; p.z = nz;
+    // Al caminar: seguir la rampa (subir o bajar escalones); si el suelo desaparece, caer
+    if (this.onGround && v.y <= 0) {
+      const g2 = MAP.groundY(p.x, p.z, p.y);
+      if (Math.abs(g2 - p.y) <= MAP.STEP + 0.05) p.y = g2;
+      else if (g2 < p.y) this.onGround = false;
+    }
     if (dt > 0) {
       const ax = (nx - ox) / dt, az = (nz - oz) / dt;
       if (Math.abs(ax) < Math.abs(v.x)) v.x = ax;
@@ -402,11 +463,12 @@ export class PlayerController {
     }
 
     const hs = Math.hypot(v.x, v.z);
+    if (this.isSliding && hs < 1.2 && this._slideT < PLAYER.slideDuration - 0.1) { this.isSliding = false; this._slideT = 0; }
     this.isMoving = hs > 0.4;
     this.speed01 = clamp(hs / (PLAYER.sprintSpeed * (staminUp ? STAMINUP_SPEED : 1)), 0, 1);
 
     // Balanceo de cabeza y pasos
-    if (this.onGround && hs > 0.4) {
+    if (this.onGround && hs > 0.4 && !this.isSliding) {
       const stride = down ? 1.0 : sprint ? 2.7 : this.isCrouching ? 1.6 : 2.15;   // m por ciclo (2 pasos)
       const prev = this._bobPhase;
       let ph = prev + (hs / stride) * Math.PI * 2 * dt;
@@ -415,7 +477,7 @@ export class PlayerController {
       this._bobPhase = ph;
     }
     let ampTarget = 0;
-    if (this.onGround && hs > 0.4) {
+    if (this.onGround && hs > 0.4 && !this.isSliding) {
       ampTarget = (down ? 0.6 : sprint ? 1.35 : this.isCrouching ? 0.5 : 0.8) * Math.min(1, hs / PLAYER.walkSpeed);
     }
     const ads = clamp(Number(this.adsAmount) || 0, 0, 1);
@@ -426,11 +488,12 @@ export class PlayerController {
     const lateral = v.x * rx + v.z * rz;
     let rollTarget = -lateral * 0.0045;
     if (down) rollTarget += 0.11;
+    rollTarget += 0.07 * this._slideFx;
     this._roll += (rollTarget - this._roll) * (1 - Math.exp(-8 * dt));
 
     // Altura de los ojos (agacharse / caído suave)
-    const eyeTarget = down ? PLAYER.downEyeHeight : this.isCrouching ? PLAYER.crouchEyeHeight : PLAYER.eyeHeight;
-    this._eyeH += (eyeTarget - this._eyeH) * (1 - Math.exp(-(down ? 4.5 : 12) * dt));
+    const eyeTarget = down ? PLAYER.downEyeHeight : this.isSliding ? PLAYER.slideEyeHeight : this.isCrouching ? PLAYER.crouchEyeHeight : PLAYER.eyeHeight;
+    this._eyeH += (eyeTarget - this._eyeH) * (1 - Math.exp(-(down ? 4.5 : this.isSliding ? 16 : 12) * dt));
     this._landDip *= Math.exp(-9 * dt);
   }
 
@@ -445,6 +508,7 @@ export class PlayerController {
     for (let i = 0; i < list.length; i++) {
       const zb = list[i];
       if (!zb || !isFinite(zb.x) || !isFinite(zb.z)) continue;
+      if (Math.abs((zb.yOff || 0) - this.position.y) > 1.5) continue;   // zombi en otra planta (arriba o abajo)
       const dx = x - zb.x, dz = z - zb.z;
       const d2 = dx * dx + dz * dz;
       if (d2 >= ZOMBIE_SEP * ZOMBIE_SEP || d2 < 1e-8) continue;
@@ -513,7 +577,7 @@ export class PlayerController {
     const zoom = Math.max(1, Number(this.adsZoom) || 1);
     const ads = clamp(Number(this.adsAmount) || 0, 0, 1);
     let fov = this._baseFov() / lerp(1, zoom, ads);
-    if (state !== 'down') fov *= 1 + 0.05 * this._sprintT * (1 - ads);
+    if (state !== 'down') fov *= 1 + (0.05 * this._sprintT + 0.06 * this._slideFx) * (1 - ads);
     this._applyFov(fov);
   }
 

@@ -4,6 +4,7 @@
 
 import { INTERP_DELAY_MS, angleDiff } from '/shared/constants.js';
 import { safeParse } from '/shared/protocol.js';
+import { MAP_ID } from '/shared/map.js';
 
 const MAX_EXTRAP_MS = 100;       // extrapolación máxima si falta el snapshot siguiente
 const BUFFER_KEEP_MS = 1500;     // cuánto historial de snapshots se guarda
@@ -28,6 +29,7 @@ export class Net {
     this.stats = { msgsIn: 0, bytesIn: 0, msgsOut: 0, bytesOut: 0 };
 
     this._offset = 0;           // serverNow = localNow + offset
+    this._frozenAt = null;      // reloj de juego congelado (partida en pausa)
     this._haveOffset = false;
     this._havePong = false;
     this._minRtt = Infinity;
@@ -142,7 +144,9 @@ export class Net {
   }
 
   // ------------------------------------------------------------------ reloj
+  // En pausa el reloj de juego del servidor está detenido: se devuelve el instante en que se pausó
   serverNow() {
+    if (this._frozenAt != null) return this._frozenAt;
     if (!this._haveOffset) return Date.now();
     return localNow() + this._offset;
   }
@@ -152,6 +156,7 @@ export class Net {
     const t = localNow();
     const c = Number(m.c), sNow = Number(m.now);
     if (!isFinite(c) || !isFinite(sNow)) return;
+    if (this._frozenAt != null) return;   // el reloj del servidor está parado: no sirve para sincronizar
     const rtt = Math.max(0, t - c);
     this.rtt = this._havePong ? this.rtt + (rtt - this.rtt) * 0.25 : rtt;
     this._minRtt = Math.min(rtt, this._minRtt + 2);
@@ -170,7 +175,7 @@ export class Net {
   // Muestra de gs.now / snap.now: cota inferior del reloj del servidor en el momento de recibir
   _onServerStamp(serverSentAt) {
     const sNow = Number(serverSentAt);
-    if (!isFinite(sNow)) return;
+    if (!isFinite(sNow) || this._frozenAt != null) return;
     const t = localNow();
     const lower = sNow - t;
     if (!this._haveOffset) {
@@ -202,6 +207,11 @@ export class Net {
       case 'snap': this._onSnap(m); break;
       case 'gs': this._onGs(m); break;
       case 'ev':
+        // al reanudar, el reloj de juego del servidor quedó `shift` ms por detrás del real
+        if (m.e === 'resume') {
+          if (isFinite(Number(m.shift))) this._offset -= Number(m.shift);
+          this._frozenAt = null;
+        }
         if (typeof m.e === 'string' && m.e) this._emit('ev:' + m.e, m);
         break;
       case 'pong': this._onPong(m); break;
@@ -226,6 +236,14 @@ export class Net {
     const ctx = this.ctx;
     if (!ctx) return;
     const prev = ctx.gs || null;
+    // La sala juega en otro mapa: se cambia ANTES de aplicar el estado (el mundo se reconstruye)
+    if (gs && typeof gs.map === 'string' && gs.map !== MAP_ID) this._emit('map:change', { map: gs.map });
+    if (gs && gs.pause) {
+      if (this._frozenAt == null && isFinite(Number(gs.pause.at))) this._frozenAt = Number(gs.pause.at);
+      gs.pause.receivedAt = performance.now();       // para la cuenta atrás del aviso (mismo reloj que menus.js)
+    } else if (gs && gs.phase !== 'playing') {
+      this._frozenAt = null;
+    }
     ctx.gs = gs;
     this._emit('gs', { gs, prev });
     const pp = prev ? prev.phase : null;

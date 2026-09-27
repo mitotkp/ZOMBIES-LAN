@@ -9,7 +9,7 @@ import { PlayerController } from './player.js';
 import { Interaction } from './interaction.js';
 import { makeStub, FallbackMenus, FallbackHUD } from './fallback.js';
 import { GAME_TITLE, PLAYER_COLORS, CLIENT_SEND_RATE, ZOMBIE, clamp } from '/shared/constants.js';
-import { PLAYER_SPAWNS, PLAYER_SPAWN_YAW, MAP_NAME } from '/shared/map.js';
+import { PLAYER_SPAWNS, PLAYER_SPAWN_YAW, MAP_NAME, MAP_ID, setActiveMap, isMapId } from '/shared/map.js';
 import { r2, r3 } from '/shared/protocol.js';
 import { tr } from './i18n.js';
 
@@ -33,7 +33,8 @@ function saveRoomSession(s) {
     else sessionStorage.removeItem(ROOM_SESSION_KEY);
   } catch { /* nada */ }
 }
-const BASE_EXPOSURE = 1.3;            // exposición base (el ajuste 'Brillo' la multiplica)
+const DYN_MIN = 0.75;                  // escala mínima de la resolución dinámica (más baja se ve demasiado borroso)
+const BASE_EXPOSURE = 1.45;           // exposición base (el ajuste 'Brillo' la multiplica)
 
 // Cámara de fondo (título / sala / fin): órbita lenta sobre la calle
 const ORBIT = { cx: 36.5, cz: 25.5, rx: 13, rz: 4, y: 3.3, speed: 0.055 };
@@ -239,8 +240,11 @@ async function boot() {
   renderer.autoClear = false;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.shadowMap.enabled = settings.quality === 'high';
+  renderer.shadowMap.autoUpdate = false;   // se recalcula a 30 Hz (ver frame)
   renderer.setClearColor(0x000000, 1);
-  const pixelRatioFor = (q) => Math.min(window.devicePixelRatio || 1, q === 'low' ? 1 : 1.5);
+  // Resolución dinámica: dynScale baja si el juego no llega a ~50 FPS y vuelve a subir cuando sobra margen
+  let dynScale = 1;
+  const pixelRatioFor = (q) => Math.min(window.devicePixelRatio || 1, q === 'low' ? 1 : 1.5) * dynScale;
   renderer.setPixelRatio(pixelRatioFor(settings.quality));
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.domElement.style.display = 'block';
@@ -480,7 +484,7 @@ async function boot() {
   }
 
   function onRefreshRooms() { net.send({ t: 'listRooms' }); }
-  function onCreateRoom(opts) { sendHello({ mode: 'create', name: opts && opts.name, password: (opts && opts.password) || null }); }
+  function onCreateRoom(opts) { sendHello({ mode: 'create', name: opts && opts.name, password: (opts && opts.password) || null, map: (opts && opts.map) || undefined }); }
   function onJoinRoomAction(opts) { sendHello({ mode: 'join', code: opts && opts.code, password: (opts && opts.password) || null }); }
   function backToTitle() {
     net.close();
@@ -599,7 +603,7 @@ async function boot() {
       const self = ctx.self;
       const idx = self && Number.isInteger(self.spawn) ? self.spawn : 0;
       const sp = PLAYER_SPAWNS[idx] || PLAYER_SPAWNS[0];
-      safe('player.spawn', () => ctx.player.spawn(sp.x, sp.z, PLAYER_SPAWN_YAW));
+      safe('player.spawn', () => ctx.player.spawn(sp.x, sp.z, PLAYER_SPAWN_YAW, sp.y));
       if (!DEBUG) input.requestLock();
     } else if (phase === 'gameover') {
       releaseGameplay();
@@ -608,15 +612,43 @@ async function boot() {
   }
   events.on('phase', (p) => { if (p) enterPhase(p.phase, p.prev); });
 
+  // La sala juega en otro mapa: activarlo y reconstruir el mundo (sin recargar la página)
+  events.on('map:change', ({ map } = {}) => {
+    if (!isMapId(map) || map === MAP_ID) return;
+    setActiveMap(map);
+    const old = ctx.world;
+    if (old && typeof old.dispose === 'function') safe('world.dispose', () => old.dispose());
+    const W = old && old.constructor;
+    if (!W) return;
+    const w = safe('world.new', () => new W(ctx));
+    if (w) { ctx.world = w; safe('world.build', () => w.build()); }
+    console.info(`[${GAME_TITLE}] Mapa: ${MAP_NAME}.`);
+  });
+
   events.on('ev:gameover', (e) => {
     app.lastGameOver = e;
     call('audio', 'music', 'game_over');
     if (ctx.gs && ctx.gs.phase === 'gameover') menus('showGameOver', e);
   });
 
+  // Teletransporte: el servidor ordena mover al jugador local
+  events.on('ev:tp', (e) => {
+    if (!e) return;
+    const fxm = ctx.effects;
+    try {
+      if (fxm && fxm.flash) {
+        fxm.flash({ x: +e.fx || 0, y: (+e.fy || 0) + 1, z: +e.fz || 0 }, 0x9a60ff, 2.4);
+        fxm.flash({ x: +e.x || 0, y: (+e.y || 0) + 1, z: +e.z || 0 }, 0x9a60ff, 2.4);
+      }
+    } catch { /* nada */ }
+    if (!sameId(e.pid, ctx.selfId)) return;
+    call('audio', 'play', 'powerup_grab', { volume: 0.9 });
+    safe('player.spawn', () => ctx.player.spawn(e.x, e.z, e.yaw, e.y));
+  });
+
   events.on('ev:respawn', (e) => {
     if (!e || !sameId(e.pid, ctx.selfId)) return;
-    safe('player.spawn', () => ctx.player.spawn(e.x, e.z, e.yaw));
+    safe('player.spawn', () => ctx.player.spawn(e.x, e.z, e.yaw, e.y));
   });
 
   // Golpe de zombi al jugador local → 'local:damage'
@@ -638,9 +670,16 @@ async function boot() {
     const dmg = Number(e.amount ?? e.dmg);
     const amount = e.blocked ? 0 : (isFinite(dmg) && dmg > 0 ? dmg : ZOMBIE.damage);
     events.emit('local:damage', { amount, fromX, fromZ, blocked: !!e.blocked });
+    if (amount > 0) input.rumble(Math.min(1, amount / 40), 0.5, 180);
   });
 
   // ------------------------------------------------------------ pointer lock y pausa
+  events.on('ev:pause', (e) => {
+    if (e && String(e.pid) === String(ctx.selfId)) return;   // quien pausó ya tiene el menú abierto
+    app.expectUnlock = true;                                  // soltar el ratón no debe volver a pausar
+    call('menus', 'onRemotePause');
+  });
+  events.on('ev:resume', () => call('menus', 'onRemoteResume'));
   function openPause() {
     const t = performance.now();
     if (t - app.lastPauseAt < 300) return;
@@ -669,6 +708,13 @@ async function boot() {
     if (isEditableEl(e.target) || isInteractiveEl(e.target) || input.typing) return;
     input.requestLock();
   }, true);
+
+  // Mando: aviso al conectarlo y desconectarlo
+  window.addEventListener('gamepadconnected', (e) => {
+    const id = (e.gamepad && e.gamepad.id ? e.gamepad.id : '').replace(/\s*\(.*$/, '') || 'Mando';
+    call('hud', 'message', tr('Mando conectado: {0}', id), 3);
+  });
+  window.addEventListener('gamepaddisconnected', () => call('hud', 'message', tr('Mando desconectado'), 3));
 
   // Audio: se desbloquea con el primer gesto del usuario
   const unlockAudio = () => {
@@ -746,7 +792,7 @@ async function boot() {
     const playing = isPlaying();
     const self = ctx.self;
     if (input.typing) app.lastTypingAt = performance.now();
-    const needClick = playing && !DEBUG && !input.locked && !menusOpen() && !overlays.statusVisible && !input.typing;
+    const needClick = playing && !DEBUG && !input.locked && !input.padActive && !menusOpen() && !overlays.statusVisible && !input.typing;
     overlays.toggle('click', needClick, self && self.state === 'dead' ? tr('Haz clic para observar') : tr('Haz clic para jugar'));
 
     let spec = null;
@@ -792,11 +838,45 @@ async function boot() {
 
   // ------------------------------------------------------------ bucle principal
   let lastT = performance.now();
+  let shadowTick = 0;
+  let dynT = 0, dynN = 0, dynGood = 0;
+  let dynProbe = null, dynHoldUntil = 0;   // última bajada (para comprobar si sirvió) y pausa si no sirve
+  function adaptResolution(realDt) {
+    if (!isPlaying() || document.hidden || realDt > 0.25) return;
+    dynT += realDt; dynN++;
+    if (dynT < 1.5) return;
+    const avg = dynT / dynN;
+    dynT = 0; dynN = 0;
+    let next = dynScale;
+    const now = performance.now();
+    if (dynProbe && avg > dynProbe.avg * 0.92) {
+      // bajar la resolución no ha servido (el límite es el procesador, no la gráfica): se deshace y se deja estar
+      next = dynProbe.scale;
+      dynHoldUntil = now + 20000;
+      dynProbe = null;
+    } else if (avg > 1 / 48 && now >= dynHoldUntil && dynScale > DYN_MIN) {
+      dynProbe = { avg, scale: dynScale };
+      next = Math.max(DYN_MIN, dynScale - 0.1); dynGood = 0;
+    } else if (avg < 1 / 57 && ++dynGood >= 3) { dynProbe = null; next = Math.min(1, dynScale + 0.05); dynGood = 0; }
+    else dynProbe = null;
+    if (next !== dynScale) {
+      dynScale = next;
+      renderer.setPixelRatio(pixelRatioFor(settings.quality));
+      renderer.setSize(window.innerWidth, Math.max(1, window.innerHeight));
+    }
+  }
   function frame() {
     requestAnimationFrame(frame);
     const t = performance.now();
     let dt = (t - lastT) / 1000;
     lastT = t;
+    adaptResolution(dt);
+    // sombras a 30 Hz: la mitad de pasadas de sombra sin que se note
+    // (el mundo puede pedir menos: en el interior del castillo solo cuando se mueve la zona de sombra)
+    if (renderer.shadowMap.enabled && (shadowTick ^= 1)) {
+      const w = ctx.world;
+      if (!w || typeof w.wantShadowUpdate !== 'function' || w.wantShadowUpdate()) renderer.shadowMap.needsUpdate = true;
+    }
     if (!(dt > 0)) dt = 0;
     dt = Math.min(dt, 0.05);
     ctx.time += dt;
@@ -804,6 +884,9 @@ async function boot() {
 
     const open = menusOpen();
     input.enabled = !open && !overlays.statusBlocking;
+    input.pollGamepad(dt);
+    // Options del mando: también cierra la pausa (con el menú abierto la entrada de juego está desactivada)
+    if (open && isPlaying() && input.padPressed('PadOptions')) menus('togglePause');
 
     if (isPlaying()) {
       // Esc sin pointer lock (modo debug o navegador que lo entrega)
@@ -815,7 +898,10 @@ async function boot() {
       call('hud', 'showScoreboard', false);
     }
 
+    // En pausa compartida no avanza la simulación local (movimiento, interacción, armas)
+    const paused = !!(ctx.gs && ctx.gs.pause && isPlaying());
     for (const key of UPDATE_ORDER) {
+      if (paused && (key === 'player' || key === 'interaction' || key === 'weapons')) continue;
       const m = ctx[key];
       if (m && typeof m.update === 'function') safe(`${key}.update`, () => m.update(dt));
     }

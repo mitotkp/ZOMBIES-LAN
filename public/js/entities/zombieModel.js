@@ -11,7 +11,8 @@ import { ZOMBIE_HITBOX } from '/shared/collision.js';
 import { hasTypeModel, buildTypeModel, decorateCommon } from './bossModels.js';
 import {
   TAU, rng, makeCanvas, canvasTexture, blotches, bloodStain, tearHole, grime, paintGeo, solidColor, remapUV,
-  deform, mergeGeos, makeMat, limbGeo, glowTexture, smoothstep, easeInOut, clamp01, fbm, roundedBox, capsule } from './procgen.js';
+  deform, mergeGeos, makeMat, limbGeo, glowTexture, smoothstep, easeInOut, clamp01, fbm, roundedBox, capsule,
+  normalTexture, tileFbm } from './procgen.js';
 
 const HB = ZOMBIE_HITBOX;
 
@@ -61,11 +62,13 @@ const EXPOSED_SKIN = '#8f9784';
 // Texturas procedurales
 // --------------------------------------------------------------------------------------------
 const TW = 256, TH = 256, TORSO_H = 192;
+const TEX_SCALE = 2;   // los lienzos son de 512 px, pero se pinta en coordenadas de 256
 
 function paintSkin(seed) {
-  const c = makeCanvas(TW, TH);
+  const c = makeCanvas(TW * TEX_SCALE, TH * TEX_SCALE);
   if (!c) return null;
   const g = c.getContext('2d');
+  g.scale(TEX_SCALE, TEX_SCALE);
   const r = rng(seed);
   g.fillStyle = '#d4d6cc';
   g.fillRect(0, 0, TW, TH);
@@ -127,9 +130,10 @@ function plaid(g, x0, y0, w, h, dark, light) {
 }
 
 function paintShirt(kind, seed) {
-  const c = makeCanvas(TW, TH);
+  const c = makeCanvas(TW * TEX_SCALE, TH * TEX_SCALE);
   if (!c) return null;
   const g = c.getContext('2d');
+  g.scale(TEX_SCALE, TEX_SCALE);
   const r = rng(seed);
   const FX = 128; // centro del frente (u = 0.5)
   let base = '#777';
@@ -298,9 +302,10 @@ function paintShirt(kind, seed) {
 }
 
 function paintPants(kind, seed) {
-  const c = makeCanvas(TW, TH);
+  const c = makeCanvas(TW * TEX_SCALE, TH * TEX_SCALE);
   if (!c) return null;
   const g = c.getContext('2d');
+  g.scale(TEX_SCALE, TEX_SCALE);
   const r = rng(seed);
   const cols = { work: '#33455a', slacks: '#29292d', police: '#1b2236', jeans: '#3b5d84', bare: '#8c937f' };
   fabricBase(g, 0, 0, TW, TH, cols[kind] || '#333', r, 0.14);
@@ -347,6 +352,20 @@ function paintPants(kind, seed) {
 // --------------------------------------------------------------------------------------------
 // Geometrías
 // --------------------------------------------------------------------------------------------
+// Arrugas de tela en la silueta (desplaza radialmente los vértices de un tubo vertical)
+function wrinkle(g, amp, seed, angF = 3, yF = 14, axisY = true) {
+  deform(g, (v) => {
+    const rad = Math.hypot(v.x, v.z);
+    if (rad < 1e-5) return;
+    const ang = Math.atan2(v.x, v.z);
+    const n = fbm((ang + Math.PI) * angF, (axisY ? v.y : 0) * yF, seed, 3) - 0.5;
+    // crestas horizontales (pliegues de caída) + bultos sueltos
+    const crease = Math.sin(v.y * yF * 2.1 + fbm(ang * 2, v.y * 3, seed + 9, 2) * 4) * 0.35;
+    const k = 1 + amp * (n + crease * 0.5);
+    v.x *= k; v.z *= k;
+  });
+}
+
 function profile(t, pts) {
   if (t <= pts[0][0]) return pts[0][1];
   for (let i = 1; i < pts.length; i++) {
@@ -360,7 +379,7 @@ function profile(t, pts) {
 }
 
 function torsoGeo(seed) {
-  const g = new THREE.CylinderGeometry(1, 1, 1, 28, 18, false);
+  const g = new THREE.CylinderGeometry(1, 1, 1, 30, 18, false);
   const belly = seed === 2 ? 0.035 : 0;                 // variante con barriga
   const thin = seed === 3 ? 0.9 : 1;                    // variante demacrada
   deform(g, (v) => {
@@ -387,6 +406,15 @@ function torsoGeo(seed) {
     }
     v.set(v.x * w, y, z);
   });
+  // la camisa cuelga con pliegues (menos en hombros y cuello, donde la tela va tensa)
+  deform(g, (v) => {
+    const t = (v.y + 0.03) / 0.7;
+    const ang = Math.atan2(v.x, v.z);
+    const n = fbm((ang + Math.PI) * 2.2, t * 5, seed + 17, 3) - 0.5;
+    const drape = Math.sin(ang * 7 + fbm(ang, t * 2, seed, 2) * 5) * 0.4 * (1 - smoothstep(0.1, 0.45, t));
+    const k = 1 + 0.07 * (n + drape) * (1 - smoothstep(0.6, 0.85, t));
+    v.x *= k; v.z *= k;
+  });
   remapUV(g, 0, 1, 0.25, 1);
   paintGeo(g, (x, y, z, c) => {
     // oclusión bajo los hombros / cuello y en los costados
@@ -410,7 +438,14 @@ function pelvisGeo() {
 }
 
 function thighGeo() {
-  const g = limbGeo(DIM.thigh, 0.079, 0.058, 9, 3);
+  const g = limbGeo(DIM.thigh, 0.08, 0.057, 9, 3);
+  deform(g, (v) => {
+    const t = -v.y / DIM.thigh;
+    const quad = 1 + 0.1 * Math.exp(-((t - 0.35) ** 2) / 0.05) * (v.z < 0 ? 1 : 0.3);   // cuádriceps
+    const knee = 1 - 0.05 * Math.exp(-((t - 0.95) ** 2) / 0.004);
+    v.x *= quad * knee; v.z *= quad * knee * 1.06;
+  });
+  wrinkle(g, 0.07, 3, 2.5, 18);
   remapUV(g, 0, 1, 0.33, 0.8);
   solidColor(g, 1, 1, 1);
   return g;
@@ -420,9 +455,18 @@ function shinGeo() {
   const shin = limbGeo(DIM.shin + 0.01, 0.058, 0.044, 9, 2);
   // gemelo marcado
   deform(shin, (v) => { const t = -v.y / DIM.shin; const k = 1 + 0.12 * Math.exp(-((t - 0.3) ** 2) / 0.02) * (v.z > 0 ? 1 : 0.4); v.x *= k; v.z *= k; });
+  wrinkle(shin, 0.08, 7, 2.5, 22);
+  // bajo del pantalón algo acampanado sobre el zapato
+  deform(shin, (v) => { const t = -v.y / DIM.shin; const k = 1 + 0.12 * smoothstep(0.8, 1.02, t); v.x *= k; v.z *= k; });
   remapUV(shin, 0, 1, 0.0, 0.4);
   solidColor(shin, 1, 1, 1);
-  return shin;
+  // rodilla: tapa la unión con el muslo al doblar la pierna (la tela se estira sobre la rótula)
+  const knee = new THREE.SphereGeometry(0.062, 12, 7);
+  knee.scale(0.98, 1.15, 1.08);
+  knee.translate(0, -0.005, -0.004);
+  remapUV(knee, 0, 1, 0.36, 0.42);
+  solidColor(knee, 0.95, 0.95, 0.95);
+  return mergeGeos([shin, knee]);
 }
 
 // Zapato (cuelga del tobillo, al final de la espinilla): se mantiene plano en el suelo al andar
@@ -439,13 +483,14 @@ function footGeo() {
 }
 
 function upperArmSleeveGeo(seed) {
-  const arm = limbGeo(DIM.upperArm, 0.056, 0.047, 8, 2, 0.06, seed);
+  const arm = limbGeo(DIM.upperArm, 0.056, 0.049, 8, 3, 0.06, seed);
   deform(arm, (v) => { const t = -v.y / DIM.upperArm; const k = 1 + 0.07 * Math.exp(-((t - 0.45) ** 2) / 0.03); v.x *= k; v.z *= k; });
+  wrinkle(arm, 0.1, seed, 2.5, 26);
   remapUV(arm, 0, 1, 0.0, 0.25);
   solidColor(arm, 1, 1, 1);
-  const cap = new THREE.SphereGeometry(0.06, 16, 12);
-  cap.scale(0.95, 1.12, 0.98);
-  cap.translate(0, -0.012, 0);
+  const cap = new THREE.SphereGeometry(0.057, 12, 9);
+  cap.scale(0.92, 1.55, 1.02);          // deltoides: cae sobre el brazo en vez de ser una bola
+  cap.translate(0, -0.035, 0);
   remapUV(cap, 0, 1, 0.2, 0.25);
   solidColor(cap, 1, 1, 1);
   return mergeGeos([arm, cap]);
@@ -454,9 +499,9 @@ function upperArmSleeveGeo(seed) {
 function upperArmBareGeo() {
   const arm = limbGeo(DIM.upperArm, 0.048, 0.038, 8, 2);
   deform(arm, (v) => { const t = -v.y / DIM.upperArm; const k = 1 + 0.1 * Math.exp(-((t - 0.4) ** 2) / 0.03) * (v.z < 0 ? 1 : 0.5); v.x *= k; v.z *= k; });
-  const cap = new THREE.SphereGeometry(0.052, 14, 10);
-  cap.scale(0.95, 1.1, 0.98);
-  cap.translate(0, -0.01, 0);
+  const cap = new THREE.SphereGeometry(0.05, 12, 9);
+  cap.scale(0.92, 1.6, 1.0);
+  cap.translate(0, -0.032, 0);
   solidColor(arm, 0.92, 0.92, 0.92);
   solidColor(cap, 0.92, 0.92, 0.92);
   return mergeGeos([arm, cap]);
@@ -466,7 +511,7 @@ function forearmGeo(seed) {
   const r = rng(seed);
   const parts = [];
   const L = DIM.forearm;
-  const fore = limbGeo(L, 0.043, 0.031, 8, 3);
+  const fore = limbGeo(L, 0.046, 0.033, 8, 3);
   // músculo del antebrazo cerca del codo y muñeca huesuda
   deform(fore, (v) => { const t = -v.y / L; const k = 1 + 0.14 * Math.exp(-((t - 0.25) ** 2) / 0.03) - 0.06 * smoothstep(0.8, 1, t); v.x *= k; v.z *= k * 0.92; });
   paintGeo(fore, (x, y, z, c) => { const k = 0.95 - 0.1 * smoothstep(-0.05, -0.25, y); c.setRGB(k, k, k); });
@@ -475,22 +520,23 @@ function forearmGeo(seed) {
   solidColor(elbow, 0.9, 0.9, 0.9);
   parts.push(elbow);
   // mano: palma + dedos huesudos en garra (dos falanges) con uñas negras
-  const palm = roundedBox(0.058, 0.095, 0.03, 0.012, 2);
-  palm.translate(0, -L - 0.045, -0.004);
+  const palm = roundedBox(0.066, 0.1, 0.032, 0.013, 2);
+  deform(palm, (v) => { v.x *= 1 + 0.12 * clamp01((-v.y) / 0.05); }, false);   // más ancha en los nudillos
+  palm.translate(0, -L - 0.047, -0.004);
   paintGeo(palm, (x, y, z, c) => c.setRGB(0.85, 0.82, 0.8));
   parts.push(palm);
   const bloody = r() < 0.4;
   for (let i = 0; i < 4; i++) {
     const len = (i === 0 || i === 3 ? 0.07 : 0.082) * (0.92 + r() * 0.16);
-    const a = capsule(0.0075, len * 0.55, 7);
+    const a = capsule(0.0088, len * 0.55, 6, 1);
     a.translate(0, -len * 0.27, 0);
-    const b = capsule(0.0068, len * 0.55, 7);
+    const b = capsule(0.0078, len * 0.55, 6, 1);
     b.translate(0, -len * 0.27, 0);
     b.rotateX(0.5 + r() * 0.5);
     b.translate(0, -len * 0.5, 0);
     const f = mergeGeos([a, b]);
     f.rotateX(0.35 + r() * 0.45);
-    f.translate(-0.021 + i * 0.014, -L - 0.09, -0.006);
+    f.translate(-0.024 + i * 0.016, -L - 0.095, -0.006);
     paintGeo(f, (x, y, z, c) => {
       const tip = smoothstep(-L - 0.13, -L - 0.16, y);
       if (bloody) c.setRGB(0.75, 0.35, 0.3); else c.setRGB(0.85, 0.82, 0.8);
@@ -498,7 +544,7 @@ function forearmGeo(seed) {
     });
     parts.push(f);
   }
-  const thumb = capsule(0.0075, 0.055, 7);
+  const thumb = capsule(0.0095, 0.06, 6, 1);
   thumb.translate(0, -0.027, 0);
   thumb.rotateZ(0.6); thumb.rotateX(0.5);
   thumb.translate(0.03, -L - 0.02, -0.01);
@@ -515,7 +561,7 @@ function headGeo(style, hairIdx, seed) {
   const hair = HAIR_COLORS[hairIdx % HAIR_COLORS.length];
   const wound = { x: (r() < 0.5 ? -1 : 1) * (0.5 + r() * 0.4), y: r() * 0.6 - 0.1, z: r() * 0.8 - 0.4 };
   const rotNose = r() < 0.35;
-  const g = new THREE.SphereGeometry(1, 26, 20);
+  const g = new THREE.SphereGeometry(1, 24, 18);
   paintGeo(g, (x, y, z, c) => {
     let k = 1;
     for (const s of [-1, 1]) {
@@ -556,7 +602,15 @@ function headGeo(style, hairIdx, seed) {
       d -= 0.08 * gauss3(x - s * 0.62, y + 0.28, z + 0.72, 0.24);
     }
     d += (rotNose ? 0.02 : 0.12) * gauss3(x, y + 0.1, z + 1.0, 0.11);
+    d += (rotNose ? 0.01 : 0.06) * gauss3(x * 1.8, y - 0.02, z + 1.0, 0.1);   // tabique
     d -= 0.05 * gauss3(x, y + 0.42, z + 0.9, 0.16);
+    // arco superciliar marcado, pómulos salientes, sienes hundidas y mentón
+    d += 0.07 * gauss3(x * 0.55, (y - 0.24) * 2.6, z + 0.93, 0.3);
+    for (const s of [-1, 1]) {
+      d += 0.06 * gauss3(x - s * 0.58, y + 0.08, z + 0.72, 0.16);
+      d -= 0.06 * gauss3(x - s * 0.92, y - 0.15, z + 0.25, 0.25);
+    }
+    d += 0.07 * gauss3(x * 0.8, y + 0.78, z + 0.72, 0.2);
     v.multiplyScalar(d);
     if (y < -0.2) v.x *= 1 - 0.2 * clamp01((-y - 0.2) / 0.8);
     if (z > 0) v.z *= 1.06;
@@ -618,10 +672,12 @@ function jawGeo(seed) {
 }
 
 function eyesGeo() {
-  const a = new THREE.SphereGeometry(0.0125, 8, 6);
-  const b = new THREE.SphereGeometry(0.0125, 8, 6);
-  a.translate(-0.036, DIM.headC + 0.007, -0.089);
-  b.translate(0.036, DIM.headC + 0.007, -0.089);
+  // pupilas pequeñas y metidas en las cuencas (sin "bombillas")
+  const a = new THREE.SphereGeometry(0.0085, 10, 8);
+  const b = new THREE.SphereGeometry(0.0085, 10, 8);
+  a.scale(1, 0.75, 0.6); b.scale(1, 0.75, 0.6);
+  a.translate(-0.036, DIM.headC + 0.006, -0.085);
+  b.translate(0.036, DIM.headC + 0.006, -0.085);
   return mergeGeos([a, b]);
 }
 
@@ -685,6 +741,29 @@ function goreGeo() {
 }
 
 // --------------------------------------------------------------------------------------------
+// Relieve (mapas de normales): piel arrugada con poros y venas, tela con trama y pliegues
+// --------------------------------------------------------------------------------------------
+function skinNormalTex() {
+  return normalTexture(256, (u, v) => {
+    const wr = 1 - Math.abs(2 * tileFbm(u, v, 6, 11, 3) - 1);          // arrugas (ruido "cresta")
+    const pores = tileFbm(u, v, 64, 23, 2);
+    const vein = 1 - Math.abs(2 * tileFbm(u * 1, v * 1, 4, 37, 3) - 1);
+    const sag = tileFbm(u, v, 3, 41, 2);                                // carne flácida
+    return 0.3 * wr * wr + 0.2 * pores + 0.15 * sag - 0.3 * smoothstep(0.93, 0.99, vein);
+  }, 1.6, 3);
+}
+
+function clothNormalTex() {
+  return normalTexture(256, (u, v) => {
+    const weave = 0.5 + 0.25 * (Math.sin(u * TAU * 96) + Math.sin(v * TAU * 96));
+    // pliegues: ruido estirado en horizontal (arrugas que cruzan mangas y perneras)
+    const fold = 1 - Math.abs(2 * tileFbm(u, v * 3 % 1, 2, 53, 3) - 1);
+    const crumple = tileFbm(u, v, 8, 67, 3);
+    return 0.1 * weave + 0.3 * fold * fold * fold + 0.25 * crumple;
+  }, 1.4, 2);
+}
+
+// --------------------------------------------------------------------------------------------
 // Recursos compartidos
 // --------------------------------------------------------------------------------------------
 let ASSETS = null;
@@ -694,24 +773,28 @@ export function getZombieAssets(quality = 'high') {
   const q = quality === 'low' ? 'low' : 'high';
   const A = { quality: q, tex: {}, mats: {}, geos: {}, heads: new Map() };
   A.tex.skin = canvasTexture(paintSkin(101));
-  A.mats.skin = SKIN_TINTS.map((tint) => makeMat(q, { map: A.tex.skin, color: tint, vertexColors: true, roughness: 0.72 }));
+  const hi = q === 'high';
+  if (hi) { A.tex.skinN = skinNormalTex(); A.tex.clothN = clothNormalTex(); }
+  const skinRelief = hi ? { normalMap: A.tex.skinN, normalScale: new THREE.Vector2(1.0, 1.0) } : {};
+  const clothRelief = hi ? { normalMap: A.tex.clothN, normalScale: new THREE.Vector2(0.9, 0.9) } : {};
+  A.mats.skin = SKIN_TINTS.map((tint) => makeMat(q, { map: A.tex.skin, color: tint, vertexColors: true, roughness: 0.62, ...skinRelief }));
   const shirtKinds = [...new Set(OUTFITS.map((o) => o.shirt))];
   const pantsKinds = [...new Set(OUTFITS.map((o) => o.pants))];
   shirtKinds.forEach((k, i) => {
     A.tex['shirt:' + k] = canvasTexture(paintShirt(k, 200 + i * 13));
-    A.mats['shirt:' + k] = makeMat(q, { map: A.tex['shirt:' + k], vertexColors: true, roughness: 0.95 });
+    A.mats['shirt:' + k] = makeMat(q, { map: A.tex['shirt:' + k], vertexColors: true, roughness: 0.95, ...clothRelief });
   });
   pantsKinds.forEach((k, i) => {
     A.tex['pants:' + k] = canvasTexture(paintPants(k, 400 + i * 17));
-    A.mats['pants:' + k] = makeMat(q, { map: A.tex['pants:' + k], vertexColors: true, roughness: 0.95 });
+    A.mats['pants:' + k] = makeMat(q, { map: A.tex['pants:' + k], vertexColors: true, roughness: 0.95, ...clothRelief });
   });
   A.mats.hat = makeMat(q, { vertexColors: true, roughness: 0.45 });
   A.mats.gore = makeMat(q, { vertexColors: true, roughness: 0.3, color: 0xffffff });
   A.mats.charred = makeMat(q, { color: 0x1c1714, roughness: 1, emissive: 0x160500 });
-  A.mats.eyes = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.0, 0.7, 0.16), toneMapped: false });
+  A.mats.eyes = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.95, 0.62, 0.2), toneMapped: false });
   A.tex.glow = glowTexture(64, 2.4);
   A.mats.halo = new THREE.PointsMaterial({
-    size: 0.11, map: A.tex.glow, color: 0xff9420, transparent: true, opacity: 0.95,
+    size: 0.065, map: A.tex.glow, color: 0xff8a20, transparent: true, opacity: 0.55,
     blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true, toneMapped: false,
   });
   // Geometrías (algunas con variantes)
@@ -822,12 +905,24 @@ export class ZombieModel {
     this.outfit = outfit;
     const shadows = A.quality !== 'low';
     this.meshes = [];
-    const skin = A.mats.skin[Math.floor(r() * A.mats.skin.length)];
-    const shirt = A.mats['shirt:' + outfit.shirt];
-    const pants = A.mats['pants:' + outfit.pants];
+    // Cada zombi lleva su propio tono de piel y ropa (copias ligeras de los materiales compartidos:
+    // mismas texturas y mismo shader, así que no añade llamadas de dibujo)
+    this._ownMats = [];
+    const tinted = (base, hueAmt, lo, hi) => {
+      const m = base.clone();
+      const k = lo + r() * (hi - lo);
+      const tint = new THREE.Color().setHSL(r(), 0.45, 0.6);
+      m.color.lerp(tint, hueAmt).multiplyScalar(k);
+      this._ownMats.push(m);
+      return m;
+    };
+    const skin = tinted(A.mats.skin[Math.floor(r() * A.mats.skin.length)], 0.08, 0.82, 1.08);
+    const shirt = tinted(A.mats['shirt:' + outfit.shirt], 0.3, 0.7, 1.1);
+    const pants = tinted(A.mats['pants:' + outfit.pants], 0.2, 0.7, 1.1);
     const mesh = (geo, mat, parent, shadow = false) => {
       const m = new THREE.Mesh(geo, mat);
       m.castShadow = shadow && shadows;
+      m.userData.cast = m.castShadow;
       m.receiveShadow = false;
       parent.add(m);
       this.meshes.push(m);
@@ -837,8 +932,9 @@ export class ZombieModel {
     // Jerarquía
     this.group = new THREE.Group();
     this.group.name = 'zombie';
-    const wscale = 0.95 + r() * 0.1;
-    this.group.scale.set(wscale, 1, wscale);
+    // complexión: flaco/corpulento y algo más alto o bajo
+    const wscale = 0.9 + r() * 0.22;
+    this.group.scale.set(wscale, 0.95 + r() * 0.09, wscale);
     this.tilt = new THREE.Group();
     this.group.add(this.tilt);
     this.hips = new THREE.Group();
@@ -952,6 +1048,13 @@ export class ZombieModel {
     this._poseIdle(0);
     this.cp.set(this.tp);
     this._apply();
+  }
+
+  // Nivel de detalle de sombras: lejos de la cámara el zombi no proyecta sombra (ahorra la pasada de sombras)
+  setShadowLOD(on) {
+    if (this._shadowOn === on) return;
+    this._shadowOn = on;
+    for (const m of this.meshes) if (m.userData.cast) m.castShadow = on;
   }
 
   // Halo luminoso (sprite aditivo) pegado al modelo o a una pieza
@@ -1209,6 +1312,7 @@ export class ZombieModel {
     this.animT += dt;
     // ciclo de marcha acorde a la velocidad real de desplazamiento
     const speed = Math.max(0, st.speed || 0);
+    this.speed = speed;
     let stride = 1.2 * P.gait;
     if (crawler) stride = 0.7;
     else if (anim === ZA.RUN) stride = 1.9;
@@ -2032,6 +2136,7 @@ export class ZombieModel {
     if (this.pustMat) { this.pustMat.dispose(); this.pustMat = null; }
     if (this._ghostMats) { for (const m of this._ghostMats.values()) m.dispose(); this._ghostMats = null; }
     if (this.auraSprite) { this.auraSprite.material.dispose(); this.auraSprite = null; }
+    if (this._ownMats) { for (const m of this._ownMats) m.dispose(); this._ownMats = null; }
   }
 }
 

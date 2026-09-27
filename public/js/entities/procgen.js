@@ -106,6 +106,58 @@ export function puffTexture(size = 64, seed = 7) {
   return tex;
 }
 
+// --------------------------------------------------------------------------------------------
+// Mapas de normales procedurales (relieve fino sin geometría extra). Son repetibles (sin costuras)
+// para poder usarlos con repeat > 1 sobre cualquier distribución de UV.
+// --------------------------------------------------------------------------------------------
+function tileNoise(x, y, period, seed) {
+  const xi = Math.floor(x), yi = Math.floor(y);
+  const fx = x - xi, fy = y - yi;
+  const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+  const m = (v) => ((v % period) + period) % period;
+  const a = hash2(m(xi), m(yi), seed), b = hash2(m(xi + 1), m(yi), seed);
+  const c = hash2(m(xi), m(yi + 1), seed), d = hash2(m(xi + 1), m(yi + 1), seed);
+  return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+}
+// fbm repetible: u, v en [0, 1); base = celdas por lado en la primera octava
+export function tileFbm(u, v, base, seed, oct = 4) {
+  let s = 0, amp = 0.5, f = base, norm = 0;
+  for (let i = 0; i < oct; i++) {
+    s += tileNoise(u * f, v * f, f, seed + i * 31) * amp;
+    norm += amp; f *= 2; amp *= 0.5;
+  }
+  return s / norm;
+}
+
+// heightFn(u, v) -> altura en [0, 1]. strength: pendiente. Devuelve una DataTexture de normales (espacio tangente).
+export function normalTexture(size, heightFn, strength = 2, repeat = 1) {
+  const H = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) H[y * size + x] = heightFn(x / size, y / size);
+  const data = new Uint8Array(size * size * 4);
+  const at = (x, y) => H[((y + size) % size) * size + ((x + size) % size)];
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = (at(x + 1, y) - at(x - 1, y)) * strength * size / 64;
+      const dy = (at(x, y + 1) - at(x, y - 1)) * strength * size / 64;
+      const inv = 1 / Math.hypot(dx, dy, 1);
+      const i = (y * size + x) * 4;
+      data[i] = Math.round((-dx * inv * 0.5 + 0.5) * 255);
+      data[i + 1] = Math.round((dy * inv * 0.5 + 0.5) * 255);
+      data[i + 2] = Math.round((inv * 0.5 + 0.5) * 255);
+      data[i + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(repeat, repeat);
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = 4;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 // Manchas de ruido sobre un lienzo 2D
 export function blotches(g, w, h, r, color, count, minR, maxR, alphaMin = 0.05, alphaMax = 0.2) {
   g.save();
@@ -317,8 +369,8 @@ export function roundedBox(w, h, d, r = null, seg = 2) {
 }
 
 // Cápsula vertical (dedos, pulgares) de longitud total len
-export function capsule(radius, len, radial = 8) {
-  return new THREE.CapsuleGeometry(radius, Math.max(0.001, len - 2 * radius), 3, radial);
+export function capsule(radius, len, radial = 8, capSeg = 3) {
+  return new THREE.CapsuleGeometry(radius, Math.max(0.001, len - 2 * radius), capSeg, radial);
 }
 
 export function limbGeo(len, r0, r1, radial = 8, rows = 3, raggedEnd = 0, seed = 1, depthScale = 1) {

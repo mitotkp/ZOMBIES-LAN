@@ -1,10 +1,10 @@
-// Ventajas (Perk-a-Colas). Todas requieren electricidad.
+// Ventajas (Perk-a-Colas). Todas requieren electricidad salvo las marcadas con noPower.
 
 export const PERK_LIMIT = 4; // como en BO2
 
 export const PERKS = {
   quickrevive: {
-    key: 'quickrevive', name: 'Quick Revive', price: 1500, soloPrice: 500,
+    key: 'quickrevive', name: 'Quick Revive', price: 1500, soloPrice: 500, noPower: true,
     color: '#3fa9f5', glow: 0x3fa9f5, icon: 'QR',
     desc: 'Reanimas el doble de rápido. En solitario: te reanimas solo (3 usos).',
   },
@@ -36,6 +36,10 @@ export const PERKS = {
 };
 
 export const PERK_KEYS = Object.keys(PERKS);
+
+export function perkNeedsPower(key) {
+  return !(PERKS[key] && PERKS[key].noPower);
+}
 
 export function perkPrice(key, playerCount) {
   const p = PERKS[key];
