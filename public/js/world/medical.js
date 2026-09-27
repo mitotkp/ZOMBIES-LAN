@@ -22,7 +22,7 @@ export class MedCabinets {
       if (!it || !def) continue;
       const yaw = yawForFace(OPP[mc.wall]);
       // caja metálica blanca con puerta y bisagras (estática)
-      const P = B.at(it.wx, 0, it.wz, yaw);
+      const P = B.at(it.wx, it.base || 0, it.wz, yaw);
       P.box('metal', 0.7, 0.8, 0.2, 0, 1.45, -0.1, { color: 0xdcdcd4 });
       P.box('metal', 0.66, 0.76, 0.02, 0, 1.45, -0.205, { color: 0xeeeee6 });
       P.box('metal', 0.03, 0.12, 0.03, 0.27, 1.45, -0.225, { color: 0x6a6a6a });
@@ -44,7 +44,7 @@ export class MedCabinets {
       const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.46, 0.46), mat);
       sign.userData.noShadow = true;
       const g = new THREE.Group();
-      g.position.set(it.wx, 0, it.wz);
+      g.position.set(it.wx, it.base || 0, it.wz);
       g.rotation.y = yaw;
       sign.position.set(0, 1.5, -0.218);
       sign.rotation.y = Math.PI;
@@ -104,7 +104,7 @@ export class MedItems {
     const def = MEDS[it.type];
     if (!def) return;
     const group = new THREE.Group();
-    group.position.set(it.x, 0, it.z);
+    group.position.set(it.x, it.y || 0, it.z);
     const spin = new THREE.Group();
     spin.position.y = 0.45;
     spin.add(this._proto(it.type).clone());
@@ -143,7 +143,7 @@ export class MedItems {
     if (name === 'itemSpawn') {
       if (!this.items.has(e.id)) this._add({ ...e, until: Date.now() + MED_DROPS.lifetime * 1000 });
     } else if (name === 'itemPick') {
-      sfx(this.ctx, 'part_pickup', e.x, 0.5, e.z, { volume: 0.8 });
+      sfx(this.ctx, 'part_pickup', e.x, (e.y || 0) + 0.5, e.z, { volume: 0.8 });
       this._remove(e.id);
     }
   }

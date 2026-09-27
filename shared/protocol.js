@@ -68,6 +68,7 @@ export const ZF = {
   FUSE: 16,     // zombi explosivo con la mecha encendida
   CLOAK: 32,    // jefe Espectro camuflado
   CHARGE: 64,   // jefe Carnicero cargando
+  MIST: 128,    // vampiro convertido en murciélagos (invulnerable, sin cuerpo)
 };
 
 // Partes del cuerpo en los impactos

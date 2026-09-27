@@ -10,6 +10,10 @@ import { facadePoint, facadePlaneYaw } from './levelgeo.js';
 // Índices de las luces puntuales
 export const L = { TERMINAL: 0, BAR: 1, ALMACEN: 2, PLANTA: 3, STREET: 4, FIRE: 5, BOX: 6, PAP: 7 };
 
+const SHADOW_HALF = 26;     // m de la sombra de la luna a cada lado del jugador
+const SHADOW_RES = 2048;
+const HEMI_HIGH = 2.8, HEMI_LOW = 3.0;   // luz ambiente: lo bastante para leer las zonas oscuras
+
 const C_WARM = new THREE.Color(0xffb46a), C_COLD = new THREE.Color(0xe4ecff);
 const C_SODIUM = new THREE.Color(0xffa040), C_RED = new THREE.Color(0xff2a14);
 
@@ -28,16 +32,18 @@ export class Lighting {
   build(batch) {
     const root = this.world.root;
     // Ambiente de luna
-    this.hemi = new THREE.HemisphereLight(0x5a6d92, 0x2a241c, 1.25);
+    this.hemi = new THREE.HemisphereLight(0x8090b8, 0x4a4032, HEMI_HIGH);
     root.add(this.hemi);
     const moon = new THREE.DirectionalLight(0xa9bcff, 1.15);
     const target = new THREE.Object3D();
     target.position.set(30, 0, 18);
     moon.position.copy(target.position).addScaledVector(MOON_DIR, 90);
     moon.target = target;
-    moon.shadow.mapSize.set(2048, 2048);
+    // La sombra cubre solo los alrededores del jugador y lo sigue (update): más nítida y más barata
+    moon.shadow.mapSize.set(SHADOW_RES, SHADOW_RES);
     const sc = moon.shadow.camera;
-    sc.left = -44; sc.right = 44; sc.top = 44; sc.bottom = -44; sc.near = 10; sc.far = 190;
+    sc.left = -SHADOW_HALF; sc.right = SHADOW_HALF; sc.top = SHADOW_HALF; sc.bottom = -SHADOW_HALF; sc.near = 10; sc.far = 190;
+    this.moonTarget = target;
     moon.shadow.bias = -0.0006;
     moon.shadow.normalBias = 0.03;
     root.add(moon, target);
@@ -45,10 +51,10 @@ export class Lighting {
 
     // Luces puntuales (posición inicial; algunas se mueven o cambian de color)
     const defs = [
-      [0xffb46a, 20, 18, 11, 3.5, 26],       // terminal
-      [0xff9a62, 22, 20, 11, 3.3, 12.5],     // bar
-      [0xffa040, 24, 20, 28, 3.5, 12],       // almacén
-      [0xff2a14, 10, 20, 46.5, 3.5, 12],     // planta
+      [0xffb46a, 20, 22, 11, 3.5, 26],       // terminal
+      [0xff9a62, 22, 22, 11, 3.3, 12.5],     // bar
+      [0xffa040, 24, 24, 28, 3.5, 12],       // almacén
+      [0xff2a14, 10, 24, 46.5, 3.5, 12],     // planta
       [0xffa650, 42, 24, 37, 4.5, 20.95],    // farola de la calle
       [0xff7a2a, 8, 10, 33.5, 1.5, 28.5],    // barril en llamas
       [0x4a9cff, 0, 9, 23, 1.3, 20.5],       // caja misteriosa
@@ -155,9 +161,9 @@ export class Lighting {
     const high = !this.ctx.settings || this.ctx.settings.quality !== 'low';
     if (this.moon) {
       this.moon.castShadow = high;
-      this.moon.intensity = high ? 1.4 : 0.95;
+      this.moon.intensity = high ? 1.55 : 1.1;
     }
-    if (this.hemi) this.hemi.intensity = high ? 1.25 : 1.45;
+    if (this.hemi) this.hemi.intensity = high ? HEMI_HIGH : HEMI_LOW;
   }
 
   // Cambia el estado de la electricidad. live = animar el encendido
@@ -177,7 +183,21 @@ export class Lighting {
     return 1;
   }
 
+  // Centra la sombra de la luna en la cámara, ajustada a la rejilla de texeles para que no "tiemble"
+  _followShadow() {
+    const cam = this.ctx.camera;
+    if (!cam || !this.moon || !this.moonTarget) return;
+    const texel = (SHADOW_HALF * 2) / SHADOW_RES;
+    const x = Math.round(cam.position.x / texel) * texel;
+    const z = Math.round(cam.position.z / texel) * texel;
+    if (x === this.moonTarget.position.x && z === this.moonTarget.position.z) return;
+    this.moonTarget.position.set(x, 0, z);
+    this.moon.position.copy(this.moonTarget.position).addScaledVector(MOON_DIR, 90);
+    this.moonTarget.updateMatrixWorld();
+  }
+
   update(dt, t) {
+    this._followShadow();
     const P = this.powerLevel = this._computePower(t);
     const mats = this.world.mats;
     const flick = flickerNoise(t, 1.7);
@@ -205,7 +225,7 @@ export class Lighting {
     pts[L.ALMACEN].color.copy(C_SODIUM).lerp(C_COLD, P);
     pts[L.ALMACEN].intensity = THREE.MathUtils.lerp(30, 38, P);
     pts[L.PLANTA].color.copy(C_RED).lerp(C_COLD, P);
-    pts[L.PLANTA].intensity = THREE.MathUtils.lerp(9 + 12 * pulse, 40, P);
+    pts[L.PLANTA].intensity = THREE.MathUtils.lerp(22 + 14 * pulse, 40, P);
     pts[L.STREET].intensity = 52 * this.streetFlick * (0.95 + 0.05 * flick);
     pts[L.FIRE].intensity = 7 + 5 * flickerNoise(t * 2.2, 7.7);
     pts[L.FIRE].position.y = 1.5 + 0.1 * flickerNoise(t * 3, 1.1);

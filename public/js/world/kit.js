@@ -47,10 +47,10 @@ export function music(ctx, name) {
   if (!a || typeof a.music !== 'function') return;
   try { a.music(name); } catch (e) { /* ignorar */ }
 }
-export function announce(ctx, text) {
+export function announce(ctx, text, key) {
   const a = ctx && ctx.audio;
   if (!a || typeof a.announce !== 'function') return;
-  try { a.announce(text); } catch (e) { /* ignorar */ }
+  try { a.announce(text, key); } catch (e) { /* ignorar */ }
 }
 // Llamada defensiva a Effects
 export function fx(ctx, method, ...args) {
@@ -133,6 +133,37 @@ export const MAT_DEFS = {
   manhole:        { type: 'standard', map: 'manhole', transparent: true, alphaTest: 0.5, metalness: 0.4, roughness: 0.6, cast: false, polygonOffset: -2 },
   buildings:      { type: 'lambert', map: 'buildings', emissiveMap: 'buildings_emissive', emissive: 0xffffff, emissiveIntensity: 0.9, tile: 12, cast: false },
   trees:          { type: 'lambert', color: 0x1a1612, cast: false },
+  // Castillo victoriano
+  c_ashlar:       { type: 'lambert', map: 'ashlar', tile: 2 },
+  c_ashlar_dark:  { type: 'lambert', map: 'ashlar', tile: 2, color: 0x77726c },
+  c_damask:       { type: 'lambert', map: 'damask', tile: 1.5 },
+  c_damask_red:   { type: 'lambert', map: 'damask_red', tile: 1.5 },
+  c_panel:        { type: 'lambert', map: 'panel', tile: 1.2 },
+  c_parquet:      { type: 'lambert', map: 'parquet', tile: 2, cast: false },
+  c_marble:       { type: 'standard', map: 'marble', tile: 2, roughness: 0.35, cast: false },
+  c_flagstone:    { type: 'lambert', map: 'flagstone', tile: 2, cast: false },
+  c_gravel:       { type: 'lambert', map: 'gravel', tile: 3, cast: false },
+  c_grass:        { type: 'lambert', map: 'grass', tile: 4, color: 0x7f8a70, cast: false },
+  c_hedge:        { type: 'lambert', map: 'hedge', tile: 1 },
+  c_carpet:       { type: 'lambert', map: 'carpet', tile: 1, cast: false, polygonOffset: -1 },
+  c_labtile:      { type: 'lambert', map: 'labtile', tile: 1 },
+  c_coffered:     { type: 'lambert', map: 'coffered', tile: 2 },
+  c_plaster:      { type: 'lambert', map: 'plaster', tile: 2, color: 0xb8ae9c },
+  c_darkwood:     { type: 'standard', map: 'wood', tile: 1, color: 0x6a4a34, roughness: 0.7 },
+  c_brass:        { type: 'standard', color: 0xb08a3e, metalness: 0.85, roughness: 0.35 },
+  c_iron:         { type: 'standard', color: 0x1e1f22, metalness: 0.7, roughness: 0.5 },
+  c_velvet:       { type: 'lambert', color: 0x5a0d14 },
+  c_linen:        { type: 'lambert', color: 0xcfc6b2 },
+  c_leather:      { type: 'standard', color: 0x3a2014, roughness: 0.6 },
+  c_marble_w:     { type: 'standard', color: 0xd6d0c4, roughness: 0.3 },
+  c_roof:         { type: 'lambert', map: 'roof', tile: 3, color: 0x6a6f7a },
+  c_stained:      { type: 'basic', map: 'stained', transparent: true, cast: false },
+  c_screen:       { type: 'standard', color: 0x061208, emissive: 0x2aff6a, emissiveIntensity: 1.2, roughness: 0.3, cast: false },
+  c_liquid:       { type: 'standard', color: 0x0c3a22, emissive: 0x2aff8a, emissiveIntensity: 0.55, transparent: true, opacity: 0.45, depthWrite: false, roughness: 0.1, cast: false },
+  c_tubeglass:    { type: 'standard', color: 0x9ab8c8, transparent: true, opacity: 0.22, depthWrite: false, metalness: 0.2, roughness: 0.05, cast: false },
+  c_candle:       { type: 'standard', color: 0x3a2a18, emissive: 0xffc070, emissiveIntensity: 1.5, roughness: 0.4, cast: false },
+  c_lamp:         { type: 'standard', color: 0x2a2010, emissive: 0xffb050, emissiveIntensity: 1.6, roughness: 0.4, cast: false },
+  c_telepad:      { type: 'standard', color: 0x1a0e2a, emissive: 0x9a50ff, emissiveIntensity: 0.9, metalness: 0.5, roughness: 0.3, cast: false },
 };
 
 export class MaterialLib {
@@ -154,6 +185,7 @@ export class MaterialLib {
     if (d.emissiveIntensity != null) p.emissiveIntensity = d.emissiveIntensity;
     if (d.emissiveMap) p.emissiveMap = getTex(d.emissiveMap);
     if (d.transparent) p.transparent = true;
+    if (d.opacity != null) p.opacity = d.opacity;
     if (d.depthWrite === false) p.depthWrite = false;
     if (d.alphaTest) p.alphaTest = d.alphaTest;
     if (d.polygonOffset) { p.polygonOffset = true; p.polygonOffsetFactor = d.polygonOffset; p.polygonOffsetUnits = d.polygonOffset; }
@@ -292,11 +324,27 @@ export class StaticBatch {
   constructor(mats) {
     this.mats = mats;
     this.lists = new Map();
+    // chunkOf(x, y, z) → { key, ...datos } (opcional): trocea las mallas fusionadas por zonas del mapa para que la
+    // cámara pueda descartar las que no ve (y ocultar plantas enteras). Sin él, una malla por material.
+    this.chunkOf = null;
+    this.matOf = new Map();
+    this.chunkMeta = new Map();
   }
-  addGeometry(matKey, geo) {
+  // chunk: trozo ya decidido por quien añade (geometrías acumuladas); si no, por el centro de la geometría
+  addGeometry(matKey, geo, chunk = null) {
     if (!geo) return;
-    let l = this.lists.get(matKey);
-    if (!l) { l = []; this.lists.set(matKey, l); }
+    let key = matKey;
+    if (this.chunkOf) {
+      let ch = chunk;
+      if (!ch) {
+        geo.computeBoundingBox();
+        const c = geo.boundingBox.getCenter(new THREE.Vector3());
+        ch = this.chunkOf(c.x, c.y, c.z);
+      }
+      if (ch) { key = matKey + '#' + ch.key; if (!this.chunkMeta.has(key)) this.chunkMeta.set(key, ch); }
+    }
+    let l = this.lists.get(key);
+    if (!l) { l = []; this.lists.set(key, l); this.matOf.set(key, matKey); }
     l.push(geo);
   }
   add(matKey, src, matrix, color, uvTile) {
@@ -310,6 +358,7 @@ export class StaticBatch {
     const out = [];
     for (const [key, geos] of this.lists) {
       if (!geos.length) continue;
+      const matKey = this.matOf.get(key) || key;
       let merged;
       try { merged = geos.length === 1 ? geos[0] : mergeGeometries(geos, false); }
       catch (e) { merged = null; }
@@ -317,18 +366,21 @@ export class StaticBatch {
       for (const g of geos) if (g !== merged) g.dispose();
       merged.computeBoundingSphere();
       merged.computeBoundingBox();
-      const mesh = new THREE.Mesh(merged, this.mats.get(key));
+      const mesh = new THREE.Mesh(merged, this.mats.get(matKey));
       mesh.name = name + ':' + key;
       mesh.matrixAutoUpdate = false;
       mesh.updateMatrix();
+      if (this.chunkMeta.has(key)) mesh.userData.chunk = this.chunkMeta.get(key);
       if (shadows) {
-        mesh.castShadow = this.mats.castShadow(key);
+        mesh.castShadow = this.mats.castShadow(matKey);
         mesh.receiveShadow = true;
       }
       parent.add(mesh);
       out.push(mesh);
     }
     this.lists.clear();
+    this.matOf.clear();
+    this.chunkMeta.clear();
     return out;
   }
   // Construye un grupo independiente (para objetos dinámicos)

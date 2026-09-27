@@ -140,7 +140,7 @@ export class FallbackMenus {
     b.appendChild(button(tr('Ajustes'), () => this.showSettings(() => this.showMain(onJoin))));
     p.appendChild(b);
     p.appendChild(el('div', 'margin-top:16px;font-size:12px;color:#888;line-height:1.6;',
-      tr('WASD mover · Ratón mirar · Clic izq. disparar · Clic der. apuntar · Shift correr · C/Ctrl agacharse · Espacio saltar · ') +
+      tr('WASD mover · Ratón mirar · Clic izq. disparar · Clic der. apuntar · Shift correr · C/Ctrl agacharse (corriendo: deslizarse) · Espacio saltar · ') +
       tr('R recargar · F usar/comprar · V cuchillo · G granada · Q escudo · 1/2/3 o rueda cambiar de arma · Tab puntuaciones · T/Enter chat · Esc pausa')));
   }
 

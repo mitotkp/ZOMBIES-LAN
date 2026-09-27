@@ -108,14 +108,14 @@ Import map (en index.html):
 - **Armas de pared** (tiza en la pared): comprar el arma o su munición (mitad de precio; 4500 si está mejorada).
 - **Caja misteriosa** (950): gira 4.5 s y ofrece un arma aleatoria durante 12 s (solo para quien pagó). Tras ≥4 usos
   en un lugar puede salir el **osito** (18%): se devuelven los 950 y la caja se muda a otra ubicación.
-- **Perk-a-Colas** (requieren electricidad, máximo 4): Quick Revive, Juggernog, Speed Cola, Double Tap, Stamin-Up, Mule Kick.
+- **Perk-a-Colas** (requieren electricidad salvo Quick Revive, máximo 4): Quick Revive, Juggernog, Speed Cola, Double Tap, Stamin-Up, Mule Kick.
 - **Pack-a-Punch** (5000, requiere electricidad): mejora el arma que tienes en la mano (4.5 s), recógela en 15 s.
 - **Electricidad**: palanca en la Planta Eléctrica.
 - **Escudo antidisturbios**: reunir 3 piezas repartidas por el mapa (compartidas por el equipo), construirlo en la mesa
   de trabajo (mantener F 3 s). Cada jugador puede tomar uno. En las manos bloquea golpes frontales y permite golpear
   (empuja y daña); en la espalda bloquea golpes por detrás. Tiene 1500 de vida; al romperse se puede tomar otro en la mesa.
-- **Potenciadores** (3% por baja, máx. 4 por ronda): Max Ammo, Insta-Kill, Doble Puntos, Bomba Nuclear, Carpintero, Liquidación.
-- **Salud y curas** (añadido): la regeneración natural solo llega al 60 % (`PLAYER.regenCap`). Las **curas** (`MEDS`) se usan
+- **Potenciadores** (máx. 4 por ronda): Max Ammo, Insta-Kill, Doble Puntos, Bomba Nuclear, Carpintero, Liquidación. Salen en **ciclo** como en CoD (se baraja la lista y sale cada uno una vez antes de volver a barajar; la Liquidación solo tras moverse la caja). Caen al superar un umbral de puntos del equipo (2000, ×1,14 tras cada caída) o por azar (2 % por baja). Voces del locutor en `public/audio/announcer/` (`tools/gen-announcer.sh`).
+- **Salud y curas** (añadido): la regeneración natural solo llega al 50 % (`PLAYER.regenCap`) y la infección no baja la salud de ese 50 % (`INFECTION.floor`). Las **curas** (`MEDS`) se usan
   con H: venda (+35, 2 s), antídoto (cura la infección, +10, 1,5 s) y botiquín (salud completa y cura, 4 s). Se compran en
   armarios de primeros auxilios (`MED_CABINETS`) o las sueltan los zombis (`MED_DROPS`, se recogen pasando por encima).
 - **Infección** (añadido): cada golpe de zombi que conecta tiene un 25 % de infectar. Infectado: sin regeneración y se pierde

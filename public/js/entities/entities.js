@@ -9,7 +9,11 @@ import { ZA, ZF, PF } from '/shared/protocol.js';
 import { lineOfSight } from '/shared/collision.js';
 import { ZombieModel, getZombieAssets, zombieMaterials } from './zombieModel.js';
 import { PlayerModel, getPlayerAssets, playerMaterials } from './playerModel.js';
+import { DogModel, getDogAssets, dogMaterials } from './dogModel.js';
+import { BossFx } from './bossFx.js';
 
+const SHADOW_LOD_DIST = 16;   // m: más lejos, los zombis no proyectan sombra
+const ANIM_LOD_DIST = 22;     // m: más lejos, se animan a medio ritmo
 const MAX_CORPSES = 18;
 const EMPTY = new Map();
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -22,7 +26,7 @@ function sameId(a, b) {
   return a !== null && a !== undefined && b !== null && b !== undefined && String(a) === String(b);
 }
 
-function plain(v) { return { x: v.x, y: v.y, z: v.z }; }
+function plain(v) { return v ? { x: v.x, y: v.y, z: v.z } : null; }
 
 export class EntityManager {
   constructor(ctx) {
@@ -32,6 +36,7 @@ export class EntityManager {
     if (this.ctx.scene && typeof this.ctx.scene.add === 'function') this.ctx.scene.add(this.group);
     this.quality = this.ctx.settings && this.ctx.settings.quality === 'low' ? 'low' : 'high';
 
+    this.bossFx = new BossFx(this.group);   // murciélagos del Conde, descargas del Doctor
     this.zombies = new Map();     // id → registro de zombi vivo
     this.fading = new Map();      // id → registro desvaneciéndose (desapareció sin morir)
     this.corpses = [];            // registros muriendo / cadáveres
@@ -46,6 +51,7 @@ export class EntityManager {
     try {
       getZombieAssets(this.quality);
       getPlayerAssets(this.quality);
+      getDogAssets(this.quality);
       this._warmup();
     } catch (err) {
       console.warn('[EntityManager] No se pudieron precargar los modelos:', err);
@@ -59,6 +65,8 @@ export class EntityManager {
       ev.on('ev:fuse', (e) => this._onFuse(e));
       ev.on('ev:tank', (e) => this._onTank(e));
       ev.on('ev:boss', (e) => this._onTank(e));
+      ev.on('ev:dogSpawn', (e) => this._onDogSpawn(e));
+      ev.on('ev:dogRound', () => this._sound('dog_howl', null, 1));
       ev.on('ev:bossAbility', (e) => this._onBossAbility(e));
       ev.on('ev:fire', (e) => this._onRemoteFire(e));
       ev.on('ev:proj', (e) => this._onRemoteFire(e));
@@ -69,6 +77,7 @@ export class EntityManager {
   update(dt) {
     dt = Math.min(Math.max(+dt || 0, 0), 0.1);
     this.t += dt;
+    this.bossFx.update(dt);
     this.frame++;
     this.env.effects = this.ctx.effects || null;
     let sample = null;
@@ -86,6 +95,7 @@ export class EntityManager {
     this._updateZombies(dt, zs);
     this._updateCorpses(dt);
     this._updatePlayers(dt, ps);
+    this._updateBolts(dt);
   }
 
   // Posiciones RENDERIZADAS de los zombis vivos (las que se ven en pantalla), para disparar contra ellas
@@ -126,6 +136,7 @@ export class EntityManager {
   }
 
   reset() {
+    this.bossFx.clear();
     for (const rec of this.zombies.values()) rec.model.dispose();
     for (const rec of this.fading.values()) rec.model.dispose();
     for (const rec of this.corpses) rec.model.dispose();
@@ -153,7 +164,7 @@ export class EntityManager {
     const seed = (Math.imul(Number(id) || 1, 2654435761) ^ 0x5bd1e995) >>> 0;
     const type = ZOMBIE_TYPE_BY_CODE[s.type | 0] || 'normal';
     const scale = (ZOMBIE_TYPES[type] && ZOMBIE_TYPES[type].scale) || 1;
-    const model = new ZombieModel({ quality: this.quality, seed, type });
+    const model = type === 'dog' ? new DogModel({ quality: this.quality, seed }) : new ZombieModel({ quality: this.quality, seed, type });
     model.group.position.set(s.x, s.yOff || 0, s.z);
     model.group.rotation.y = s.rot || 0;
     this.group.add(model.group);
@@ -168,6 +179,7 @@ export class EntityManager {
   }
 
   _updateZombies(dt, zs) {
+    this.frameNo = (this.frameNo || 0) + 1;
     const cam = this.ctx.camera;
     const camPos = cam ? cam.position : null;
     const fx = this.ctx.effects;
@@ -201,7 +213,14 @@ export class EntityManager {
       g.position.x = s.x;
       g.position.z = s.z;
       g.rotation.y = rec.rot;
-      model.update(dt, { anim: s.anim, flags: s.flags, speed: rec.speed, yOff: rec.yOff });
+      // LOD: lejos, sin sombra y animación a medio ritmo (se acumula el tiempo para no ralentizarla)
+      const dist = camPos ? Math.hypot(s.x - camPos.x, s.z - camPos.z) : 0;
+      if (typeof model.setShadowLOD === 'function') model.setShadowLOD(dist < SHADOW_LOD_DIST);
+      rec.animAcc = (rec.animAcc || 0) + dt;
+      if (dist < ANIM_LOD_DIST || (this.frameNo + Number(id)) % 2 === 0) {
+        model.update(rec.animAcc, { anim: s.anim, flags: s.flags, speed: rec.speed, yOff: rec.yOff });
+        rec.animAcc = 0;
+      }
       rec.crawler = !!model.crawler || !!(s.flags & ZF.CRAWLER) || s.anim === ZA.CRAWL;
       if (model.becameCrawler) { model.becameCrawler = false; this._crawlerFx(rec); }
       if ((s.flags & ZF.BURNING) && fx && typeof fx.fire === 'function' && this.t >= rec.burnAt) {
@@ -264,6 +283,10 @@ export class EntityManager {
         S.groan = this.t;
         rec.model.groan();
         rec.model.getHeadWorld(_v);
+        if (rec.type === 'dog') {
+          try { audio.play('dog_growl', { pos: plain(_v), volume: rnd(0.6, 0.95), rate: rnd(0.85, 1.15) }); } catch { /* sin sonido */ }
+          return;
+        }
         try {
           const tank = rec.type === 'tank', runner = rec.type === 'runner';
           audio.play('zombie_groan', { pos: plain(_v), volume: tank ? 1 : rnd(0.55, 0.9), rate: tank ? rnd(0.5, 0.6) : runner ? rnd(1.3, 1.5) : fast ? rnd(1.08, 1.3) : rnd(0.8, 1.02) });
@@ -292,6 +315,47 @@ export class EntityManager {
   }
 
   // Tanque: rugido al aparecer (se oye en todo el mapa)
+  // Perro infernal: cae un rayo donde aparece
+  _onDogSpawn(e) {
+    const x = +e.x || 0, z = +e.z || 0;
+    const fx = this.ctx.effects;
+    try { if (fx) { fx.flash(new THREE.Vector3(x, 0.4, z), 0x9fc4ff, 2.6); fx.dust(new THREE.Vector3(x, 0.05, z), new THREE.Vector3(0, 1, 0)); } } catch { /* nada */ }
+    this._bolt(x, z);
+    this._sound('thunder', { x, y: 2, z }, 1);
+  }
+
+  _bolt(x, z) {
+    const pts = [];
+    let px = x, pz = z;
+    for (let y = 9; y >= 0; y -= 0.6) {
+      pts.push(new THREE.Vector3(px, y, pz));
+      px = x + (Math.random() - 0.5) * 0.7 * (y / 9);
+      pz = z + (Math.random() - 0.5) * 0.7 * (y / 9);
+    }
+    pts.push(new THREE.Vector3(x, 0, z));
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = new THREE.LineBasicMaterial({ color: 0xdfe8ff, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const line = new THREE.Line(geo, mat);
+    this.group.add(line);
+    this.bolts = this.bolts || [];
+    this.bolts.push({ line, t: 0 });
+  }
+
+  _updateBolts(dt) {
+    if (!this.bolts || !this.bolts.length) return;
+    for (let i = this.bolts.length - 1; i >= 0; i--) {
+      const b = this.bolts[i];
+      b.t += dt;
+      b.line.material.opacity = b.t < 0.08 || (b.t > 0.14 && b.t < 0.2) ? 1 : Math.max(0, 0.6 - b.t * 2);
+      if (b.t > 0.35) {
+        this.group.remove(b.line);
+        b.line.geometry.dispose();
+        b.line.material.dispose();
+        this.bolts.splice(i, 1);
+      }
+    }
+  }
+
   _onTank() {
     try { this.ctx.audio.play('zombie_groan', { volume: 1, rate: 0.42 }); } catch { /* sin sonido */ }
     setTimeout(() => { try { this.ctx.audio.play('zombie_attack', { volume: 1, rate: 0.5 }); } catch { /* nada */ } }, 450);
@@ -333,6 +397,41 @@ export class EntityManager {
         call((f) => f.flash(V(e.x, 2.2, e.z), 0xb050ff, 2.5));
         for (const s of (Array.isArray(e.spots) ? e.spots : [])) call((f) => f.flash(V(s[0], 0.4, s[1]), 0xb050ff, 1.6));
         break;
+      case 'batsOut':
+      case 'batsIn': {
+        const y = +e.y || 0;
+        this.bossFx.bats(+e.x || 0, y, +e.z || 0, e.a === 'batsOut');
+        play('box_whoosh', { pos: { x: pos.x, y: y + 1.5, z: pos.z }, volume: 0.8, rate: e.a === 'batsOut' ? 1.5 : 1.2 });
+        if (e.a === 'batsIn') play('zombie_attack', { pos: { x: pos.x, y: y + 1.5, z: pos.z }, volume: 0.9, rate: 0.75 });
+        break;
+      }
+      case 'zapStart':
+        play('power_on', { pos: { x: pos.x, y: (+e.y || 0) + 1.5, z: pos.z }, volume: 0.5, rate: 1.6 });
+        break;
+      case 'zap': {
+        const y = (+e.y || 0);
+        let from = null;
+        try { if (rec && rec.model && rec.model.armR) from = rec.model.armR.hand.getWorldPosition(new THREE.Vector3()); } catch { from = null; }
+        if (!from) from = V(e.x, y + 1.5, e.z);
+        const to = (e.pid != null && this._actorPos(e.pid, new THREE.Vector3())) || V(e.tx, +e.ty || y + 1.2, e.tz);
+        if (!e.hit) { to.x += (Math.random() - 0.5) * 1.5; to.z += (Math.random() - 0.5) * 1.5; }
+        this.bossFx.beam(from.x, from.y, from.z, to.x, to.y, to.z);
+        play('explosion', { pos: { x: to.x, y: to.y, z: to.z }, volume: 0.35, rate: 2.2 });
+        call((f) => f.flash(to, 0x9ad8ff, 1.4));
+        if (e.hit && sameId(e.pid, this.ctx.selfId)) {
+          const pl = this.ctx.player;
+          if (pl && typeof pl.shake === 'function') pl.shake(0.35, 0.3);
+        }
+        break;
+      }
+      case 'blink': {
+        const y = (+e.y || 0);
+        const f0 = Array.isArray(e.from) ? e.from : null;
+        if (f0) call((f) => f.flash(V(f0[0], y + 1.2, f0[1]), 0x9a60ff, 2.4));
+        call((f) => f.flash(V(e.x, y + 1.2, e.z), 0x9a60ff, 2.4));
+        play('powerup_grab', { pos: { x: pos.x, y: y + 1.5, z: pos.z }, volume: 0.7, rate: 0.7 });
+        break;
+      }
       case 'cloak':
       case 'uncloak':
         play('box_whoosh', { pos, volume: 0.6, rate: e.a === 'cloak' ? 1.3 : 0.9 });
@@ -446,7 +545,7 @@ export class EntityManager {
     m.getNeckWorld(_v);
     if (S.die.length < 3) {
       S.die.push(now);
-      this._sound('zombie_die', _v, fxName === 'nuke' ? 0.5 : 0.85);
+      this._sound(rec.type === 'dog' ? 'dog_yelp' : 'zombie_die', _v, fxName === 'nuke' ? 0.5 : 0.85);
     }
     if (fxName === 'head' && !sameId(e.pid, this.ctx.selfId)) this._sound('headshot', _v, 0.55);
   }
@@ -479,7 +578,7 @@ export class EntityManager {
     if (!rec) return;
     try { rec.model.onAttack(); } catch { /* nada */ }
     rec.model.getHeadWorld(_v);
-    this._sound('zombie_attack', _v, 0.9);
+    this._sound(rec.type === 'dog' ? 'dog_bark' : 'zombie_attack', _v, 0.9);
   }
 
   _onRemoteFire(e) {
@@ -544,9 +643,9 @@ export class EntityManager {
     geo.setAttribute('normal', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1, 0, 0, 1], 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 0, 1], 2));
     geo.setAttribute('color', new THREE.Float32BufferAttribute([1, 1, 1, 1, 1, 1, 1, 1, 1], 3));
-    let zm = null, pm = null;
+    let zm = null, pm = null, dm = null;
     try {
-      const mats = [...zombieMaterials(this.quality), ...playerMaterials(this.quality)];
+      const mats = [...zombieMaterials(this.quality), ...playerMaterials(this.quality), ...dogMaterials(this.quality)];
       for (const m of mats) {
         if (!m) continue;
         tmp.add(m.isPointsMaterial ? new THREE.Points(geo, m) : new THREE.Mesh(geo, m));
@@ -555,6 +654,8 @@ export class EntityManager {
       tmp.add(zm.group);
       pm = new PlayerModel({ quality: this.quality, color: '#ffffff', name: '' });
       tmp.add(pm.group);
+      dm = new DogModel({ quality: this.quality, seed: 7 });
+      tmp.add(dm.group);
       r.compile(tmp, cam, scene);
       const fxg = this.ctx.effects && this.ctx.effects.group;
       if (fxg && fxg.isObject3D) r.compile(fxg, cam, scene);
@@ -563,6 +664,7 @@ export class EntityManager {
     } finally {
       if (zm) zm.dispose();
       if (pm) pm.dispose();
+      if (dm) dm.dispose();
       tmp.clear();
       geo.dispose();
     }

@@ -3,8 +3,9 @@
 import * as THREE from 'three';
 import {
   PERK_MACHINES, PAP_MACHINE, POWER_SWITCH, WORKBENCH, SHIELD_PARTS, INTERACTABLE_BY_ID, DIRS,
+  MAP,
 } from '/shared/map.js';
-import { PERKS } from '/shared/perks.js';
+import { PERKS, perkNeedsPower } from '/shared/perks.js';
 import { PAP } from '/shared/constants.js';
 import { StaticBatch, yawForFace, uvRectPlane, makeGlow, sfx, music, fx, easeInOut, flickerNoise, TAU } from './kit.js';
 import { perkTexture, papLogoTexture } from './textures.js';
@@ -42,7 +43,8 @@ export class PerkMachines {
     const cx = m.x + 0.5, cz = m.z + 0.5, yaw = yawForFace(m.face);
     const dark = col.clone().multiplyScalar(0.45).getHex();
     // Cuerpo estático (fusionado)
-    const P = B.at(cx, 0, cz, yaw);
+    const base = MAP.baseY(m.lv || 0);
+    const P = B.at(cx, base, cz, yaw);
     P.box('metal', 0.9, 0.12, 0.82, 0, 0.06, 0, { color: 0x1a1a1a });
     P.box('plastic', 0.86, 1.9, 0.78, 0, 1.07, 0.02, { color: col.getHex() });
     P.box('plastic', 0.9, 0.1, 0.82, 0, 2.05, 0.02, { color: dark });
@@ -60,7 +62,7 @@ export class PerkMachines {
     const tex = perkTexture(m.perk);
     const mat = this.world.mats.track(panelMaterial(tex, 0.05));
     const group = new THREE.Group();
-    group.position.set(cx, 0, cz);
+    group.position.set(cx, base, cz);
     group.rotation.y = yaw;
     const front = new THREE.Mesh(uvRectPlane(0.74, 1.45, 0, 0, 1, 0.75), mat);
     front.position.set(0, 1.18, -0.397);
@@ -90,8 +92,9 @@ export class PerkMachines {
   }
 
   update(dt, t) {
-    const P = this.world.lighting ? this.world.lighting.powerLevel : 0;
+    const Pw = this.world.lighting ? this.world.lighting.powerLevel : 0;
     for (const it of this.list) {
+      const P = perkNeedsPower(it.m.perk) ? Pw : 1;
       if (it.jingle > 0) it.jingle -= dt;
       const flick = 0.85 + 0.15 * flickerNoise(t * 1.3, it.seed);
       const boost = it.jingle > 0 ? 0.5 * Math.abs(Math.sin(it.jingle * 9)) : 0;
@@ -111,7 +114,8 @@ export class PackAPunch {
     const r = rectCenter(PAP_MACHINE);
     this.cx = r.cx; this.cz = r.cz;
     const yaw = this.yaw = yawForFace(PAP_MACHINE.face);
-    const P = B.at(r.cx, 0, r.cz, yaw);
+    const base = this.base = MAP.baseY(PAP_MACHINE.lv || 0);
+    const P = B.at(r.cx, base, r.cz, yaw);
     const W = 1.85;
     // base y cuerpo
     P.box('metal', W, 0.14, 0.95, 0, 0.07, 0, { color: 0x121216 });
@@ -137,7 +141,7 @@ export class PackAPunch {
 
     // Logo y paneles brillantes (dinámicos)
     const group = this.group = new THREE.Group();
-    group.position.set(r.cx, 0, r.cz);
+    group.position.set(r.cx, this.base, r.cz);
     group.rotation.y = yaw;
     this.logoMat = world.mats.track(panelMaterial(papLogoTexture(), 0.1));
     const logo = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.44), this.logoMat);
@@ -200,14 +204,14 @@ export class PackAPunch {
       this._setWeapon(e.weapon, false);
       this.insertT = 0;
       this.ejectT = -1;
-      sfx(this.ctx, 'pap_work', this.cx, 1.2, this.cz);
+      sfx(this.ctx, 'pap_work', this.cx, this.base + 1.2, this.cz);
       if (this.world._isSelf(e.pid)) music(this.ctx, 'pap');
     } else if (name === 'papReady') {
       this._setWeapon(e.weapon, true);
       this.ejectT = 0;
       this.insertT = -1;
-      sfx(this.ctx, 'pap_ready', this.cx, 1.2, this.cz);
-      _v.set(this.cx, 1.3, this.cz);
+      sfx(this.ctx, 'pap_ready', this.cx, this.base + 1.2, this.cz);
+      _v.set(this.cx, this.base + 1.3, this.cz);
       fx(this.ctx, 'flash', _v.clone(), 0xc070ff, 2.2);
     }
   }
@@ -256,7 +260,8 @@ export class PowerSwitch {
     const it = INTERACTABLE_BY_ID.power;
     const yaw = yawForFace(OPP[POWER_SWITCH.wall]);
     this.x = it.wx; this.z = it.wz;
-    const P = B.at(it.wx, 0, it.wz, yaw);
+    const base = this.base = MAP.baseY(POWER_SWITCH.lv || 0);
+    const P = B.at(it.wx, base, it.wz, yaw);
     P.box('metal', 0.7, 1.0, 0.28, 0, 1.45, -0.14, { color: 0x4a5448 });
     P.box('metal', 0.74, 0.06, 0.32, 0, 1.97, -0.16, { color: 0x3a4238 });
     P.box('zoc_hazard', 0.6, 0.12, 0.01, 0, 1.08, -0.285, {});
@@ -271,7 +276,7 @@ export class PowerSwitch {
     Q.cyl('plastic', 0.045, 0.045, 0.16, 0, 0.46, 0, { seg: 10, color: 0xa01010 });
     this.lever = lb.toGroup({ shadows: true });
     const pivot = this.pivot = new THREE.Group();
-    pivot.position.set(it.wx, 0, it.wz);
+    pivot.position.set(it.wx, base, it.wz);
     pivot.rotation.y = yaw;
     this.lever.position.set(0, 1.4, -0.38);
     pivot.add(this.lever);
@@ -299,7 +304,7 @@ export class PowerSwitch {
     if (name !== 'power') return;
     this.on = true;
     this.anim = 0;
-    sfx(this.ctx, 'power_on', this.x, 1.5, this.z);
+    sfx(this.ctx, 'power_on', this.x, this.base + 1.5, this.z);
   }
 
   update(dt) {
@@ -309,7 +314,7 @@ export class PowerSwitch {
       this._setAngle(easeInOut(k));
       if (k >= 1) {
         this.anim = -1;
-        _v.set(this.x, 1.8, this.z);
+        _v.set(this.x, this.base + 1.8, this.z);
         fx(this.ctx, 'spark', _v.clone(), new THREE.Vector3(-DIRS[POWER_SWITCH.wall].dx, 0, -DIRS[POWER_SWITCH.wall].dz));
       }
     }
@@ -351,7 +356,8 @@ export class Workbench {
     const r = rectCenter(WORKBENCH);
     this.cx = r.cx; this.cz = r.cz;
     const yaw = yawForFace(WORKBENCH.face);
-    const P = B.at(r.cx, 0, r.cz, yaw);
+    const base = this.base = MAP.baseY(WORKBENCH.lv || 0);
+    const P = B.at(r.cx, base, r.cz, yaw);
     P.box('wood', 1.95, 0.08, 0.9, 0, 0.96, 0, { color: 0x7a5a3a });
     for (const [x, z] of [[-0.9, -0.38], [0.9, -0.38], [-0.9, 0.38], [0.9, 0.38]]) P.box('metal', 0.07, 0.92, 0.07, x, 0.46, z, { color: 0x3a3a3a });
     P.box('wood', 1.85, 0.04, 0.8, 0, 0.3, 0, { color: 0x6a4a2a });
@@ -360,7 +366,7 @@ export class Workbench {
     P.cyl('metal', 0.03, 0.03, 0.2, 0.7, 1.15, 0.25, { rz: Math.PI / 2, seg: 6, color: 0x6a6a6a });
 
     const group = this.group = new THREE.Group();
-    group.position.set(r.cx, 0, r.cz);
+    group.position.set(r.cx, this.base, r.cz);
     group.rotation.y = yaw;
     world.root.add(group);
     // piezas sobre la mesa (se muestran al recogerlas)
@@ -388,7 +394,7 @@ export class Workbench {
     // piezas en el suelo del mapa
     this.ground = SHIELD_PARTS.map((p) => {
       const g = partModel(world, p.id);
-      g.position.set(p.x + 0.5, 0.02, p.z + 0.5);
+      g.position.set(p.x + 0.5, MAP.baseY(p.lv || 0) + 0.02, p.z + 0.5);
       g.rotation.y = p.id * 1.7;
       const glow = makeGlow(0x9ad8ff, 1.1, 0.35);
       glow.position.set(0, 0.45, 0);
@@ -420,12 +426,12 @@ export class Workbench {
     if (name === 'part') {
       const gp = this.ground[e.id];
       if (gp) {
-        sfx(this.ctx, 'part_pickup', gp.p.x + 0.5, 0.5, gp.p.z + 0.5);
+        sfx(this.ctx, 'part_pickup', gp.p.x + 0.5, MAP.baseY(gp.p.lv || 0) + 0.5, gp.p.z + 0.5);
         gp.g.visible = false;
       }
     } else if (name === 'built') {
-      sfx(this.ctx, 'build', this.cx, 1.1, this.cz);
-      _v.set(this.cx, 1.3, this.cz);
+      sfx(this.ctx, 'build', this.cx, this.base + 1.1, this.cz);
+      _v.set(this.cx, this.base + 1.3, this.cz);
       fx(this.ctx, 'flash', _v.clone(), 0x9ad8ff, 1.8);
       this.flashT = 1;
     }
@@ -441,8 +447,8 @@ export class Workbench {
       this.buildSfx -= dt;
       if (this.buildSfx <= 0) {
         this.buildSfx = 0.45;
-        sfx(this.ctx, 'build', this.cx, 1.1, this.cz, { volume: 0.6 });
-        _v.set(this.cx + (Math.random() - 0.5) * 0.8, 1.05, this.cz + (Math.random() - 0.5) * 0.4);
+        sfx(this.ctx, 'build', this.cx, this.base + 1.1, this.cz, { volume: 0.6 });
+        _v.set(this.cx + (Math.random() - 0.5) * 0.8, this.base + 1.05, this.cz + (Math.random() - 0.5) * 0.4);
         fx(this.ctx, 'spark', _v.clone(), new THREE.Vector3(0, 1, 0));
       }
     }

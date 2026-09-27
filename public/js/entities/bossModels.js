@@ -1869,11 +1869,406 @@ export function decorateCommon(M, K) {
 }
 
 // ============================================================================================
+// El Conde (vampiro): frac negro con chaleco rojo y pechera blanca, capa larga forrada de rojo con cuello alto,
+// piel pálida, pelo engominado con pico, orejas puntiagudas, colmillos y garras. Se deshace en murciélagos (ZF.MIST).
+// El vampiro menor (vampling) usa la misma anatomía sin capa, más gris y harapiento.
+// ============================================================================================
+const VAMP_SKIN = C(0.86, 0.84, 0.9);
+const VAMP_COAT = C(0.05, 0.045, 0.06);
+const vampF = torsoFn({ y0: -0.1, h: 0.8, seed: 81,
+  w: [[0, 0.155], [0.45, 0.15], [0.78, 0.205], [0.92, 0.2], [1, 0.09]],
+  d: [[0, 0.105], [0.5, 0.1], [0.8, 0.125], [1, 0.08]] });
+
+function vampGeos(minor) {
+  return cached('vamp:' + (minor ? 1 : 0), () => {
+    const skinCol = minor ? C(0.7, 0.72, 0.74) : VAMP_SKIN;
+    const skinP = (x, y, z, c) => { c.copy(skinCol).multiplyScalar(0.88 + 0.18 * fbm(x * 30, y * 30 + z * 20, 83, 2)); };
+    const coatP = (x, y, z, c) => { c.copy(VAMP_COAT).multiplyScalar(0.8 + 0.5 * fbm(x * 12, y * 12 + z * 5, 7, 3)); };
+    const redP = (x, y, z, c) => { c.setRGB(0.42, 0.03, 0.05).multiplyScalar(0.75 + 0.4 * fbm(x * 14, y * 14, 5, 2)); };
+    // torso: frac abierto por delante, chaleco rojo y pechera blanca
+    const body = surface((u, v, o) => vampF(u, v, o), 32, 16, (x, y, z, c, u, v) => {
+      const f = Math.abs(u - 0.5);
+      if (f < 0.045 && v > 0.42) c.setRGB(0.9, 0.88, 0.84);
+      else if (f < 0.1 && v > 0.12) { if (minor) c.setRGB(0.55, 0.52, 0.48).multiplyScalar(0.6 + 0.5 * fbm(x * 20, y * 20, 3, 2)); else redP(x, y, z, c); }
+      else coatP(x, y, z, c);
+      if (minor && fbm(x * 9, y * 9 + z * 4, 17, 2) > 0.66) c.setRGB(0.32, 0.03, 0.03);   // sangre seca
+    });
+    const parts = [];
+    // pañuelo al cuello
+    const crav = sphere(1, 12, 8);
+    crav.scale(0.05, 0.05, 0.018);
+    crav.translate(0, 0.6, -0.118);
+    parts.push(colored(crav, minor ? C(0.5, 0.48, 0.44) : C(0.9, 0.88, 0.84)));   // chorrera
+    if (!minor) { const gem = sphere(0.014, 8, 6); gem.translate(0, 0.625, -0.13); parts.push(colored(gem, C(0.7, 0.02, 0.05))); }
+    // botones dorados del chaleco
+    for (let i = 0; i < 4; i++) { const b = sphere(0.009, 6, 5); b.translate(0.035, 0.25 + i * 0.07, -0.118); parts.push(colored(b, C(0.8, 0.6, 0.2))); }
+    const bodyExtra = mergeGeos(parts);
+    // faldones del frac por detrás
+    const tail = stripGeo(minor ? 0.35 : 0.55, 0.11, 0.07, 3, coatP, 0.02);
+    // capa (fuera negra, dentro roja) y cuello alto
+    const capeF = (inner) => (u, v, o) => {
+      const th = lerp(-1.95, 1.95, u);
+      const t = v;
+      let rr = lerp(0.23, 0.52, Math.pow(t, 1.15)) + 0.028 * Math.sin(th * 8 + t * 2) * t - (inner ? 0.012 : 0);
+      let y = 0.62 - t * 1.36;
+      if (t > 0.9) y += 0.05 * Math.abs(Math.sin(th * 4)) * (t - 0.9) / 0.1;
+      o.set(Math.sin(th) * rr, y, Math.cos(th) * rr * 0.85 + 0.035);
+    };
+    const cape = surface(capeF(false), 36, 14, coatP);
+    const capeIn = surface(capeF(true), 36, 14, redP);
+    const collarF = (inner) => (u, v, o) => {
+      const th = lerp(-2.25, 2.25, u);
+      const rr = lerp(0.16, 0.26, v) - (inner ? 0.01 : 0);
+      o.set(Math.sin(th) * rr, 0.6 + v * 0.3 + 0.04 * Math.abs(Math.sin(th * 2)) * v, Math.cos(th) * rr * 0.9 + 0.02);
+    };
+    const collar = mergeGeos([surface(collarF(false), 24, 5, coatP), surface(collarF(true), 24, 5, redP)]);
+    // cabeza: rostro afilado y pálido, colmillos
+    const hd = monsterHead({ w: 0.09, h: 0.118, d: 0.104, brow: 0.07, sockets: minor ? 0.18 : 0.12, socketW: 0.2, cheeks: 0.12, seed: minor ? 87 : 81,
+      teeth: 8, fang: 1, jawDrop: 0.058, neckR: 0.042, teethCol: C(0.95, 0.93, 0.86), paint: skinP });
+    // pelo engominado hacia atrás con pico en la frente
+    // casquete: la línea del pelo baja de la frente (0.28) a la nuca (0.19), con pico en el centro de la frente
+    const hair = new THREE.SphereGeometry(1, 26, 12, 0, TAU, 0, PI * 0.5);
+    deform(hair, (v) => {
+      let base = lerp(0.285, 0.19, (v.z + 1) / 2);
+      if (v.z < -0.5) base -= 0.03 * Math.max(0, 1 - Math.abs(v.x) / 0.22) * (1 - v.y);
+      v.set(v.x * 0.1, v.y * 0.1 + base, v.z * 0.112 + 0.006);
+    });
+    paintGeo(hair, (x, y, z, c) => {
+      if (minor) c.setRGB(0.18, 0.17, 0.16).multiplyScalar(0.7 + 0.6 * fbm(x * 60, z * 60, 3, 2));
+      else c.setRGB(0.02, 0.02, 0.025).lerp(C(0.25, 0.25, 0.28), 0.35 * Math.pow(Math.max(0, Math.sin(x * 400)), 8));
+    });
+    const ears = [];
+    for (const sx of [-1, 1]) ears.push(spike(sx * 0.088, 0.21, 0.01, sx * 1, 0.7, 0.35, 0.055, 0.013, skinCol));
+    const head = mergeGeos([hd.head, hair, ...ears]);
+    // brazos: mangas del frac, puño de camisa blanco y garras
+    const upper = armGeo(0.28, 0.058, 0.054, { bulge: 0.05, skin: VAMP_COAT, paint: coatP, radial: 14 });
+    const sleeve = limbGeo(0.19, 0.055, 0.05, 10, 2, minor ? 0.03 : 0, 5);
+    paintGeo(sleeve, coatP);
+    const cuff = limbGeo(0.035, 0.046, 0.046, 10, 1);
+    cuff.translate(0, -0.18, 0);
+    colored(cuff, minor ? C(0.5, 0.48, 0.44) : C(0.9, 0.88, 0.84));
+    const hand = handGeo({ palmW: 0.048, palmL: 0.078, fingerR: 0.0058, fingerL: 0.092, claw: 0.035, curl: 0.35, skin: skinCol, nail: C(0.08, 0.02, 0.04), seed: 29 });
+    hand.translate(0, -0.24, 0);
+    return { body, bodyExtra, tail, cape, capeIn, collar, head, jaw: hd.jaw, upper, fore: mergeGeos([sleeve, cuff, hand]) };
+  });
+}
+
+function buildVampire(M, K, minor = false) {
+  const G = vampGeos(minor);
+  const q = M.A.quality;
+  const mats = cached('vampMats:' + q, () => ({
+    skin: makeMat(q, { vertexColors: true, roughness: 0.45 }),
+    cloth: makeMat(q, { map: grimeTexture(), vertexColors: true, roughness: 0.8, side: THREE.DoubleSide }),
+    trousers: makeMat(q, { color: 0x0c0b10, roughness: 0.8 }),
+    shoes: makeMat(q, { color: 0x050505, roughness: 0.25, metalness: 0.2 }),
+  }));
+  K.hideBase({ head: true, torso: true, arms: true });
+  if (minor) M.group.scale.set(0.95, 0.97, 0.95); else M.group.scale.set(1.2, 1.28, 1.2);
+  K.mesh(G.body, mats.cloth, M.spine, true);
+  K.mesh(G.bodyExtra, mats.skin, M.spine);
+  K.mesh(G.head, mats.skin, M.neck, true);
+  K.mesh(G.jaw, mats.skin, K.jaw(), true);
+  for (const m of M.hips.children) if (m.isMesh && !m.userData.typePart) m.material = mats.trousers;
+  for (const l of [M.legL, M.legR]) { l.tm.material = mats.trousers; l.sm.material = mats.trousers; l.ft.material = mats.shoes; }
+  for (const arm of [M.armL, M.armR]) {
+    K.mesh(G.upper, mats.cloth, arm.sh, true);
+    K.mesh(G.fore, mats.cloth, arm.el, true);
+  }
+  const tails = [-1, 1].map((sx) => {
+    const t = K.mesh(G.tail, mats.cloth, M.hips);
+    t.position.set(sx * 0.065, 0.06, 0.115);
+    t.rotation.set(0.12, sx * 0.25, 0);
+    return t;
+  });
+  let cape = null, capeIn = null;
+  if (!minor) {
+    cape = K.mesh(G.cape, mats.cloth, M.spine, true);
+    capeIn = K.mesh(G.capeIn, mats.cloth, M.spine);
+    K.mesh(G.collar, mats.cloth, M.spine, true);
+  }
+  M.eyes.material = K.T.eyesRed;
+  if (!minor) M._aura(0xff2030, 1.6, 0.18);
+  const AI = atkInfo(minor ? 'vampling' : 'vampire');
+  const roar = minor ? null : makeRoar(M, K, 'scream', [10, 18], 1.2);
+  let flare = 0, mist = false;
+  return {
+    ...AI, stagger: minor ? 1 : 0.7, ownAttack: true,
+    onAbility(a) { if (a === 'batsIn') flare = 1; },
+    pose(tp, anim) {
+      const t = M.time;
+      const I = K.P;
+      tp[I.LEAN] = minor ? 0.25 : 0.04;
+      tp[I.NOD] = minor ? -0.05 : 0.08;
+      tp[I.JAW] = minor ? 0.35 + 0.25 * Math.max(0, Math.sin(t * 2.3)) : 0.05;
+      if (anim !== ZA.ATTACK && anim !== ZA.STUN && anim !== ZA.CLIMB) {
+        if (minor) {
+          // se abalanza encorvado con las garras por delante
+          tp[I.LRAISE] = 1.2; tp[I.RRAISE] = 1.1; tp[I.LELB] = 0.5; tp[I.RELB] = 0.6; tp[I.LSPLAY] = tp[I.RSPLAY] = 0.25;
+        } else {
+          // el Conde: erguido, una mano sujeta la capa sobre el pecho y la otra se abre como una garra
+          tp[I.LRAISE] = 0.55; tp[I.LELB] = 1.9; tp[I.LSPLAY] = -0.45; tp[I.LTWIST] = 0.4;
+          tp[I.RRAISE] = 0.4 + 0.08 * Math.sin(t * 1.1); tp[I.RELB] = 0.55; tp[I.RSPLAY] = 0.3;
+          if (roar) roar.apply(tp);
+        }
+      }
+      if (anim === ZA.ATTACK) {
+        // atrapa con las dos garras y muerde al cuello
+        const P = atkPhases(M.animT % AI.attackPeriod, AI.hitTime);
+        setK(tp, I.LRAISE, 1.9, 1.3, P); setK(tp, I.RRAISE, 1.9, 1.3, P);
+        setK(tp, I.LSPLAY, 0.9, 0.05, P); setK(tp, I.RSPLAY, 0.9, 0.05, P);
+        setK(tp, I.LELB, 0.4, 1.1, P); setK(tp, I.RELB, 0.4, 1.1, P);
+        setK(tp, I.LEAN, -0.15, 0.55, P); setK(tp, I.NOD, -0.4, 0.45, P);
+        tp[I.JAW] = 1.3 * (P.wind * (1 - P.rec));
+      }
+    },
+    update(dt, flags) {
+      if (roar) roar.update(dt, M.anim);
+      const m = !!(flags & ZF.MIST);
+      if (m !== mist) { mist = m; M.group.visible = !m; }
+      flare = Math.max(0, flare - dt * 1.5);
+      if (M.auraSprite) M.auraSprite.material.opacity = 0.18 + 0.6 * flare;
+      const t = M.time;
+      const sp = Math.min(1, (M.speed || 0) / 3);
+      if (cape) {
+        cape.rotation.x = capeIn.rotation.x = 0.06 + 0.22 * sp + 0.03 * Math.sin(t * 1.7);
+        cape.rotation.z = capeIn.rotation.z = 0.03 * Math.sin(t * 1.2);
+      }
+      for (const [i, tl] of tails.entries()) tl.rotation.x = 0.12 + 0.3 * sp + 0.05 * Math.sin(t * 5 + i * 2) * sp;
+    },
+  };
+}
+
+// ============================================================================================
+// El Doctor Vorkhaus: bata de laboratorio abierta y manchada, chaleco, gafas de soldador en la frente, pelo blanco
+// alborotado, mochila de bobinas de Tesla y un guantelete eléctrico en el brazo derecho con el que lanza descargas.
+// ============================================================================================
+const SCI_SKIN = C(0.84, 0.74, 0.66);
+const sciF = torsoFn({ y0: -0.1, h: 0.8, seed: 93, hump: 0.06, humpAt: 0.8,
+  w: [[0, 0.15], [0.45, 0.15], [0.78, 0.19], [0.92, 0.185], [1, 0.085]],
+  d: [[0, 0.11], [0.5, 0.11], [0.8, 0.12], [1, 0.08]] });
+
+function sciGeos() {
+  return cached('scientist', () => {
+    const r = rng(93);
+    const skinP = (x, y, z, c) => { c.copy(SCI_SKIN).multiplyScalar(0.82 + 0.25 * fbm(x * 40, y * 40 + z * 30, 91, 2)); };
+    const coatP = (x, y, z, c) => {
+      c.setRGB(0.86, 0.86, 0.82).multiplyScalar(0.85 + 0.2 * fbm(x * 10, y * 10 + z * 4, 3, 3));
+      const st = fbm(x * 7 + 3, y * 7 + z * 3, 23, 3);
+      if (st > 0.66) c.lerp(C(0.62, 0.52, 0.3), 0.6);                 // manchas de reactivos
+      if (fbm(x * 11, y * 11 + z * 6, 47, 2) > 0.8) c.setRGB(0.42, 0.04, 0.04);    // sangre
+    };
+    const vestP = (x, y, z, c, u) => {
+      if (Math.abs(u - 0.5) < 0.04) c.setRGB(0.82, 0.8, 0.74);        // camisa
+      else c.setRGB(0.16, 0.2, 0.16).multiplyScalar(0.7 + 0.4 * fbm(x * 20, y * 20, 9, 2));
+    };
+    const body = surface((u, v, o) => sciF(u, v, o), 30, 14, vestP);
+    // bata abierta por delante: el torso y los faldones hasta las rodillas
+    const GAP = 0.32;
+    const coatTop = surface((u, v, o) => sciF(0.5 + GAP / TAU + u * (1 - 2 * GAP / TAU), lerp(0.05, 0.98, v), o, 0.018), 30, 12, coatP);
+    const coatSkirt = surface((u, v, o) => {
+      const th = PI + GAP + u * (TAU - 2 * GAP);
+      const t = 1 - v;
+      const rr = lerp(0.175, 0.29, t) + 0.015 * Math.sin(th * 6 + t * 3);
+      o.set(Math.sin(th) * rr, -0.04 - t * 0.6, Math.cos(th) * rr * 0.85 + 0.01);
+    }, 30, 8, coatP);
+    // solapas
+    const lapels = [];
+    for (const sx of [-1, 1]) {
+      const l = new THREE.PlaneGeometry(0.06, 0.26, 1, 4);
+      l.rotateZ(sx * 0.3);
+      l.translate(sx * 0.07, 0.5, -0.132);
+      lapels.push(paintGeo(l, coatP));
+    }
+    const coat = mergeGeos([coatTop, coatSkirt, ...lapels]);
+    // cabeza: huesuda, cejas pobladas y bigote
+    const hd = monsterHead({ w: 0.088, h: 0.12, d: 0.1, brow: 0.14, sockets: 0.16, socketW: 0.2, cheeks: 0.14, seed: 91,
+      teeth: 8, fang: 0, jawDrop: 0.05, neckR: 0.04, teethCol: C(0.8, 0.72, 0.5), paint: skinP });
+    const hairCol = (x, y, z, c) => c.setRGB(0.92, 0.92, 0.9).multiplyScalar(0.8 + 0.25 * r());
+    const hair = [];
+    for (let i = 0; i < 46; i++) {
+      // desde los lados y la nuca hacia fuera y arriba (la coronilla queda casi calva)
+      const a = lerp(-2.5, 2.5, r()) ;
+      const el = lerp(-0.15, 0.75, r());
+      const dx = Math.sin(a) * Math.cos(el), dz = Math.cos(a) * Math.cos(el), dy = Math.sin(el);
+      const x0 = dx * 0.09, y0 = 0.215 + dy * 0.1, z0 = dz * 0.1;
+      const L = 0.07 + r() * 0.08;
+      hair.push(tube([[x0, y0, z0], [x0 + dx * L * 0.5, y0 + L * 0.35 + dy * L * 0.3, z0 + dz * L * 0.5],
+        [x0 + dx * L + (r() - 0.5) * 0.04, y0 + L * 0.6 + (r() - 0.3) * 0.05, z0 + dz * L + (r() - 0.5) * 0.04]],
+      0.009 + r() * 0.005, 6, 4, hairCol, (k) => 1 - 0.7 * k));
+    }
+    for (const sx of [-1, 1]) {
+      hair.push(tube([[sx * 0.005, 0.19, -0.1], [sx * 0.03, 0.182, -0.1], [sx * 0.05, 0.17, -0.09]], 0.008, 6, 4, hairCol, (k) => 1 - 0.6 * k));   // bigote
+      hair.push(tube([[sx * 0.015, 0.262, -0.1], [sx * 0.04, 0.268, -0.097], [sx * 0.062, 0.258, -0.085]], 0.007, 6, 4, hairCol));                // cejas
+    }
+    // gafas de soldador en la frente
+    const brass = C(0.72, 0.52, 0.22);
+    const gog = [];
+    for (const sx of [-1, 1]) {
+      const ring = new THREE.TorusGeometry(0.026, 0.008, 6, 16);
+      ring.rotateX(-0.6);
+      ring.translate(sx * 0.036, 0.3, -0.07);
+      gog.push(colored(ring, brass));
+    }
+    const strap = new THREE.TorusGeometry(0.1, 0.007, 4, 28);
+    strap.rotateX(PI / 2 - 0.35);
+    strap.translate(0, 0.285, 0.005);
+    gog.push(colored(strap, C(0.2, 0.13, 0.08)));
+    const head = mergeGeos([hd.head, ...hair, ...gog]);
+    const lens = new THREE.CircleGeometry(0.022, 14);
+    const lenses = mergeGeos([-1, 1].map((sx) => { const g = lens.clone(); g.rotateX(-0.6); g.rotateY(PI); g.translate(sx * 0.036, 0.3, -0.072); return g; }));
+    // mochila con bobinas de Tesla
+    const iron = C(0.25, 0.26, 0.28), copper = C(0.72, 0.38, 0.18);
+    const pk = [colored(roundedBox(0.3, 0.34, 0.14, 0.02, 2), iron)];
+    pk[0].translate(0, 0.4, 0.2);
+    for (const sx of [-1, 1]) {
+      const col = limbGeo(0.24, 0.022, 0.022, 8, 1);
+      col.rotateX(PI);
+      col.translate(sx * 0.08, 0.57, 0.22);
+      pk.push(colored(col, iron));
+      for (let k = 0; k < 6; k++) {
+        const ring = new THREE.TorusGeometry(0.034, 0.008, 5, 14);
+        ring.rotateX(PI / 2);
+        ring.translate(sx * 0.08, 0.6 + k * 0.03, 0.22);
+        pk.push(colored(ring, copper));
+      }
+    }
+    const dial = new THREE.CylinderGeometry(0.03, 0.03, 0.01, 14);
+    dial.rotateX(PI / 2);
+    dial.translate(-0.07, 0.42, 0.275);
+    pk.push(colored(dial, brass));
+    const pack = mergeGeos(pk);
+    // brazos: mangas de la bata; el derecho lleva el guantelete
+    const upper = armGeo(0.28, 0.062, 0.058, { bulge: 0.04, skin: C(0.86, 0.86, 0.82), paint: coatP, radial: 14 });
+    const sleeve = limbGeo(0.2, 0.06, 0.056, 10, 2, 0.02, 9);
+    paintGeo(sleeve, coatP);
+    const handL = handGeo({ palmW: 0.05, palmL: 0.08, fingerR: 0.0065, fingerL: 0.075, curl: 0.5, skin: SCI_SKIN, seed: 41 });
+    handL.translate(0, -0.24, 0);
+    const gl = [sleeve];
+    const gb = limbGeo(0.16, 0.05, 0.046, 10, 1);
+    gb.translate(0, -0.08, 0);
+    gl.push(colored(gb, brass));
+    for (let k = 0; k < 4; k++) {
+      const ring = new THREE.TorusGeometry(0.05, 0.007, 5, 14);
+      ring.rotateX(PI / 2);
+      ring.translate(0, -0.1 - k * 0.028, 0);
+      gl.push(colored(ring, copper));
+    }
+    const glove = handGeo({ palmW: 0.056, palmL: 0.085, fingerR: 0.008, fingerL: 0.07, curl: 0.2, skin: C(0.22, 0.16, 0.1), nail: brass, seed: 43 });
+    glove.translate(0, -0.24, 0);
+    gl.push(glove);
+    return { body, coat, head, jaw: hd.jaw, lenses, pack, upper, foreL: mergeGeos([sleeve, handL]), foreR: mergeGeos(gl) };
+  });
+}
+
+function buildScientist(M, K) {
+  const G = sciGeos();
+  const q = M.A.quality;
+  const mats = cached('sciMats:' + q, () => ({
+    skin: makeMat(q, { vertexColors: true, roughness: 0.6 }),
+    cloth: makeMat(q, { map: grimeTexture(), vertexColors: true, roughness: 0.85, side: THREE.DoubleSide }),
+    metal: makeMat(q, { vertexColors: true, roughness: 0.35, metalness: 0.7 }),
+    trousers: makeMat(q, { color: 0x2a2218, roughness: 0.85 }),
+    shoes: makeMat(q, { color: 0x1a120c, roughness: 0.4 }),
+    lens: new THREE.MeshBasicMaterial({ color: 0x40ff90, toneMapped: false }),
+  }));
+  // material propio de las esferas de energía (parpadean con las descargas)
+  const orbMat = new THREE.MeshBasicMaterial({ color: 0x80d0ff, toneMapped: false });
+  K.hideBase({ head: true, torso: true, arms: true });
+  M.group.scale.set(1.12, 1.18, 1.12);
+  K.mesh(G.body, mats.cloth, M.spine, true);
+  K.mesh(G.coat, mats.cloth, M.spine, true);
+  K.mesh(G.head, mats.skin, M.neck, true);
+  K.mesh(G.jaw, mats.skin, K.jaw(), true);
+  K.mesh(G.lenses, mats.lens, M.neck);
+  K.mesh(G.pack, mats.metal, M.spine, true);
+  for (const m of M.hips.children) if (m.isMesh && !m.userData.typePart) m.material = mats.trousers;
+  for (const l of [M.legL, M.legR]) { l.tm.material = mats.trousers; l.sm.material = mats.trousers; l.ft.material = mats.shoes; }
+  K.mesh(G.upper, mats.cloth, M.armL.sh, true);
+  K.mesh(G.upper, mats.cloth, M.armR.sh, true);
+  K.mesh(G.foreL, mats.cloth, M.armL.el, true);
+  K.mesh(G.foreR, mats.metal, M.armR.el, true);
+  const orbs = [-1, 1].map((sx) => {
+    const o = K.mesh(K.T.sphere, orbMat, M.spine);
+    o.scale.setScalar(0.045);
+    o.position.set(sx * 0.08, 0.8, 0.22);
+    return o;
+  });
+  M.eyes.material = K.T.eyesCyan;
+  M.eyes.scale.setScalar(0.8);
+  // chispa del guantelete
+  const tip = new THREE.Object3D();
+  tip.position.y = -0.3;
+  M.armR.el.add(tip);
+  M._aura(0x80d0ff, 0.7, 0.4, tip);
+  const tipGlow = M.auraSprite;
+  const packGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: K.T.glowTex, color: 0x80d0ff, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending }));
+  packGlow.scale.set(0.5, 0.5, 1);
+  packGlow.position.set(0, 0.82, 0.22);
+  M.spine.add(packGlow);
+  const AI = atkInfo('scientist');
+  let zapT = 0, castT = 0, summonT = 0;
+  return {
+    ...AI, stagger: 0.6, ownAttack: true,
+    onAbility(a) {
+      if (a === 'zapStart') zapT = 0.9;
+      else if (a === 'zap') { zapT = 0; castT = 0.4; }
+      else if (a === 'summon') summonT = 1.6;
+      else if (a === 'blink') castT = 0.5;
+    },
+    pose(tp, anim) {
+      const t = M.time, I = K.P;
+      tp[I.LEAN] = 0.18; tp[I.NOD] = -0.05;
+      tp[I.TILT] = 0.12 * Math.sin(t * 0.7);
+      tp[I.JAW] = 0.15 + 0.2 * Math.max(0, Math.sin(t * 3.1));   // murmura sin parar
+      if (anim !== ZA.ATTACK && anim !== ZA.STUN) {
+        tp[I.RRAISE] = 0.6; tp[I.RELB] = 1.2; tp[I.RSPLAY] = 0.2;          // el guantelete por delante
+        tp[I.LRAISE] = 0.35 + 0.1 * Math.sin(t * 2); tp[I.LELB] = 0.9; tp[I.LSPLAY] = 0.15;
+      }
+      if (zapT > 0 || castT > 0) {
+        // apunta con el guantelete mientras se carga la descarga
+        const k = zapT > 0 ? Math.min(1, (0.9 - zapT) / 0.25 + 0.2) : castT / 0.4;
+        tp[I.RRAISE] = lerp(tp[I.RRAISE], 1.55, k); tp[I.RELB] = lerp(tp[I.RELB], 0.05, k); tp[I.RSPLAY] = lerp(tp[I.RSPLAY], -0.05, k);
+        tp[I.TWIST] = lerp(tp[I.TWIST], 0.3, k); tp[I.JAW] = lerp(tp[I.JAW], 1, k);
+        tp[I.LEAN] = lerp(tp[I.LEAN], -0.05, k);
+      }
+      if (summonT > 0) {
+        const k = Math.sin(PI * clamp01(1 - summonT / 1.6));
+        tp[I.LRAISE] = lerp(tp[I.LRAISE], 2.6, k); tp[I.RRAISE] = lerp(tp[I.RRAISE], 2.6, k);
+        tp[I.LSPLAY] = lerp(tp[I.LSPLAY], 0.8, k); tp[I.RSPLAY] = lerp(tp[I.RSPLAY], 0.8, k);
+        tp[I.LELB] = lerp(tp[I.LELB], 0.2, k); tp[I.RELB] = lerp(tp[I.RELB], 0.2, k);
+        tp[I.NOD] = lerp(tp[I.NOD], -0.6, k); tp[I.JAW] = lerp(tp[I.JAW], 1.2, k);
+      }
+      if (anim === ZA.ATTACK) {
+        // puñetazo eléctrico con el guantelete
+        const P = atkPhases(M.animT % AI.attackPeriod, AI.hitTime);
+        setK(tp, I.RRAISE, 0.4, 1.45, P); setK(tp, I.RELB, 1.9, 0.1, P); setK(tp, I.RSPLAY, 0.4, 0, P);
+        setK(tp, I.TWIST, -0.4, 0.35, P); setK(tp, I.LEAN, 0.05, 0.4, P);
+        tp[I.JAW] = 0.3 + 0.8 * P.strike * (1 - P.rec);
+      }
+    },
+    update(dt) {
+      zapT = Math.max(0, zapT - dt); castT = Math.max(0, castT - dt); summonT = Math.max(0, summonT - dt);
+      const t = M.time;
+      const charge = zapT > 0 ? 1 - zapT / 0.9 : 0;
+      const flick = Math.random() < 0.15 ? 1.6 : 1;
+      if (tipGlow) {
+        tipGlow.material.opacity = 0.35 + 0.6 * charge + (castT > 0 ? 0.6 : 0) + 0.1 * Math.sin(t * 20);
+        tipGlow.scale.setScalar(0.5 + 1.4 * charge + (castT > 0 ? 1 : 0));
+      }
+      packGlow.material.opacity = (0.35 + 0.25 * Math.sin(t * 7)) * flick + 0.5 * charge;
+      orbMat.color.setHSL(0.56, 1, 0.7 + 0.25 * Math.sin(t * 11) * flick);
+      for (const [i, o] of orbs.entries()) o.scale.setScalar(0.042 + 0.008 * Math.sin(t * 13 + i * 2) + 0.02 * charge);
+    },
+  };
+}
+
+// ============================================================================================
 // Registro
 // ============================================================================================
 const BUILDERS = {
   butcher: buildButcher, plague: buildPlague, necro: buildNecro, armored: buildArmored, specter: buildSpecter,
   tank: buildTank, bomber: buildBomber, runner: buildRunner,
+  vampire: (M, K) => buildVampire(M, K, false), vampling: (M, K) => buildVampire(M, K, true), scientist: buildScientist,
 };
 
 export function hasTypeModel(type) { return !!BUILDERS[type]; }

@@ -1,9 +1,9 @@
 // Interacción con el mundo: detecta el interactuable más cercano, muestra el aviso "Pulsa F..."
 // y envía 'use' (pulsación) u 'hold' (mantener: ventanas, mesa del escudo, reanimar).
 
-import { INTERACTABLES, DOORS, SHIELD_PARTS } from '/shared/map.js';
+import { INTERACTABLES, DOORS, SHIELD_PARTS, TELEPORTERS, sameFloor } from '/shared/map.js';
 import { WEAPONS, weaponName, ammoPrice } from '/shared/weapons.js';
-import { PERKS, PERK_LIMIT, perkPrice } from '/shared/perks.js';
+import { PERKS, PERK_LIMIT, perkPrice, perkNeedsPower } from '/shared/perks.js';
 import { PLAYER, BOX, PAP, SHIELD, MELEE, MEDS, REPAIR_TIME, BOARDS_PER_WINDOW, clamp } from '/shared/constants.js';
 import { tr } from './i18n.js';
 
@@ -12,8 +12,14 @@ const ANGLE_WEIGHT = 0.35;                  // desempate por ángulo entre objet
 const PROMPT_REFRESH = 0.5;                 // s: reenvía el aviso aunque no cambie (por si el HUD se reinició)
 const USE_REPEAT_MS = 180;
 
-const DOOR_BY_ID = Object.fromEntries(DOORS.map((d) => [d.id, d]));
-const PART_NAME = Object.fromEntries(SHIELD_PARTS.map((p) => [p.id, p.name]));
+// Índices del mapa activo (se rehacen al cambiar de mapa)
+let _idxFor = null, DOOR_BY_ID = {}, PART_NAME = {};
+function mapIndex() {
+  if (_idxFor === DOORS) return;
+  _idxFor = DOORS;
+  DOOR_BY_ID = Object.fromEntries(DOORS.map((d) => [d.id, d]));
+  PART_NAME = Object.fromEntries(SHIELD_PARTS.map((p) => [p.id, p.name]));
+}
 
 function sameId(a, b) { return a !== null && a !== undefined && b !== null && b !== undefined && String(a) === String(b); }
 function nowMs() { return performance.now(); }
@@ -99,7 +105,7 @@ export class Interaction {
 
   // ------------------------------------------------------------------ búsqueda
   _findTarget(gs, self, player) {
-    const px = player.position.x, pz = player.position.z;
+    const px = player.position.x, pz = player.position.z, py = player.position.y;
     const yaw = player.yaw || 0;
     const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
 
@@ -128,7 +134,7 @@ export class Interaction {
     for (let i = 0; i < INTERACTABLES.length; i++) {
       const it = INTERACTABLES[i];
       const d = Math.hypot(it.x - px, it.z - pz);
-      if (d > it.range) continue;
+      if (d > it.range || !sameFloor(it, py)) continue;
       // Ángulo entre la vista y el objetivo
       const ax = (it.wx !== undefined ? it.wx : it.cx !== undefined ? it.cx : it.x) - px;
       const az = (it.wz !== undefined ? it.wz : it.cz !== undefined ? it.cz : it.z) - pz;
@@ -176,11 +182,13 @@ export class Interaction {
 
   // Texto y tipo de acción de un interactuable (null = nada que hacer ahí)
   _describe(it, gs, self) {
+    mapIndex();
     const base = { id: it.id, kind: it.kind, cost: 0 };
     switch (it.kind) {
       case 'door': {
         if (gs.doors && gs.doors[it.door]) return null;
         const d = DOOR_BY_ID[it.door];
+        if (d && d.sealed) return { ...base, mode: 'info', text: tr('Una fuerza extraña sella esta puerta') };
         const cost = d ? d.cost : 0;
         const text = d && d.kind === 'debris'
           ? tr('Pulsa F para despejar los escombros [Costo: {0}]', cost)
@@ -211,7 +219,7 @@ export class Interaction {
         if (!perk) return null;
         const perks = Array.isArray(self.perks) ? self.perks : [];
         if (perks.includes(it.perk)) return null;
-        if (!gs.power) return { ...base, mode: 'info', text: tr('Se requiere electricidad') };
+        if (!gs.power && perkNeedsPower(it.perk)) return { ...base, mode: 'info', text: tr('Se requiere electricidad') };
         const nPlayers = Object.keys(gs.players || {}).length;
         if (it.perk === 'quickrevive' && nPlayers <= 1 && (self.qrUses || 0) >= PLAYER.soloQuickReviveUses) return null;
         if (perks.length >= PERK_LIMIT) return { ...base, mode: 'info', text: tr('Solo puedes tener {0} ventajas', PERK_LIMIT) };
@@ -257,6 +265,35 @@ export class Interaction {
         if (have >= def.max) return { ...base, mode: 'info', text: tr('Ya llevas el máximo de {0} ({1})', tr(def.plural).toLowerCase(), def.max) };
         const what = def.pack > 1 ? `${tr(def.plural)} x${def.pack}` : tr(def.name);
         return { ...base, mode: 'use', text: tr('Pulsa F para comprar: {0} [Costo: {1}]', what, def.price), cost: def.price };
+      }
+      case 'teleport': {
+        const tp = (TELEPORTERS || []).find((t) => t.id === it.tp);
+        if (!tp) return null;
+        if (tp.power && !gs.power) return { ...base, mode: 'info', text: tr('El teletransporte necesita electricidad') };
+        return { ...base, mode: 'use', text: tr('Pulsa F para teletransportarte') };
+      }
+      case 'ee': {
+        // Easter egg del Castillo: gs.ee lo describe el servidor (server/easteregg.js)
+        const ee = gs.ee;
+        if (!ee) return null;
+        const [, what, n] = it.id.split(':');
+        if (what === 'vial') {
+          const i = Number(n);
+          if (ee.step !== 1 || !ee.vials.includes(i) || ee.got.includes(i)) return null;
+          return { ...base, mode: 'use', text: tr('Pulsa F para recoger el vial de sangre') };
+        }
+        if (what === 'centri') {
+          if (ee.step === 3 && !ee.fang) return { ...base, mode: 'use', text: tr('Pulsa F para cargar la centrifugadora') };
+          if (ee.step === 4) return { ...base, mode: 'info', text: tr('Centrifugando... {0}%', Math.floor((ee.centri / 90) * 100)) };
+          if (ee.step < 3) return { ...base, mode: 'info', text: tr('Una centrifugadora de sangre. Le falta algo...') };
+          return null;
+        }
+        if (what === 'braz') {
+          const i = Number(n);
+          if (ee.step !== 5 || ee.lit.includes(i)) return null;
+          return { ...base, mode: 'use', text: tr('Pulsa F para encender el brasero') };
+        }
+        return null;
       }
       case 'part': {
         const parts = gs.shield && Array.isArray(gs.shield.parts) ? gs.shield.parts : null;

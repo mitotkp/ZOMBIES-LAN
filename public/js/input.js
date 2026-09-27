@@ -1,4 +1,6 @@
-// Entrada de teclado y ratón: acciones con flancos, pointer lock, rueda y acumulado del ratón.
+// Entrada de teclado, ratón y mando (PS5 DualSense, Xbox... con el mapeo estándar del navegador): acciones con
+// flancos, pointer lock, rueda y acumulado del ratón. Los botones del mando son "teclas" más (Pad*); el stick
+// izquierdo da un movimiento analógico (padMove) y el derecho se suma al movimiento del ratón.
 // isDown/pressed/released devuelven false mientras `enabled` es false (menú abierto) o se escribe en un campo de texto.
 
 export const DEFAULT_BINDINGS = {
@@ -6,27 +8,38 @@ export const DEFAULT_BINDINGS = {
   back: ['KeyS', 'ArrowDown'],
   left: ['KeyA', 'ArrowLeft'],
   right: ['KeyD', 'ArrowRight'],
-  sprint: ['ShiftLeft', 'ShiftRight'],
-  crouch: ['KeyC', 'ControlLeft', 'ControlRight'],
-  jump: ['Space'],
-  fire: ['Mouse0'],
-  ads: ['Mouse2'],
-  reload: ['KeyR'],
-  use: ['KeyF'],
-  melee: ['KeyV', 'Mouse1'],
-  grenade: ['KeyG'],
-  shield: ['KeyQ'],
-  flashlight: ['KeyL'],
-  heal: ['KeyH'],
+  sprint: ['ShiftLeft', 'ShiftRight', 'PadSprint'],
+  crouch: ['KeyC', 'ControlLeft', 'ControlRight', 'PadCircle'],
+  jump: ['Space', 'PadCross'],
+  fire: ['Mouse0', 'PadR2'],
+  ads: ['Mouse2', 'PadL2'],
+  reload: ['KeyR', 'PadSquare'],
+  use: ['KeyF', 'PadSquare'],
+  melee: ['KeyV', 'Mouse1', 'PadR3'],
+  grenade: ['KeyG', 'PadR1'],
+  shield: ['KeyQ', 'PadDown'],
+  flashlight: ['KeyL', 'PadUp'],
+  heal: ['KeyH', 'PadL1'],
   weapon1: ['Digit1', 'Numpad1'],
   weapon2: ['Digit2', 'Numpad2'],
   weapon3: ['Digit3', 'Numpad3'],
-  nextWeapon: ['WheelDown'],
-  prevWeapon: ['WheelUp'],
-  scoreboard: ['Tab'],
+  nextWeapon: ['WheelDown', 'PadTriangle', 'PadRight'],
+  prevWeapon: ['WheelUp', 'PadLeft'],
+  scoreboard: ['Tab', 'PadTouch', 'PadCreate'],
   chat: ['KeyT', 'Enter', 'NumpadEnter'],
-  pause: ['Escape'],
+  pause: ['Escape', 'PadOptions'],
 };
+
+// Mando: índice del botón en el mapeo estándar → código (nombres de PlayStation; en Xbox, A/B/X/Y, LB/RB, LT/RT...)
+// L3 (10) no está aquí: activa la carrera y se mantiene mientras se empuja el stick (PadSprint)
+const PAD_BUTTONS = [
+  [0, 'PadCross'], [1, 'PadCircle'], [2, 'PadSquare'], [3, 'PadTriangle'], [4, 'PadL1'], [5, 'PadR1'],
+  [6, 'PadL2'], [7, 'PadR2'], [8, 'PadCreate'], [9, 'PadOptions'], [11, 'PadR3'],
+  [12, 'PadUp'], [13, 'PadDown'], [14, 'PadLeft'], [15, 'PadRight'], [17, 'PadTouch'],
+];
+const PAD_DEAD = 0.15;          // zona muerta de los sticks
+const PAD_LOOK = 1500;          // "píxeles" por segundo con el stick derecho a tope (igual que el ratón)
+const PAD_IDLE_MS = 45000;      // sin tocar el mando este tiempo, vuelve a pedirse el ratón
 
 const TEXT_INPUT_TYPES = new Set(['', 'text', 'search', 'email', 'number', 'password', 'url', 'tel']);
 const INTERACTIVE_TAGS = new Set(['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'A', 'LABEL', 'OPTION']);
@@ -70,6 +83,13 @@ export class Input {
     this._dragging = false;
     this._skipMoves = 0;
     this._lastWheel = 0;
+    // mando
+    this.padMove = null;             // { x, y } del stick izquierdo (y > 0 = atrás) o null
+    this.padName = '';
+    this._padPrev = new Set();       // botones pulsados en el sondeo anterior
+    this._padEdges = new Set();      // botones pulsados en este frame (aunque haya un menú abierto)
+    this._sprintLatch = false;
+    this._lastPadAt = -1e9;
 
     this._bind();
   }
@@ -156,11 +176,86 @@ export class Input {
   endFrame() {
     this._pressed.clear();
     this._released.clear();
+    this._padEdges.clear();
+  }
+
+  // ------------------------------------------------------------------ mando
+  // ¿Se está jugando con el mando? (entonces no hace falta capturar el ratón)
+  get padActive() { return !!this.padName && performance.now() - this._lastPadAt < PAD_IDLE_MS; }
+  // Flanco de un botón del mando aunque la entrada esté desactivada (abrir y cerrar la pausa con Options)
+  padPressed(code) { return this._padEdges.has(code); }
+
+  // Se llama una vez por frame (antes de leer la entrada)
+  pollGamepad(dt) {
+    let gp = null;
+    try {
+      const pads = typeof navigator !== 'undefined' && navigator.getGamepads ? navigator.getGamepads() : [];
+      for (const p of pads) if (p && p.connected && p.buttons && p.buttons.length >= 16) { gp = p; break; }
+    } catch { gp = null; }
+    if (!gp) {
+      if (this._padPrev.size) { for (const c of this._padPrev) this._up(c); this._padPrev.clear(); }
+      this._up('PadSprint');
+      this.padMove = null;
+      this.padName = '';
+      return;
+    }
+    this.padName = gp.id || 'Mando';
+    const btn = (i) => { const b = gp.buttons[i]; return !!b && (b.pressed || b.value > 0.3); };
+    let any = false;
+    for (const [i, code] of PAD_BUTTONS) {
+      const on = btn(i);
+      if (on) {
+        any = true;
+        if (!this._padPrev.has(code)) { this._padPrev.add(code); this._padEdges.add(code); this._down(code); }
+      } else if (this._padPrev.has(code)) { this._padPrev.delete(code); this._up(code); }
+    }
+    // sticks con zona muerta radial y curva suave (precisión cerca del centro)
+    const stick = (ax, ay) => {
+      const x = gp.axes[ax] || 0, y = gp.axes[ay] || 0;
+      const m = Math.hypot(x, y);
+      if (m < PAD_DEAD) return [0, 0, 0];
+      const k = Math.min(1, (m - PAD_DEAD) / (1 - PAD_DEAD)) / m;
+      return [x * k, y * k, Math.min(1, m)];
+    };
+    const [lx, ly, lm] = stick(0, 1);
+    const [rx, ry] = stick(2, 3);
+    this.padMove = lm ? { x: lx, y: ly } : null;
+    if (lm || rx || ry) any = true;
+    // carrera: L3 la activa y dura mientras se empuja el stick hacia delante
+    const l3 = btn(10);
+    if (l3 && !this._l3Prev) this._sprintLatch = true;
+    this._l3Prev = l3;
+    if (!this.padMove || ly > -0.35) this._sprintLatch = false;
+    if (this._sprintLatch) this._down('PadSprint'); else this._up('PadSprint');
+    if (l3) any = true;
+    // mirar: se suma al ratón (misma sensibilidad y escala de zoom)
+    if (this.enabled && (rx || ry)) {
+      const cx = rx * Math.abs(rx), cy = ry * Math.abs(ry);
+      this._mx += cx * PAD_LOOK * dt;
+      this._my += cy * PAD_LOOK * 0.75 * dt;
+    }
+    if (any) this._lastPadAt = performance.now();
+  }
+
+  // Vibración (DualSense y Xbox en Chrome/Edge; en otros navegadores no hace nada)
+  rumble(strong = 0.5, weak = 0.5, ms = 150) {
+    try {
+      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+      for (const p of pads) {
+        const a = p && p.connected && p.vibrationActuator;
+        if (a && typeof a.playEffect === 'function') {
+          a.playEffect('dual-rumble', { duration: ms, strongMagnitude: Math.min(1, strong), weakMagnitude: Math.min(1, weak) }).catch(() => {});
+          return;
+        }
+      }
+    } catch { /* sin vibración */ }
   }
 
   // Suelta todas las teclas (pérdida de foco, cambio de pestaña)
   releaseAll() {
     for (const code of Array.from(this._held)) this._up(code);
+    this._padPrev.clear();
+    this._sprintLatch = false;
     this._dragging = false;
   }
 
@@ -231,6 +326,7 @@ export class Input {
       if (bound && this.enabled && code !== 'Escape') e.preventDefault();
       else if (code === 'Tab' && this.enabled) e.preventDefault();
       if (e.repeat) return;
+      this._lastPadAt = -1e9;
       this._down(code);
     });
 

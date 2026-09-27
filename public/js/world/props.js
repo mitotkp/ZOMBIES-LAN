@@ -53,8 +53,12 @@ export class Flames {
     this.parent = parent;
     this.list = [];
     this.tex = flameTexture();
+    // llamas pequeñas (velas, candelabros, farolas): todas en una sola nube de puntos = una llamada de dibujo
+    this.small = [];
+    this.points = null;
   }
   add(x, y, z, scale = 1) {
+    if (scale <= 0.2) { this.small.push(x, y + scale * 0.9, z); this.points && this._buildPoints(); return; }
     const g = new THREE.Group();
     g.position.set(x, y, z);
     const sprites = [];
@@ -72,8 +76,27 @@ export class Flames {
     this.parent.add(g);
     this.list.push({ g, sprites, glow, scale });
   }
+  _buildPoints() {
+    if (this.points) { this.parent.remove(this.points); this.points.geometry.dispose(); }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(this.small, 3));
+    g.computeBoundingSphere();
+    const m = new THREE.PointsMaterial({ map: this.tex, color: 0xffb070, size: 0.34, sizeAttenuation: true, transparent: true,
+      depthWrite: false, blending: THREE.AdditiveBlending });
+    this.points = new THREE.Points(g, m);
+    this.points.renderOrder = 5;
+    this.parent.add(this.points);
+  }
+
   update(t) {
+    if (this.small.length) {
+      if (!this.points) this._buildPoints();
+      const m = this.points.material;
+      m.opacity = 0.75 + 0.25 * flickerNoise(t * 2.1, 1.3);
+      m.size = 0.32 + 0.05 * flickerNoise(t * 3.3, 4.7);
+    }
     for (const f of this.list) {
+      if (!f.g.visible) continue;
       const sc = f.scale;
       for (const it of f.sprites) {
         const k = flickerNoise(t * 2.4, it.ph);
@@ -494,7 +517,7 @@ function buildDecor(B, r, signs) {
 }
 
 // Dibujos de tiza de las armas de pared (una sola malla con atlas)
-function buildChalk(parent) {
+export function buildChalk(parent) {
   const entries = WALLBUYS.map((wb) => ({ id: wb.id, weapon: wb.weapon }));
   const { texture, rects } = chalkAtlas(entries);
   const geos = [];
@@ -505,7 +528,7 @@ function buildChalk(parent) {
     const g = uvRectPlane(1.7, 0.85, rc.u0, rc.v0, rc.u1, rc.v1);
     const yaw = yawForFace(wb.wall);
     const nx = -Math.sin(yaw + Math.PI), nz = -Math.cos(yaw + Math.PI); // normal hacia la sala
-    g.applyMatrix4(matrixFrom(it.wx + nx * 0.012, 1.55, it.wz + nz * 0.012, 0, yaw, 0));
+    g.applyMatrix4(matrixFrom(it.wx + nx * 0.012, (it.base || 0) + 1.55, it.wz + nz * 0.012, 0, yaw, 0));
     geos.push(g);
   }
   if (!geos.length) return null;

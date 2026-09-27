@@ -1,11 +1,11 @@
 // Bots headless para probar el servidor (SPEC.md 5.4).
-// Uso: node tools/bot-test.js --bots 2 --seconds 120 --url ws://localhost:3000 [--scenario] [--god] [--verbose]
+// Uso: node tools/bot-test.js --bots 2 --seconds 120 --url ws://localhost:3000 [--scenario] [--god] [--round N] [--verbose]
 //   --scenario  (requiere servidor con --dev) el bot 1 recorre el mapa probando compras: puerta, pared, caja,
 //               Pack-a-Punch, ventajas, escudo, potenciadores y salto de ronda.
 //   --god       los bots usan /god (requiere --dev) para probar rondas altas sin caer.
 
 import WebSocket from 'ws';
-import { INTERACTABLE_BY_ID, PLAYER_SPAWNS, WINDOW_INFO, zoneAt } from '../shared/map.js';
+import { INTERACTABLE_BY_ID, PLAYER_SPAWNS, WINDOW_INFO, zoneAt, setActiveMap } from '../shared/map.js';
 import { moveCircle, solidForPlayer, lineOfSight } from '../shared/collision.js';
 import { WEAPONS, weaponDef, fireInterval } from '../shared/weapons.js';
 import { PLAYER, MELEE, GRENADE, PLAYER_COLORS, yawTo, forwardXZ } from '../shared/constants.js';
@@ -27,6 +27,9 @@ const URL = String(arg('url', 'ws://localhost:3000'));
 const ROOM_CODE = String(arg('room', 'BOTS1')).toUpperCase().slice(0, 8);
 const SCENARIO = !!arg('scenario', false);
 const GOD = !!arg('god', false);
+const START_ROUND = parseInt(arg('round', 0), 10) || 0;
+const MAP_ID = String(arg('map', 'pueblo'));
+setActiveMap(MAP_ID);   // los bots navegan por el mismo mapa que la sala   // salta a esta ronda al empezar (requiere --dev en el servidor)
 const VERBOSE = !!arg('verbose', false);
 
 const T0 = Date.now();
@@ -86,7 +89,7 @@ class Bot {
     this.ws = new WebSocket(URL);
     this.ws.on('open', () => {
       const room = this.index === 0
-        ? { mode: 'create', code: ROOM_CODE, name: 'Bots' }
+        ? { mode: 'create', code: ROOM_CODE, name: 'Bots', map: MAP_ID }
         : { mode: 'join', code: ROOM_CODE };
       this.send({ t: 'hello', name: this.name, color: PLAYER_COLORS[this.index % PLAYER_COLORS.length], room });
     });
@@ -394,6 +397,7 @@ class Bot {
     }
     if (gs.phase !== 'playing') return;
     if (GOD && !this.godSent) { this.godSent = true; this.send({ t: 'chat', msg: '/god' }); }
+    if (START_ROUND > 1 && s.host && !this.roundSent) { this.roundSent = true; this.send({ t: 'chat', msg: '/round ' + START_ROUND }); }
 
     if (s.state === 'dead') { this.setHold(null); return; }
     this.combat(now);

@@ -2,7 +2,7 @@
 // El núcleo (main.js) decide cuándo se muestra cada pantalla; aquí solo se dibujan y se envían acciones al servidor.
 
 import { PLAYER_COLORS, MAX_PLAYERS, clamp } from '/shared/constants.js';
-import { MAP_NAME } from '/shared/map.js';
+import { MAP_NAME, MAP_LIST, DEFAULT_MAP } from '/shared/map.js';
 import { esc, safeColor, mulberry32, sfx, ensureChalkDefs, isDebugUrl } from './uiutil.js';
 import { COLOR_NAMES, CONTROL_GROUPS, CONTROLS_SHORT, TIPS, DEFAULT_SETTINGS } from './menudata.js';
 import { tr, getLang, setLang, LANGS } from '../i18n.js';
@@ -117,6 +117,8 @@ const TEMPLATE = `
         <h3 class="mn-card-title">${tr('Crear sala')}</h3>
         <label class="mn-label" for="zl-room-name">${tr('Nombre de la sala')}</label>
         <input id="zl-room-name" class="mn-input rm-name" type="text" maxlength="24" autocomplete="off" spellcheck="false" placeholder="${tr('Mi sala')}">
+        <label class="mn-label" for="zl-room-map">${tr('Mapa')}</label>
+        <select id="zl-room-map" class="mn-input rm-map">${MAP_LIST.map((m) => `<option value="${esc(m.id)}"${m.id === DEFAULT_MAP ? ' selected' : ''}>${esc(tr(m.name))}</option>`).join('')}</select>
         <label class="st-toggle-row rm-pw-toggle"><input type="checkbox" class="rm-pw-on"><span>${tr('Proteger con contraseña')}</span></label>
         <input class="mn-input rm-pw-input" type="password" maxlength="32" autocomplete="off" spellcheck="false" placeholder="${tr('Contraseña')}" hidden>
         <div class="mn-actions">
@@ -180,7 +182,7 @@ const TEMPLATE = `
         <button type="button" class="mn-btn mn-open-controls">${tr('Controles')}</button>
         <button type="button" class="mn-btn danger ps-exit">${tr('Salir de la partida')}</button>
       </div>
-      <div class="mn-pause-note">${tr('La partida sigue en marcha: los zombis no esperan.')}</div>
+      <div class="mn-pause-note">${tr('La partida está en pausa para todos. Se reanuda sola a los 5 minutos.')}</div>
     </div>
   </section>
 
@@ -335,7 +337,7 @@ export class Menus {
       goSub: q('.go-sub'), goBody: q('.go-table tbody'), goFoot: q('.go-table tfoot'), goCount: q('.go-count'),
       confirm: q('.mn-confirm'), cfTitle: q('.mn-confirm-title'), cfText: q('.mn-confirm-text'), cfPw: q('.cf-pw'), cfYes: q('.cf-yes'), cfNo: q('.cf-no'),
       rmList: q('.rm-list'), rmEmpty: q('.rm-empty'), rmRefresh: q('.rm-refresh'), rmName: q('.rm-name'),
-      rmPwOn: q('.rm-pw-on'), rmPwInput: q('.rm-pw-input'), rmCreateBtn: q('.rm-create-btn'), rmStatus: q('.rm-status'), rmBack: q('.rm-back'),
+      rmMap: q('.rm-map'), rmPwOn: q('.rm-pw-on'), rmPwInput: q('.rm-pw-input'), rmCreateBtn: q('.rm-create-btn'), rmStatus: q('.rm-status'), rmBack: q('.rm-back'),
     };
 
     this.mode = null;                 // 'main' | 'lobby' | 'pause' | 'settings' | 'controls' | 'gameover' | null
@@ -439,6 +441,8 @@ export class Menus {
       this._closeConfirm();
       this.hideAll();
       this._requestLock();
+      const gs = this.ctx.gs;
+      if (gs && gs.pause) this._send({ t: 'resume' });
       return;
     }
     const gs = this.ctx.gs;
@@ -468,6 +472,8 @@ export class Menus {
     this._goTimer = 0;
     clearInterval(this._tipTimer);
     this._tipTimer = 0;
+    clearInterval(this._pauseTimer);
+    this._pauseTimer = 0;
     const ae = document.activeElement;
     if (ae && this.root.contains(ae) && typeof ae.blur === 'function') ae.blur();
     if (this.ctx.input) this.ctx.input.enabled = true;
@@ -500,9 +506,14 @@ export class Menus {
     }
   }
 
-  _openPause() {
+  // fromServer: otro jugador pausó (no se vuelve a pedir la pausa)
+  _openPause(fromServer = false) {
     this._backMode = null;
+    const gs = this.ctx.gs;
+    if (!fromServer && gs && gs.phase === 'playing' && !gs.pause) this._send({ t: 'pause' });
     this._renderPauseInfo();
+    clearInterval(this._pauseTimer);
+    this._pauseTimer = setInterval(() => this._renderPauseInfo(), 250);
     this._open('pause');
     try { this.root.querySelector('.ps-continue').focus({ preventScroll: true }); } catch { /* nada */ }
   }
@@ -603,7 +614,7 @@ export class Menus {
       const badge = playing ? tr('Ronda {0}', Math.max(1, +r.round || 1)) : (r.phase === 'gameover' ? tr('Fin de la partida') : tr('En sala de espera'));
       return `<div class="rm-row${full ? ' full' : ''}" data-code="${code}" data-locked="${r.locked ? '1' : '0'}">
         <span class="rm-lock" aria-hidden="true">${r.locked ? '🔒' : ''}</span>
-        <span class="rm-info"><span class="rm-name2">${name}</span><span class="rm-sub">${tr('Código')}: ${code} · ${badge}</span></span>
+        <span class="rm-info"><span class="rm-name2">${name}</span><span class="rm-sub">${tr('Código')}: ${code} · ${esc(tr(r.mapName || ''))} · ${badge}</span></span>
         <span class="rm-count">${n}/${max}</span>
         <button type="button" class="mn-btn small primary rm-join-btn" ${full ? 'disabled' : ''}>${tr('Entrar')}</button>
       </div>`;
@@ -643,7 +654,8 @@ export class Menus {
     const password = this.el.rmPwOn.checked ? (this.el.rmPwInput.value || '').slice(0, 32) : '';
     if (this.el.rmPwOn.checked && !password) { this._roomStatus(tr('Escribe una contraseña o desmarca la casilla.'), true); return; }
     this._roomStatus(tr('Creando sala…'));
-    this._roomCb.onCreate({ name, password });
+    const map = this.el.rmMap ? this.el.rmMap.value : DEFAULT_MAP;
+    this._roomCb.onCreate({ name, password, map });
   }
 
   // ------------------------------------------------------------------ sala de espera
@@ -823,6 +835,26 @@ export class Menus {
   }
 
   // ------------------------------------------------------------------ pausa
+  _send(msg) {
+    try { if (this.ctx.net && typeof this.ctx.net.send === 'function') this.ctx.net.send(msg); } catch { /* nada */ }
+  }
+
+  // Otro jugador pausó: todos ven el menú de pausa (salvo que ya tengan otra pantalla abierta)
+  onRemotePause() {
+    const gs = this.ctx.gs;
+    if (!gs || gs.phase !== 'playing' || this.mode) return;
+    this._openPause(true);
+  }
+
+  // Alguien reanudó (o pasaron 5 minutos): se cierra la pausa en todos los clientes
+  onRemoteResume() {
+    if (this.mode === 'pause' || ((this.mode === 'settings' || this.mode === 'controls') && this._backMode === 'pause')) {
+      this._closeConfirm();
+      this.hideAll();
+      this._requestLock();
+    }
+  }
+
   _renderPauseInfo() {
     const gs = this.ctx.gs;
     let self = null;
@@ -831,7 +863,13 @@ export class Menus {
     if (gs && gs.round > 0) parts.push(tr('Ronda {0}', gs.round | 0));
     parts.push(esc(MAP_NAME));
     if (self) parts.push(tr('{0} puntos', (self.points | 0).toLocaleString(getLang())));
-    const html = parts.map((p) => `<span>${p}</span>`).join('<span class="mn-dot">·</span>');
+    let html = parts.map((p) => `<span>${p}</span>`).join('<span class="mn-dot">·</span>');
+    const P = gs && gs.pause;
+    if (P) {
+      const left = Math.max(0, (P.leftMs || 0) - (performance.now() - (P.receivedAt || performance.now())));
+      const m = Math.floor(left / 60000), sec = Math.floor((left % 60000) / 1000);
+      html += `<div class="mn-pause-by">${tr('Pausada por {0} · se reanuda sola en {1}', esc(P.name || '?'), `${m}:${String(sec).padStart(2, '0')}`)}</div>`;
+    }
     if (this.el.pauseInfo.innerHTML !== html) this.el.pauseInfo.innerHTML = html;
   }
 

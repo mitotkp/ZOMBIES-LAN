@@ -4,9 +4,9 @@
 
 import {
   ZOMBIE, ROUND, ZOMBIE_TYPES, BOSS_RULES, BOSS_KEYS, zombieHealth, zombiesForRound, zombieSpeedChances, angleDiff, yawTo,
-  BALANCE,
+  BALANCE, DOG_ROUND, isDogRound,
 } from '../shared/constants.js';
-import { WINDOW_INFO, DIRS } from '../shared/map.js';
+import { WINDOW_INFO, DIRS, MAP } from '../shared/map.js';
 import { moveCircle, resolveCircle, solidForZombieInside, solidForZombieOutside } from '../shared/collision.js';
 import { ZA, ZF, r2 } from '../shared/protocol.js';
 import { FlowField, clearPath, randomPointNear, doorsKey } from './nav.js';
@@ -26,7 +26,10 @@ const FAR_DIST = 45;              // m de camino: demasiado lejos de todos los j
 const FAR_TIME = 10;              // s demasiado lejos antes de reaparecer
 const MAX_PER_POCKET = 5;         // zombis como máximo esperando en un mismo callejón
 const TURN_RATE = 10;             // rad/s de giro visual
-const NUKE_SPREAD_MS = 900;       // la bomba nuclear mata escalonadamente en este intervalo
+const NUKE_SPREAD_MS = 900;
+const CRAWL_EDGE = 0.4;           // fracción del radio de la explosión a partir de la que puede salvarse como reptante
+const CRAWL_SAVE_CHANCE = 0.4;    // probabilidad de quedar reptante en vez de morir (en el borde)
+const CRAWL_SURVIVE_CHANCE = 0.5; // probabilidad de perder las piernas si sobrevive a la explosión       // la bomba nuclear mata escalonadamente en este intervalo
 const OUTSIDE_STATES = new Set(['outside', 'tearing', 'climbing']);
 const INSIDE_STATES = new Set(['inside', 'attacking', 'stunned']);
 
@@ -48,6 +51,11 @@ function moveAnim(z) {
   if (z.cls === 'sprint') return ZA.SPRINT;
   if (z.cls === 'run') return ZA.RUN;
   return ZA.WALK;
+}
+// Distancia horizontal a un objetivo; si está en otra planta cuenta como muy lejos (no se le ataca a través del suelo)
+function flatDist(z, t) {
+  const d = Math.hypot(t.x - z.x, t.z - z.z);
+  return Math.abs((t.y || 0) - (z.y || 0)) > 1.5 ? d + 1000 : d;
 }
 function turnTowards(z, yaw, dt) {
   const d = angleDiff(z.rot, yaw);
@@ -72,30 +80,51 @@ export class ZombieManager {
     this.spawnDelay = ZOMBIE.firstSpawnDelay;
     this.health = zombieHealth(1);
     this.speedChances = zombieSpeedChances(1);
-    this.now = Date.now();
+    this.now = this._clock();
     this._targets = [];
     this._doors = {};
-    this._solidIn = (x, z) => solidForZombieInside(x, z, this._doors);
+    // Easter egg (Castillo): jefe forzado en la próxima ronda, rondas detenidas (batalla final) y oleada continua
+    this.forceBoss = null;
+    this.pauseSpawns = false;
+    this.rush = false;
+    // colisión a la altura del zombi que se está moviendo (_curY): decide la planta y las escaleras
+    this._curY = MAP.levels[0].y;
+    this._curX = 0; this._curZ = 0;
+    this._solidIn = (x, z) => solidForZombieInside(x, z, this._doors, this._curY, this._curX, this._curZ);
+    this._solidOut = (x, z) => solidForZombieOutside(x, z, this._curY);
+    // clearPath evalúa la regla de las escaleras desde cada punto del trayecto (y luego restaura la posición)
+    this._pathSample = (x, z) => { this._curX = x; this._curZ = z; };
   }
 
   get gs() { return this.game && this.game.gs; }
+
+  // Reloj de juego (se detiene durante la pausa); sin Game, el reloj real
+  _clock() { return this.game && typeof this.game.clock === 'function' ? this.game.clock() : Date.now(); }
 
   // ------------------------------------------------------------------ API pública
 
   // Prepara la ronda 1
   startGame() {
     this.reset();
+    this.nextBossRound = BOSS_RULES.firstRound;
+    this.dogsDeferred = false;
     const gs = this.gs;
     if (!gs) return;
     gs.round = 0;
     gs.roundState = 'pre';
-    gs.roundUntil = Date.now() + ROUND.firstDelay * 1000;
+    gs.roundUntil = this._clock() + ROUND.firstDelay * 1000;
     gs.zLeft = 0;
     this._markDirty();
   }
 
   // Borra zombis y rondas (vuelta al lobby)
   reset() {
+    this.forceBoss = null;
+    this.pauseSpawns = false;
+    this.rush = false;
+    this.dogRound = false;
+    this.dogsDeferred = false;
+    this.nextBossRound = null;
     this.zombies = [];
     this.byId.clear();
     this.winOcc.fill(null);
@@ -111,7 +140,7 @@ export class ZombieManager {
   update(dt) {
     const gs = this.gs;
     if (!gs || gs.phase !== 'playing') return;
-    const now = Date.now();
+    const now = this._clock();
     this.now = now;
     this._doors = gs.doors || {};
     let targets = [];
@@ -141,29 +170,38 @@ export class ZombieManager {
     if (!Number.isFinite(amt) || amt < 0) amt = 0;
     if (inf.instakill && !z.boss) amt = Math.max(amt, z.hp);   // Muerte Instantánea no afecta a los jefes
     if (z.boss) amt *= this._bossDamageFactor(z, inf);
-    const now = Date.now();
+    const now = this._clock();
     if (inf.special === 'fire' && inf.kind !== 'fire') {
       z.burnUntil = now + BURN_TIME * 1000;
       z.burnPid = pid || null;
       z.flags |= ZF.BURNING;
     }
     if (amt <= 0) return { killed: false, existed: true };
+    const canCrawl = inf.kind === 'explosion' && !z.crawler && !z.dog && z.type !== 'tank' && z.type !== 'bomber' && !z.boss
+      && INSIDE_STATES.has(z.state) && !inf.instakill;
+    // Como en CoD: en el borde de una explosión, un zombi que iba a morir puede quedar vivo sin piernas
+    if (canCrawl && z.hp - amt <= 0 && (inf.edge || 0) >= CRAWL_EDGE && Math.random() < CRAWL_SAVE_CHANCE) {
+      z.hp = Math.max(1, Math.round(z.maxHp * 0.3));
+      this._makeCrawler(z);
+      return { killed: false, existed: true };
+    }
     z.hp -= amt;
     if (z.boss) this._syncBosses();
     if (z.hp <= 0) {
       this._kill(z, pid || null, inf);
       return { killed: true, existed: true };
     }
-    if (inf.kind === 'explosion' && !z.crawler && z.type !== 'tank' && z.type !== 'bomber' && !z.boss && Math.random() < 0.3) this._makeCrawler(z);
+    if (canCrawl && Math.random() < CRAWL_SURVIVE_CHANCE) this._makeCrawler(z);
     return { killed: false, existed: true };
   }
 
   // Mata a todos los zombis vivos. 'nuke' los mata escalonadamente (<1 s) sin puntos por bajas.
   killAll(kind = 'nuke') {
-    const now = Date.now();
+    const now = this._clock();
     let n = 0;
     for (const z of this.zombies.slice()) {
       if (z.dead || z.dieAt) continue;
+      if (kind === 'nuke' && z.final) continue;   // la bomba nuclear no acaba con el jefe final
       n++;
       if (kind === 'nuke') {
         z.dieAt = now + 80 + Math.random() * NUKE_SPREAD_MS;
@@ -182,7 +220,7 @@ export class ZombieManager {
     if (!z || z.dead || z.dieAt) return false;
     if (!INSIDE_STATES.has(z.state)) return false;
     if (z.type === 'tank' || z.boss || z.fuseAt) return false;
-    const now = Date.now();
+    const now = this._clock();
     let dx = z.x - fromX, dz = z.z - fromZ;
     let len = Math.hypot(dx, dz);
     if (!Number.isFinite(len) || len < 1e-3) {
@@ -205,7 +243,7 @@ export class ZombieManager {
     const out = new Array(this.zombies.length);
     for (let i = 0; i < this.zombies.length; i++) {
       const z = this.zombies[i];
-      out[i] = [z.id, r2(z.x), r2(z.z), r2(z.rot), z.anim, z.flags, 0, z.tcode | 0];
+      out[i] = [z.id, r2(z.x), r2(z.z), r2(z.rot), z.anim, z.flags, r2(z.y || 0), z.tcode | 0];
     }
     return out;
   }
@@ -225,7 +263,7 @@ export class ZombieManager {
     this.queue = 0;
     gs.round = r - 1;
     gs.roundState = 'intermission';
-    gs.roundUntil = Date.now() + 1500;
+    gs.roundUntil = this._clock() + 1500;
     this._syncZLeft();
     this._markDirty();
   }
@@ -234,18 +272,22 @@ export class ZombieManager {
 
   _updateRounds(now, dt) {
     const gs = this.gs;
+    if (this.pauseSpawns) return;   // batalla final: la ronda queda congelada
     if (gs.roundState === 'pre' || gs.roundState === 'intermission') {
       if (gs.roundUntil && now >= gs.roundUntil) this._beginRound((gs.round | 0) + 1, now);
       return;
     }
     if (gs.roundState !== 'active') return;
+    // Oleada (centrifugadora del easter egg): la cola no se vacía y aparecen más deprisa
+    if (this.rush && !this.dogRound && this.queue < 4) { this.queue += 6; this.roundTotal = (this.roundTotal || 0) + 6; this._syncZLeft(); }
     if (this.queue > 0) {
       this.spawnTimer -= dt;
-      if (this.spawnTimer <= 0 && this.zombies.length < ZOMBIE.maxAlive) {
+      const maxAlive = this.dogRound ? DOG_ROUND.aliveBase + DOG_ROUND.alivePerPlayer * (this.players || 1) : ZOMBIE.maxAlive;
+      if (this.spawnTimer <= 0 && this.zombies.length < maxAlive) {
         const type = this._pickType();
         if (this._spawnOne(type)) {
           this.queue--;
-          this.spawnTimer = this.spawnDelay;
+          this.spawnTimer = this.rush ? Math.min(this.spawnDelay, 0.7) : this.spawnDelay;
           this._syncZLeft();
         } else {
           if (type === 'tank') this.pendingTanks++;
@@ -265,6 +307,18 @@ export class ZombieManager {
     gs.roundStartAt = now;
     let players = 1;
     try { players = Math.max(1, Object.keys(gs.players || {}).length); } catch { players = 1; }
+    // ¿Ronda de jefe? Tiene prioridad: si coincide con una de perros, los perros pasan a la siguiente
+    if (this.nextBossRound == null) this.nextBossRound = BOSS_RULES.firstRound;
+    const forced = this.forceBoss && ZOMBIE_TYPES[this.forceBoss] ? this.forceBoss : null;
+    this.forceBoss = null;
+    this.forcedKey = forced;
+    const scheduled = r >= this.nextBossRound;
+    const bossNow = scheduled || !!forced;
+    const deferred = this.dogsDeferred;
+    this.dogsDeferred = bossNow && isDogRound(r);
+    if (!bossNow && (isDogRound(r) || deferred)) { this._beginDogRound(r, players, now); return; }
+    this.dogRound = false;
+    gs.dogRound = false;
     this.queue = zombiesForRound(r, players);
     // Tanques: a partir de su ronda, con probabilidad creciente (y dos desde 'twoFrom')
     const T = ZOMBIE_TYPES.tank;
@@ -275,7 +329,11 @@ export class ZombieManager {
       if (r >= T.twoFrom && Math.random() < ch * 0.5) this.pendingTanks++;
     }
     this.queue += this.pendingTanks;
-    this.pendingBosses = r >= BOSS_RULES.from ? 1 + (r >= BOSS_RULES.twoFrom ? 1 : 0) : 0;
+    this.pendingBosses = 0;
+    if (scheduled) {
+      this.pendingBosses = 1 + (r >= BOSS_RULES.twoFrom ? 1 : 0);
+      this.nextBossRound = this._rollBossRound(r);
+    } else if (forced) this.pendingBosses = 1;
     this.queue += this.pendingBosses;
     this.roundTotal = this.queue;
     this.spawnedThisRound = 0;
@@ -289,8 +347,36 @@ export class ZombieManager {
     this._call('onRoundStart', r);
   }
 
+  // Siguiente ronda de jefe: 8, 9 o 10 rondas después de `after`
+  _rollBossRound(after) {
+    return after + BOSS_RULES.gapMin + Math.floor(Math.random() * (BOSS_RULES.gapMax - BOSS_RULES.gapMin + 1));
+  }
+
+  _beginDogRound(r, players, now) {
+    const gs = this.gs;
+    const nth = Math.floor(r / DOG_ROUND.every);          // 1.ª, 2.ª... ronda de perros
+    this.dogRound = true;
+    gs.dogRound = true;
+    this.queue = Math.min(DOG_ROUND.max, DOG_ROUND.base + DOG_ROUND.perPlayer * players + DOG_ROUND.perDogRound * (nth - 1));
+    this.pendingTanks = 0;
+    this.pendingBosses = 0;
+    this.roundTotal = this.queue;
+    this.spawnedThisRound = 0;
+    this.players = players;
+    this.health = zombieHealth(r);
+    this.speedChances = zombieSpeedChances(r);
+    this.spawnDelay = DOG_ROUND.spawnDelay;
+    this.spawnTimer = 2.5;                                 // un respiro tras el aviso
+    this.lastDogPos = null;
+    this._syncZLeft();
+    this._markDirty();
+    this._call('onRoundStart', r);
+    this._call('broadcastEvent', { e: 'dogRound', round: r });
+  }
+
   _endRound(now) {
     const gs = this.gs;
+    if (this.dogRound) this._call('onDogRoundEnd', this.lastDogPos);
     gs.roundState = 'intermission';
     gs.roundUntil = now + ROUND.intermission * 1000;
     if (gs.roundStartAt) gs.lastRoundTime = now - gs.roundStartAt;
@@ -302,6 +388,7 @@ export class ZombieManager {
   // Tipo del siguiente zombi de la cola
   _pickType() {
     const r = this.gs.round | 0;
+    if (this.dogRound) return 'dog';
     if (this.pendingBosses > 0 && (this.spawnedThisRound >= (this.roundTotal || 0) * BOSS_RULES.spawnAt
         || this.queue <= this.pendingBosses + (this.pendingTanks || 0))) {
       this.pendingBosses--;
@@ -322,6 +409,7 @@ export class ZombieManager {
 
   // Jefe al azar, distinto del último
   _nextBossKey() {
+    if (this.forcedKey) { const k = this.forcedKey; this.forcedKey = null; this.lastBoss = k; return k; }
     const opts = BOSS_KEYS.filter((k) => k !== this.lastBoss);
     const k = opts[Math.floor(Math.random() * opts.length)] || BOSS_KEYS[0];
     this.lastBoss = k;
@@ -336,7 +424,22 @@ export class ZombieManager {
     return ok;
   }
 
+  // Hace aparecer un jefe dentro del mapa en (x, z) a la altura y (batalla final del easter egg)
+  spawnBossAt(type, x, zz, y) {
+    if (!ZOMBIE_TYPES[type]) return null;
+    const z = this._newZombie(x, zz, null, 'inside', y);
+    this._applyType(z, type);
+    const t = this._targets[0];
+    if (t) z.rot = yawTo(x, zz, t.x, t.z);
+    this.zombies.push(z);
+    this.byId.set(z.id, z);
+    this._syncZLeft();
+    if (z.boss) { this._call('broadcastEvent', { e: 'boss', id: z.id, key: z.type, level: z.level }); this._syncBosses(); }
+    return z;
+  }
+
   _spawnOne(type = 'normal') {
+    if (type === 'dog') return this._spawnDog();
     const gs = this.gs;
     const open = new Set(Array.isArray(gs.openZones) ? gs.openZones : [0]);
     const counts = new Array(WINDOW_INFO.length).fill(0);
@@ -345,7 +448,7 @@ export class ZombieManager {
     if (!cands.length) return false;
     if (this.field.hasSources) {
       cands = cands
-        .map((w) => ({ w, d: this.field.at(w.land[0], w.land[1]) }))
+        .map((w) => ({ w, d: this.field.at(w.land[0], w.land[1], w.lv || 0) }))
         .sort((a, b) => a.d - b.d)
         .slice(0, 4)
         .map((o) => o.w);
@@ -369,8 +472,35 @@ export class ZombieManager {
     return true;
   }
 
+  // Perro: aparece con un rayo en un punto transitable a cierta distancia (de camino) de algún jugador
+  _spawnDog() {
+    const targets = this._targets;
+    if (!targets.length || !this.field.hasSources) return false;
+    for (let tries = 0; tries < 24; tries++) {
+      const t = targets[Math.floor(Math.random() * targets.length)];
+      const a = Math.random() * Math.PI * 2;
+      const d = DOG_ROUND.minDist + Math.random() * (DOG_ROUND.maxDist - DOG_ROUND.minDist);
+      const cx = Math.floor(t.x + Math.cos(a) * d), cz = Math.floor(t.z + Math.sin(a) * d);
+      const lv = MAP.levelOfY(t.y || 0);
+      if (!this.field.isWalkable(cx, cz, lv)) continue;
+      const pd = this.field.at(cx, cz, lv);
+      if (!Number.isFinite(pd) || pd < DOG_ROUND.minDist || pd > DOG_ROUND.maxDist * 1.6) continue;
+      const x = cx + 0.5, zz = cz + 0.5;
+      if (this.zombies.some((o) => Math.hypot(o.x - x, o.z - zz) < 1)) continue;
+      const z = this._newZombie(x, zz, null, 'inside', MAP.nodeY(lv, cz * MAP.W + cx));
+      z.rot = yawTo(x, zz, t.x, t.z);
+      this._applyType(z, 'dog');
+      this.zombies.push(z);
+      this.byId.set(z.id, z);
+      this.spawnedThisRound = (this.spawnedThisRound || 0) + 1;
+      this._call('broadcastEvent', { e: 'dogSpawn', id: z.id, x: r2(x), z: r2(zz) });
+      return true;
+    }
+    return false;
+  }
+
   // Objeto zombi base (normal). state: 'outside' (en un callejón de la ventana w) o 'inside'
-  _newZombie(x, zz, w, state) {
+  _newZombie(x, zz, w, state, y) {
     const { run, sprint } = this.speedChances;
     const rnd = Math.random();
     const cls = rnd < sprint ? 'sprint' : rnd < run ? 'run' : 'walk';
@@ -378,6 +508,7 @@ export class ZombieManager {
     return {
       id: this.nextId++,
       x, z: zz,
+      y: w ? (w.y || 0) : (y !== undefined ? y : MAP.levels[0].y),
       rot: w ? yawTo(x, zz, w.cx, w.cz) : Math.random() * Math.PI * 2,
       hp: this.health, maxHp: this.health,
       cls,
@@ -409,7 +540,23 @@ export class ZombieManager {
     if (!T || type === 'normal') return;
     z.type = type;
     z.tcode = T.code;
-    if (type === 'runner') {
+    if (type === 'dog') {
+      const r = this.gs.round | 0;
+      const extra = Math.max(0, (this.players || 1) - 1);
+      z.hp = z.maxHp = Math.round((T.hpBase + T.hpPerRound * r) * (1 + 0.15 * extra));
+      z.cls = 'sprint';
+      z.speed = T.speed * (0.93 + Math.random() * 0.14);
+      z.dmg = T.damage;
+      z.range = T.attackRange;
+      z.windup = T.windup;
+      z.cooldown = T.cooldown;
+      z.dog = true;
+    } else if (type === 'vampling') {
+      z.hp = z.maxHp = Math.max(1, Math.round(this.health * T.hpMult + T.hpAdd));
+      z.cls = 'sprint';
+      z.speed = T.speed * (0.94 + Math.random() * 0.12);
+      z.dmg = T.damage;
+    } else if (type === 'runner') {
       z.hp = z.maxHp = Math.max(1, Math.round(this.health * T.hpMult));
       z.cls = 'sprint';
       z.speed = T.speed * (0.94 + Math.random() * 0.12);
@@ -435,6 +582,7 @@ export class ZombieManager {
       const lv = r - BOSS_RULES.from;
       const extra = Math.max(0, (this.players || 1) - 1);
       z.boss = type;
+      z.final = !!T.final;
       z.level = r;
       const solo = (this.players || 1) <= 1 ? BALANCE.soloBossHp : 1;
       z.hp = z.maxHp = Math.round((T.hpBase + this.health * T.hpMult) * (1 + BOSS_RULES.hpPerRound * lv) * (1 + BOSS_RULES.hpPerExtraPlayer * extra) * solo);
@@ -445,7 +593,7 @@ export class ZombieManager {
       z.windup = T.windup;
       z.cooldown = T.cooldown;
       z.tearMult = T.tearMult;
-      const now = Date.now();
+      const now = this._clock();
       z.nextAbility = now + 4000 + Math.random() * 2000;    // carga / invocación / golpe al suelo
       z.nextAura = now + 1000;
       z.cloakAt = now + (T.cloak ? T.cloak.visible * 1000 : 0);
@@ -456,6 +604,7 @@ export class ZombieManager {
   // Multiplicador del daño que recibe un jefe (armadura del Acorazado, camuflaje del Espectro)
   _bossDamageFactor(z, inf) {
     const T = ZOMBIE_TYPES[z.boss];
+    if (z.mist) return 0;                   // vampiro hecho murciélagos: las balas lo atraviesan
     let k = 1;
     if (T.armor) {
       if (inf.kind === 'explosion') k = T.armor.explosion;
@@ -489,7 +638,7 @@ export class ZombieManager {
     if (T.aura && now >= z.nextAura) {
       z.nextAura = now + T.aura.every * 1000;
       for (const t of this._targets) {
-        if (Math.hypot(t.x - z.x, t.z - z.z) > T.aura.radius) continue;
+        if (flatDist(z, t) > T.aura.radius) continue;
         this._call('damagePlayer', t.pid, Math.round(T.aura.damage * z.dmg / T.damage), z);
         if (Math.random() < T.aura.infect) this._call('infectPlayer', t.pid);
       }
@@ -497,12 +646,14 @@ export class ZombieManager {
     if (T.summon && now >= z.nextAbility && this._targets.length) {
       z.nextAbility = now + T.summon.every * 1000;
       const alive = this.zombies.filter((o) => o.summonedBy === z.id).length;
-      const n = Math.min(T.summon.count, T.summon.maxAlive - alive);
+      const n = Math.min(T.summon.count, T.summon.maxAlive - alive, ZOMBIE.maxAlive - this.zombies.length);   // tope global: 24 a la vez
       const spots = [];
       for (let i = 0; i < n; i++) {
-        const p = randomPointNear(this.field, z.x, z.z, T.summon.radius, ZOMBIE.radius, this._solidIn);
+        this._curY = z.y || 0;
+        const p = randomPointNear(this.field, z.x, z.z, T.summon.radius, ZOMBIE.radius, this._solidIn, Math.random, MAP.nodeLevel(z.x, z.z, z.y || 0));
         if (!p) continue;
-        const s = this._newZombie(p.x, p.z, null, 'inside');
+        const s = this._newZombie(p.x, p.z, null, 'inside', z.y || 0);
+        if (T.summon.type) this._applyType(s, T.summon.type);
         s.summoned = true;
         s.summonedBy = z.id;
         this.zombies.push(s);
@@ -519,8 +670,38 @@ export class ZombieManager {
   // Habilidades activas al perseguir (carga del Carnicero, golpe al suelo del Acorazado). true = ya actuó
   _bossActive(z, best, bd, dt, now) {
     const T = ZOMBIE_TYPES[z.boss];
+    // Conde: se deshace en murciélagos y reaparece a la espalda del jugador
+    if (T.bats && now >= z.nextAbility && bd >= T.bats.min && bd < 900) {
+      z.mist = { until: now + T.bats.time * 1000, pid: best.pid };
+      z.nextAbility = now + T.bats.every * 1000;
+      z.flags |= ZF.MIST;
+      z.atk = null;
+      this._call('broadcastEvent', { e: 'bossAbility', id: z.id, a: 'batsOut', x: r2(z.x), y: r2(z.y || 0), z: r2(z.z) });
+      return true;
+    }
+    // Científico: descarga eléctrica a distancia (se avisa antes) y teletransporte por el salón
+    if (T.zap && !z.zap && now >= (z.nextZap || 0)) {
+      const t = this._targets.find((o) => flatDist(z, o) <= T.zap.range && this._call('losBetween', z, o));
+      z.nextZap = now + T.zap.every * 1000;
+      if (t) {
+        z.zap = { at: now + T.zap.windup * 1000, pid: t.pid };
+        this._call('broadcastEvent', { e: 'bossAbility', id: z.id, a: 'zapStart', pid: t.pid, x: r2(z.x), y: r2(z.y || 0), z: r2(z.z) });
+      }
+    }
+    if (T.blink && now >= (z.nextBlink || 0)) {
+      z.nextBlink = now + T.blink.every * 1000 * (0.8 + Math.random() * 0.4);
+      this._curY = z.y || 0; this._curX = z.x; this._curZ = z.z;
+      const p = randomPointNear(this.field, z.x, z.z, T.blink.radius, ZOMBIE.radius, this._solidIn, Math.random, MAP.nodeLevel(z.x, z.z, z.y || 0));
+      if (p) {
+        const from = [r2(z.x), r2(z.z)];
+        z.x = p.x; z.z = p.z;
+        z.atk = null; z.stuckT = 0; z.ax = z.x; z.az = z.z;
+        this._call('broadcastEvent', { e: 'bossAbility', id: z.id, a: 'blink', from, x: r2(z.x), y: r2(z.y || 0), z: r2(z.z) });
+        return true;
+      }
+    }
     if (T.charge && now >= z.nextAbility && bd >= T.charge.min && bd <= T.charge.max
-        && clearPath(z.x, z.z, best.x, best.z, ZOMBIE.radius, this._solidIn)) {
+        && this._clear(z.x, z.z, best.x, best.z, ZOMBIE.radius)) {
       const dx = best.x - z.x, dz = best.z - z.z, d = Math.hypot(dx, dz) || 1;
       z.charge = { dx: dx / d, dz: dz / d, until: now + T.charge.time * 1000, hit: false };
       z.nextAbility = now + T.charge.every * 1000;
@@ -549,7 +730,7 @@ export class ZombieManager {
     z.x = r.x; z.z = r.z;
     if (!c.hit) {
       for (const t of this._targets) {
-        if (Math.hypot(t.x - z.x, t.z - z.z) > 1.4) continue;
+        if (flatDist(z, t) > 1.4) continue;
         c.hit = true;
         const res = this._call('damagePlayer', t.pid, Math.round(z.dmg * T.charge.dmgMult), z);
         const hit = res && typeof res === 'object' ? !!res.hit : !!res;
@@ -564,13 +745,54 @@ export class ZombieManager {
     }
   }
 
+  // Forma de murciélagos: quieto e invulnerable; al acabar reaparece a la espalda de su objetivo
+  _updMist(z, now) {
+    const T = ZOMBIE_TYPES[z.boss];
+    z.anim = ZA.IDLE;
+    if (now < z.mist.until) return;
+    const t = this._targetPos(z.mist.pid) || this._targets[0];
+    z.mist = null;
+    z.flags &= ~ZF.MIST;
+    if (t && Math.abs((t.y || 0) - (z.y || 0)) < 1.5) {
+      // detrás del jugador (según hacia dónde mira), o lo más cerca posible
+      const fx = -Math.sin(t.yaw || 0), fz = -Math.cos(t.yaw || 0);
+      this._curY = t.y || 0; this._curX = t.x; this._curZ = t.z;
+      const lv = MAP.nodeLevel(t.x, t.z, t.y || 0);
+      let spot = null;
+      for (const k of [1, 0.7, 0.4]) {
+        const px = t.x - fx * T.bats.behind * k, pz = t.z - fz * T.bats.behind * k;
+        if (this.field.isWalkable(Math.floor(px), Math.floor(pz), lv) && this._clear(t.x, t.z, px, pz, ZOMBIE.radius)) { spot = { x: px, z: pz }; break; }
+      }
+      if (spot) { z.x = spot.x; z.z = spot.z; z.y = MAP.groundY(spot.x, spot.z, t.y || 0); }
+    }
+    z.rot = t ? yawTo(z.x, z.z, t.x, t.z) : z.rot;
+    z.nextAttackAt = Math.min(z.nextAttackAt, now + 250);
+    z.stuckT = 0; z.ax = z.x; z.az = z.z;
+    this._call('broadcastEvent', { e: 'bossAbility', id: z.id, a: 'batsIn', x: r2(z.x), y: r2(z.y || 0), z: r2(z.z) });
+  }
+
+  // Descarga eléctrica del científico: impacta si el objetivo sigue a la vista cuando acaba de cargar
+  _updZap(z, now) {
+    const T = ZOMBIE_TYPES[z.boss];
+    if (now < z.zap.at) return;
+    const t = this._targetPos(z.zap.pid);
+    z.zap = null;
+    let hit = false;
+    if (t && flatDist(z, t) <= T.zap.range * 1.2 && this._call('losBetween', z, t)) {
+      const res = this._call('damagePlayer', t.pid, Math.round(T.zap.damage * z.dmg / T.damage), z);
+      hit = !!(res && (typeof res === 'object' ? res.hit : res));
+    }
+    this._call('broadcastEvent', { e: 'bossAbility', id: z.id, a: 'zap', pid: t ? t.pid : null, hit, x: r2(z.x), y: r2(z.y || 0), z: r2(z.z),
+      tx: t ? r2(t.x) : 0, ty: t ? r2((t.y || 0) + 1.2) : 0, tz: t ? r2(t.z) : 0 });
+  }
+
   _updSlam(z, now) {
     const T = ZOMBIE_TYPES[z.boss];
     z.anim = ZA.ATTACK;
     if (now < z.slam.at) return;
     z.slam = null;
     for (const t of this._targets) {
-      const d = Math.hypot(t.x - z.x, t.z - z.z);
+      const d = flatDist(z, t);
       if (d > T.slam.radius) continue;
       this._call('damagePlayer', t.pid, Math.round(z.dmg * T.slam.dmgMult * (1 - 0.4 * d / T.slam.radius)), z);
     }
@@ -606,7 +828,22 @@ export class ZombieManager {
 
   // ------------------------------------------------------------------ IA por zombi
 
+  // Línea libre para el zombi que se está moviendo (respeta escaleras; restaura su posición de referencia)
+  _clear(x0, z0, x1, z1, r) {
+    const cx = this._curX, cz = this._curZ;
+    const ok = clearPath(x0, z0, x1, z1, r, this._solidIn, this._pathSample);
+    this._curX = cx; this._curZ = cz;
+    return ok;
+  }
+
   _updateZombie(z, dt, now) {
+    this._curY = z.y || 0; this._curX = z.x; this._curZ = z.z;
+    this._updateZombieInner(z, dt, now);
+    // pega los pies al suelo (escaleras incluidas) de los zombis que están dentro
+    if (!z.dead && INSIDE_STATES.has(z.state)) z.y = MAP.groundY(z.x, z.z, z.y || 0);
+  }
+
+  _updateZombieInner(z, dt, now) {
     // Muerte programada por la bomba nuclear
     if (z.dieAt) {
       if (now >= z.dieAt) this._kill(z, null, { kind: 'nuke', part: 'b' });
@@ -634,6 +871,8 @@ export class ZombieManager {
       this._bossPassive(z, dt, now);
       if (z.dead) return;
       if (z.charge) { this._updCharge(z, dt, now); return; }
+      if (z.mist) { this._updMist(z, now); return; }
+      if (z.zap) this._updZap(z, now);
       if (z.slam) { this._updSlam(z, now); return; }
     }
     // Explosivo con la mecha encendida: tiembla quieto y estalla
@@ -683,7 +922,7 @@ export class ZombieManager {
     }
     if (dist > 0.12) {
       const step = Math.min(dist, z.speed * dt);
-      const r = moveCircle(z.x, z.z, (dx / dist) * step, (dz / dist) * step, ZOMBIE.radius, solidForZombieOutside);
+      const r = moveCircle(z.x, z.z, (dx / dist) * step, (dz / dist) * step, ZOMBIE.radius, this._solidOut);
       z.x = r.x; z.z = r.z;
       turnTowards(z, yawTo(0, 0, dx, dz), dt);
       z.anim = moveAnim(z);
@@ -710,7 +949,7 @@ export class ZombieManager {
       const lx = w.land[0] + 0.5, lz = w.land[1] + 0.5;
       let victim = null, vd = WINDOW_REACH;
       for (const t of this._targets) {
-        const d = Math.hypot(t.x - lx, t.z - lz);
+        const d = Math.hypot(t.x - lx, t.z - lz) + (Math.abs((t.y || 0) - (w.y || 0)) > 1.5 ? 1000 : 0);
         if (d <= vd) { vd = d; victim = t; }
       }
       if (victim) { this._startAttack(z, victim.pid, now, true); return; }
@@ -780,15 +1019,18 @@ export class ZombieManager {
       if (tp) {
         if (a.through) {
           const w = WINDOW_INFO[z.win];
-          inRange = Math.hypot(tp.x - (w.land[0] + 0.5), tp.z - (w.land[1] + 0.5)) <= WINDOW_REACH + 0.35;
+          inRange = Math.hypot(tp.x - (w.land[0] + 0.5), tp.z - (w.land[1] + 0.5)) <= WINDOW_REACH + 0.35 && Math.abs((tp.y || 0) - (w.y || 0)) < 1.5;
         } else {
-          inRange = Math.hypot(tp.x - z.x, tp.z - z.z) <= z.range + 0.35;
+          inRange = flatDist(z, tp) <= z.range + 0.35;
         }
       }
       let hit = false, blocked = false;
       if (inRange) {
         const res = this._call('damagePlayer', a.pid, z.dmg, z);
         if (res && typeof res === 'object') { hit = !!res.hit; blocked = !!res.blocked; } else hit = !!res;
+        // el Conde se cura con cada mordisco
+        const TB = z.boss && ZOMBIE_TYPES[z.boss];
+        if (hit && TB && TB.drain) { z.hp = Math.min(z.maxHp, z.hp + z.dmg * TB.drain); this._syncBosses(); }
       }
       this._call('broadcastEvent', { e: 'zatk', id: z.id, pid: a.pid, hit, blocked });
     }
@@ -818,7 +1060,7 @@ export class ZombieManager {
     z.wander = null;
     let best = null, bd = Infinity;
     for (const t of targets) {
-      const d = Math.hypot(t.x - z.x, t.z - z.z);
+      const d = flatDist(z, t);
       if (d < bd) { bd = d; best = t; }
     }
     z.nearD = bd;
@@ -843,20 +1085,20 @@ export class ZombieManager {
     }
     let tx = best.x, tz = best.z;
     let direct = false;
-    if (bd < DIRECT_RANGE && clearPath(z.x, z.z, best.x, best.z, ZOMBIE.radius * 0.9, this._solidIn)) direct = true;
+    if (bd < DIRECT_RANGE && this._clear(z.x, z.z, best.x, best.z, ZOMBIE.radius * 0.9)) direct = true;
     if (!direct) {
       const cx = Math.floor(z.x), cz = Math.floor(z.z);
-      const path = this.field.follow(cx, cz, 4);
+      const path = this.field.follow(cx, cz, 4, MAP.nodeLevel(z.x, z.z, z.y || 0));
       if (path.length) {
         // "Tirar de la cuerda": la celda más lejana del camino alcanzable en línea recta
         let pick = path[0];
         for (let k = path.length - 1; k >= 1; k--) {
           const p = path[k];
-          if (clearPath(z.x, z.z, p[0] + 0.5, p[1] + 0.5, ZOMBIE.radius, this._solidIn)) { pick = p; break; }
+          if (this._clear(z.x, z.z, p[0] + 0.5, p[1] + 0.5, ZOMBIE.radius)) { pick = p; break; }
         }
         tx = pick[0] + 0.5; tz = pick[1] + 0.5;
         // Si la celda final es la del jugador, ir directamente a él
-        if (this.field.at(pick[0], pick[1]) === 0 && Math.floor(best.x) === pick[0] && Math.floor(best.z) === pick[1]) {
+        if (this.field.at(pick[0], pick[1], pick[2]) === 0 && Math.floor(best.x) === pick[0] && Math.floor(best.z) === pick[1]) {
           tx = best.x; tz = best.z;
         }
       }
@@ -876,7 +1118,7 @@ export class ZombieManager {
   _wander(z, dt, now) {
     z.nearD = Infinity;
     if (!z.wander || now > z.wanderUntil) {
-      z.wander = randomPointNear(this.field, z.x, z.z, 6, ZOMBIE.radius, this._solidIn);
+      z.wander = randomPointNear(this.field, z.x, z.z, 6, ZOMBIE.radius, this._solidIn, Math.random, MAP.nodeLevel(z.x, z.z, z.y || 0));
       z.wanderUntil = now + 4000 + Math.random() * 4000;
       if (!z.wander) { z.anim = z.crawler ? ZA.CRAWL : ZA.IDLE; return; }
     }
@@ -912,6 +1154,7 @@ export class ZombieManager {
         if (!aIn && a.win !== b.win) continue;
         const bFixed = b.state === 'tearing' || b.state === 'climbing' || !!b.dieAt;
         if (aFixed && bFixed) continue;
+        if (Math.abs((a.y || 0) - (b.y || 0)) > 1.5) continue;   // plantas distintas
         let dx = b.x - a.x, dz = b.z - a.z;
         const d2 = dx * dx + dz * dz;
         if (d2 >= S2) continue;
@@ -932,6 +1175,7 @@ export class ZombieManager {
     for (const z of zs) {
       if (z.dead || !INSIDE_STATES.has(z.state)) continue;
       for (const p of bodies) {
+        if (Math.abs((p.y || 0) - (z.y || 0)) > 1.5) continue;
         let dx = z.x - p.x, dz = z.z - p.z;
         const d = Math.hypot(dx, dz);
         if (d >= PLAYER_BODY) continue;
@@ -943,11 +1187,12 @@ export class ZombieManager {
   }
 
   _nudge(z, dx, dz, inside) {
+    this._curY = z.y || 0; this._curX = z.x; this._curZ = z.z;
     if (inside) {
       const r = resolveCircle(z.x + dx, z.z + dz, ZOMBIE.radius, this._solidIn);
       z.x = r[0]; z.z = r[1];
     } else {
-      const r = resolveCircle(z.x + dx, z.z + dz, ZOMBIE.radius, solidForZombieOutside);
+      const r = resolveCircle(z.x + dx, z.z + dz, ZOMBIE.radius, this._solidOut);
       z.x = r[0]; z.z = r[1];
     }
   }
@@ -958,14 +1203,15 @@ export class ZombieManager {
     if (!this._targets.length || !this.field.hasSources) { z.stuckT = 0; z.farT = 0; return; }
     let d;
     if (INSIDE_STATES.has(z.state)) {
-      d = this.field.atPos(z.x, z.z);
+      const lv = MAP.nodeLevel(z.x, z.z, z.y || 0);
+      d = this.field.at(Math.floor(z.x), Math.floor(z.z), lv);
       if (d === Infinity) {
-        const c = this.field.nearestWalkable(z.x, z.z, 1);
-        d = c ? this.field.at(c[0], c[1]) : Infinity;
+        const c = this.field.nearestWalkable(z.x, z.z, 1, lv);
+        d = c ? this.field.at(c[0], c[1], lv) : Infinity;
       }
     } else {
       const w = WINDOW_INFO[z.win];
-      d = this.field.at(w.land[0], w.land[1]) + 2;
+      d = this.field.at(w.land[0], w.land[1], w.lv || 0) + 2;
     }
     if (d > FAR_DIST) z.farT += dt; else z.farT = 0;
     if (z.farT >= FAR_TIME) { this._respawn(z); return; }
@@ -1015,6 +1261,7 @@ export class ZombieManager {
 
   _kill(z, pid, info) {
     if (z.dead) return;
+    if (z.dog) this.lastDogPos = { x: z.x, z: z.z, y: z.y || 0 };
     this._remove(z);
     this._syncZLeft();
     const inf = info || { kind: 'bullet', part: 'b' };
