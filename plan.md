@@ -251,6 +251,28 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
     mandar su input, no su posición; el servidor simula con la física de `shared/collision.js`; hace
     falta predicción + reconciliación en el cliente para que no se sienta con retraso en LAN). Se aborda
     después de que `Player` esté terminado, no mezclado con este paso.
-  - **Siguiente en la cola**: clase `Zombie` (`server/zombies.js`, ~51 KB) — ahí hay más variedad real
-    de comportamiento (perro, corredor, bombardero, tanque, 5 jefes) que en `Weapon`, así que rinde más
-    tener una clase (con lugar para subclases) desde ya.
+  - **Paso 2 (hecho): `server/entities/zombie.js`**, clase `Zombie` que envuelve el mismo objeto de
+    datos que `ZombieManager._newZombie` construye (misma referencia). Este paso se quedó corto a
+    propósito, igual que Player con la autoridad de movimiento: solo migró `takeDamage` (antes
+    `ZombieManager.damage`) y `die` (antes el `z.dead = true` suelto dentro de `_remove`), más dos
+    ayudantes que solo usaba el daño (`bossDamageFactor`, `makeCrawler`). **Update/procesarMovimiento y
+    atacar se quedan en `ZombieManager` por ahora**: `_updOutside/_updTearing/_updClimbing/_updInside/
+    _updAttack` y las habilidades de los jefes dependen de recursos que son del MANAGER, no de un zombi
+    en particular — el campo de flujo (una sola malla de pathfinding para los hasta 24 zombis a la vez,
+    no una por zombi), la lista de objetivos del tick actual, y las funciones de colisión que cambian
+    según la planta que se esté evaluando en ese instante. La clase ya guarda una referencia a `manager`
+    (sin usar todavía) para cuando llegue ese paso, así no hace falta volver a tocar los 3 sitios donde
+    se crea un zombi (`_spawnOne`/`_spawnDog`/`spawnBossAt`).
+    `ZombieManager.damage()` bajó de ~35 líneas a una delegación de ~12; se borraron `_bossDamageFactor`
+    y `_makeCrawler` (nadie más los usaba). `INSIDE_STATES` (que sí usan bastante las partes que se
+    quedaron) se mudó a `zombie.js` y se importa de vuelta, para no duplicarlo.
+    Verificado: `node --check`, `validate-map`, dos corridas de `bot-test.js` (ronda 3 normal —27
+    bajas/9 a la cabeza en la segunda, saliendo directo desde la ronda 6 con `--round 6 --god` para
+    cruzarse con más variedad de zombis y una explosión de granada real—, 0 errores en ambas), y una
+    prueba aislada de la clase (29 aserciones: daño normal/letal/ya muerto/con bomba nuclear en curso,
+    muerte instantánea que no afecta a jefes, armadura del Acorazado según el tipo de golpe, camuflaje
+    del Espectro, invulnerabilidad del Conde hecho murciélagos, quemadura de Hades sin reiniciarse con
+    su propio tic, salvarse reptante en el borde de una explosión, perder las piernas sin estar en el
+    borde, un tanque nunca queda reptante, `die()`).
+  - **Siguiente en la cola**: `Weapon` (cliente, `public/js/weapons/weaponSystem.js` + `shared/weapons.js`)
+    — jerarquía real acordada con el usuario (clase base + las armas concretas derivan de ella).

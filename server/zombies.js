@@ -10,13 +10,13 @@ import { WINDOW_INFO, DIRS, MAP } from '../shared/map.js';
 import { moveCircle, resolveCircle, solidForZombieInside, solidForZombieOutside } from '../shared/collision.js';
 import { ZA, ZF, r2 } from '../shared/protocol.js';
 import { FlowField, clearPath, randomPointNear, doorsKey } from './nav.js';
+import { Zombie, INSIDE_STATES } from './entities/zombie.js';
 
 const FIELD_INTERVAL = 0.25;      // s entre recálculos periódicos del campo de flujo
 const SEP_RADIUS = 0.75;          // separación mínima entre zombis
 const PLAYER_BODY = 0.62;         // distancia mínima entre el centro de un zombi y un jugador
 const WINDOW_REACH = 1.0;         // un zombi en la ventana golpea a quien esté a esta distancia de la celda interior
 const BURN_DPS = 150;             // Hades: daño por segundo del fuego
-const BURN_TIME = 3;              // s de quemadura
 const BURN_TICK = 0.25;           // s entre aplicaciones del daño por fuego
 const STUN_TIME = 0.6;            // s de aturdimiento tras un golpe de escudo
 const KNOCK_TIME = 0.25;          // s que dura el desplazamiento del empujón
@@ -26,12 +26,10 @@ const FAR_DIST = 45;              // m de camino: demasiado lejos de todos los j
 const FAR_TIME = 10;              // s demasiado lejos antes de reaparecer
 const MAX_PER_POCKET = 5;         // zombis como máximo esperando en un mismo callejón
 const TURN_RATE = 10;             // rad/s de giro visual
-const NUKE_SPREAD_MS = 900;
-const CRAWL_EDGE = 0.4;           // fracción del radio de la explosión a partir de la que puede salvarse como reptante
-const CRAWL_SAVE_CHANCE = 0.4;    // probabilidad de quedar reptante en vez de morir (en el borde)
-const CRAWL_SURVIVE_CHANCE = 0.5; // probabilidad de perder las piernas si sobrevive a la explosión       // la bomba nuclear mata escalonadamente en este intervalo
+const NUKE_SPREAD_MS = 900;       // la bomba nuclear mata escalonadamente en este intervalo
+// BURN_TIME/CRAWL_EDGE/CRAWL_SAVE_CHANCE/CRAWL_SURVIVE_CHANCE/INSIDE_STATES: ahora en entities/zombie.js
+// (los usa Zombie.takeDamage); INSIDE_STATES se sigue usando bastante acá también, de ahí el import.
 const OUTSIDE_STATES = new Set(['outside', 'tearing', 'climbing']);
-const INSIDE_STATES = new Set(['inside', 'attacking', 'stunned']);
 
 // Puestos de espera en el callejón (profundidad, lado) dejando libre el carril central hacia la ventana
 const WAIT_SPOTS = [[2, -1], [2, 1], [3, -1], [3, 1], [3, 0]];
@@ -162,39 +160,22 @@ export class ZombieManager {
   }
 
   // Aplica daño a un zombi. info: { part, kind, weapon, upgraded, instakill, special, knockFrom }
+  // Delegado a Zombie.takeDamage (entities/zombie.js): esa clase decide y muta (daño, jefe/armadura,
+  // quemadura, reptante); acá solo se traduce el resultado a lo que sigue siendo de la COLECCIÓN
+  // (sincronizar gs.bosses, sacarlo de las listas si murió, avisar a Game).
   damage(zid, amount, pid, info = {}) {
     const z = this.byId.get(zid);
-    if (!z || z.dead || z.dieAt) return { killed: false, existed: false };
-    const inf = info || {};
-    let amt = Number(amount);
-    if (!Number.isFinite(amt) || amt < 0) amt = 0;
-    if (inf.instakill && !z.boss) amt = Math.max(amt, z.hp);   // Muerte Instantánea no afecta a los jefes
-    if (z.boss) amt *= this._bossDamageFactor(z, inf);
-    const now = this._clock();
-    if (inf.special === 'fire' && inf.kind !== 'fire') {
-      z.burnUntil = now + BURN_TIME * 1000;
-      z.burnPid = pid || null;
-      z.flags |= ZF.BURNING;
-    }
-    if (amt <= 0) return { killed: false, existed: true };
-    const canCrawl = inf.kind === 'explosion' && !z.crawler && !z.dog && z.type !== 'tank' && z.type !== 'bomber' && !z.boss
-      && INSIDE_STATES.has(z.state) && !inf.instakill;
-    // Como en CoD: en el borde de una explosión, un zombi que iba a morir puede quedar vivo sin piernas
-    if (canCrawl && z.hp - amt <= 0 && (inf.edge || 0) >= CRAWL_EDGE && Math.random() < CRAWL_SAVE_CHANCE) {
-      z.hp = Math.max(1, Math.round(z.maxHp * 0.3));
-      this._makeCrawler(z);
-      return { killed: false, existed: true };
-    }
-    z.hp -= amt;
-    if (z.boss) this._syncBosses();
-    if (z.hp <= 0) {
+    if (!z) return { killed: false, existed: false };
+    const r = new Zombie(z, this).takeDamage(amount, pid, info, this._clock());
+    if (!r.existed) return { killed: false, existed: false };
+    if (r.appliedDamage && z.boss) this._syncBosses();
+    if (r.killed) {
       // Copia, no mutación: info puede venir compartido entre varias llamadas (p. ej. el impacto directo y
       // el bucle de salpicadura de una misma explosión) — escribir amt directamente en él se filtraría a
       // los demás zombis golpeados por la misma explosión.
-      this._kill(z, pid || null, { ...inf, amt });
+      this._kill(z, pid || null, { ...(info || {}), amt: r.amt });
       return { killed: true, existed: true };
     }
-    if (canCrawl && Math.random() < CRAWL_SURVIVE_CHANCE) this._makeCrawler(z);
     return { killed: false, existed: true };
   }
 
@@ -604,19 +585,8 @@ export class ZombieManager {
     }
   }
 
-  // Multiplicador del daño que recibe un jefe (armadura del Acorazado, camuflaje del Espectro)
-  _bossDamageFactor(z, inf) {
-    const T = ZOMBIE_TYPES[z.boss];
-    if (z.mist) return 0;                   // vampiro hecho murciélagos: las balas lo atraviesan
-    let k = 1;
-    if (T.armor) {
-      if (inf.kind === 'explosion') k = T.armor.explosion;
-      else if (inf.kind === 'melee' || inf.kind === 'shield') k = T.armor.melee;
-      else if (inf.kind === 'bullet' && inf.part !== 'h') k = T.armor.body;
-    }
-    if (T.cloak && z.cloaked) k *= T.cloak.damageTaken;
-    return k;
-  }
+  // (el multiplicador de daño de jefe -antes _bossDamageFactor- ahora es Zombie.bossDamageFactor,
+  // en entities/zombie.js; solo lo usaba damage())
 
   // Estado de los jefes vivos para el HUD (gs.bosses)
   _syncBosses() {
@@ -1236,14 +1206,8 @@ export class ZombieManager {
     return null;
   }
 
-  _makeCrawler(z) {
-    z.crawler = true;
-    z.flags |= ZF.CRAWLER;
-    z.speed = ZOMBIE.crawlSpeed * (0.9 + Math.random() * 0.2);
-  }
-
   _remove(z) {
-    z.dead = true;
+    new Zombie(z, this).die();
     const i = this.zombies.indexOf(z);
     if (i >= 0) this.zombies.splice(i, 1);
     this.byId.delete(z.id);
