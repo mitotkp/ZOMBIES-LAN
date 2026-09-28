@@ -27,6 +27,7 @@ const DIM = {
   upperArm: 0.28, forearm: 0.25,
 };
 const SHIN_FULL = DIM.shin + DIM.sole;
+const DISMEMBER_REF_LOG = Math.log10(451);   // daño de una granada (GRENADE.damage=450): ver _pieceLaunch
 
 // Índices de la pose (valores con signo "semántico"; se convierten al aplicarlos)
 const HIPY = 0, HIPZ = 1, HIPP = 2, HIPYAW = 3, HIPROLL = 4;
@@ -1778,6 +1779,7 @@ export class ZombieModel {
   startDeath(fx, pushX = 0, pushZ = 0, env = {}) {
     if (this.death) return;
     const r = Math.random;
+    const amt = Number.isFinite(env.amt) ? env.amt : 0;   // daño del golpe que mató: escala el desmembramiento
     const rot = this.group.rotation.y;
     const cs = Math.cos(rot), sn = Math.sin(rot);
     let plen = Math.hypot(pushX, pushZ);
@@ -1821,7 +1823,9 @@ export class ZombieModel {
     }
     switch (fx) {
       case 'head':
-        this._removeHead(env);
+        // Cuanto más "de sobra" mató el tiro, más probable que la cabeza salga volando en vez de solo desaparecer.
+        if (amt > 0 && r() < clamp01(0.3 + amt / 200)) this._popHead(env, px, pz, amt);
+        else this._removeHead(env);
         this._throwHat(env, px, pz);
         D.fountain = 1.1;
         if (!crawler) {
@@ -1837,7 +1841,7 @@ export class ZombieModel {
         const charred = fx === 'nuke' || r() < 0.5;
         if (charred) this._char();
         if (fx === 'explode') {
-          this._dismember(env, px, pz);
+          this._dismember(env, px, pz, amt);
           if (!crawler) { D.omega = 3 + r() * 2; D.slideX = px * 2.4; D.slideZ = pz * 2.4; D.lift = 0.25; }
         } else if (!crawler) {
           D.mode = 'crumple';
@@ -1855,6 +1859,9 @@ export class ZombieModel {
       case 'melee':
         if (!crawler) { D.omega = 1.8; D.slideX = px * 0.8; D.slideZ = pz * 0.8; }
         this.spr.nod.w -= 8;
+        // Con el cuchillo normal (~150 de daño) casi nunca; con el Bowie o similares (~1000) casi siempre —
+        // sin tener que mirar el arma por nombre, solo cuánto daño hizo el golpe.
+        if (amt > 0 && r() < clamp01((amt - 150) / 700)) this._popArm(env, px, pz, amt);
         break;
       default:
         if (!crawler) {
@@ -1906,36 +1913,71 @@ export class ZombieModel {
       wx: (Math.random() - 0.5) * 12, wy: (Math.random() - 0.5) * 8, wz: (Math.random() - 0.5) * 12, floor: 0.02, rest: false, bleed: 0 });
   }
 
-  // Desmembramiento: cabeza, brazos y piernas salen volando
-  _dismember(env, px, pz) {
+  // Velocidad de lanzamiento de una pieza desprendida, escalada por lo fuerte que fue el golpe (amt = daño
+  // de ese golpe). Escala logarítmica porque el daño de un zombi varía muchísimo según ronda/arma (de ~10 a
+  // varios miles) — con una escala lineal una explosión en ronda alta lanzaría las piezas a velocidad absurda.
+  // Calibrada para que scale≈1 (el comportamiento de siempre, ya probado) caiga justo en el daño de una
+  // granada (GRENADE.damage=450) — el caso para el que se afinaron a ojo las velocidades originales.
+  _pieceLaunch(px, pz, amt, baseUp, baseSpeed) {
+    const r = Math.random;
+    const scale = Math.max(0.4, Math.min(2.0, Math.log10(1 + Math.max(0, amt || 0)) / DISMEMBER_REF_LOG));
+    const sp = (baseSpeed + r() * baseSpeed * 1.4) * scale;
+    return {
+      vx: px * sp + (r() - 0.5) * 3 * scale, vy: (baseUp + r() * 3) * scale, vz: pz * sp + (r() - 0.5) * 3 * scale,
+      wx: (r() - 0.5) * 16, wy: (r() - 0.5) * 10, wz: (r() - 0.5) * 16,
+    };
+  }
+
+  // Separa obj del esqueleto del zombi (preservando su transformada de mundo) y lo convierte en una pieza
+  // suelta. Con physics (PhysicsWorld compartido, vía env.physics) es un cuerpo rígido real que choca con el
+  // mapa de verdad (muros, props, escaleras); sin él (aún cargando Rapier), usa la física simple de siempre
+  // (gravedad + suelo plano en floor) — mismo patrón de respaldo que el ragdoll del jugador.
+  _launchPiece(env, obj, v, bleed, shape) {
     const parent = this.group.parent;
     if (!parent) return;
+    parent.attach(obj);
+    const physics = env && env.physics;
+    const piece = { obj, vx: v.vx, vy: v.vy, vz: v.vz, wx: v.wx, wy: v.wy, wz: v.wz, floor: 0.06, rest: false, bleed, gib: null };
+    if (physics) piece.gib = physics.createGib(obj, shape, { x: v.vx, y: v.vy, z: v.vz }, { x: v.wx, y: v.wy, z: v.wz });
+    this.pieces.push(piece);
+  }
+
+  _launchArm(env, armP, px, pz, amt) {
+    this._goreCap(this.spine, armP.sh.position.x, armP.sh.position.y, 0, 0.055);
+    this._launchPiece(env, armP.sh, this._pieceLaunch(px, pz, amt, 3.5, 2.5), 0.8,
+      { type: 'capsule', halfHeight: 0.2, radius: 0.06, offset: { x: 0, y: -0.26, z: 0 } });
+  }
+
+  // Cabeza suelta: al desmembrar por explosión, o sola por un tiro a la cabeza especialmente destructivo
+  // (ver el case 'head' de startDeath).
+  _popHead(env, px, pz, amt) {
+    this.group.updateMatrixWorld(true);
+    this._goreCap(this.spine, 0, DIM.neckY + 0.02, 0.012, 0.065);
+    this._launchPiece(env, this.neck, this._pieceLaunch(px, pz, amt, 4.5, 2.5), 1.2,
+      { type: 'ball', radius: 0.15, offset: { x: 0, y: DIM.headC, z: 0 } });
+    this.hat = null;
+  }
+
+  // Un brazo suelto por un golpe cuerpo a cuerpo muy fuerte (ver el case 'melee' de startDeath).
+  _popArm(env, px, pz, amt) {
+    this.group.updateMatrixWorld(true);
+    this._launchArm(env, Math.random() < 0.5 ? this.armL : this.armR, px, pz, amt);
+  }
+
+  // Desmembramiento por explosión: cabeza, brazos y piernas pueden salir volando, cada uno con su propia
+  // probabilidad (ver _launchPiece/_pieceLaunch para cómo se lanza cada pieza).
+  _dismember(env, px, pz, amt) {
+    if (!this.group.parent) return;
     this.group.updateMatrixWorld(true);
     const r = Math.random;
-    const launch = (obj, up, bleed) => {
-      parent.attach(obj);
-      const sp = 2.5 + r() * 3.5;
-      this.pieces.push({
-        obj, vx: px * sp + (r() - 0.5) * 3, vy: up + r() * 3, vz: pz * sp + (r() - 0.5) * 3,
-        wx: (r() - 0.5) * 16, wy: (r() - 0.5) * 10, wz: (r() - 0.5) * 16, floor: 0.06, rest: false, bleed,
-      });
-    };
-    if (r() < 0.75 && this.neck.visible) {
-      this._goreCap(this.spine, 0, DIM.neckY + 0.02, 0.012, 0.065);
-      launch(this.neck, 4.5, 1.2);
-      this.hat = null;
-    }
-    for (const armP of [this.armL, this.armR]) {
-      if (r() < 0.6) {
-        this._goreCap(this.spine, armP.sh.position.x, armP.sh.position.y, 0, 0.055);
-        launch(armP.sh, 3.5, 0.8);
-      }
-    }
+    if (r() < 0.75 && this.neck.visible) this._popHead(env, px, pz, amt);
+    for (const armP of [this.armL, this.armR]) if (r() < 0.6) this._launchArm(env, armP, px, pz, amt);
     if (!this.crawler) {
       for (const legP of [this.legL, this.legR]) {
         if (r() < 0.55) {
           this._goreCap(this.hips, legP.th.position.x, legP.th.position.y, 0, 0.07);
-          launch(legP.th, 2.5, 0.8);
+          this._launchPiece(env, legP.th, this._pieceLaunch(px, pz, amt, 2.5, 2.5), 0.8,
+            { type: 'capsule', halfHeight: 0.3, radius: 0.08, offset: { x: 0, y: -0.39, z: 0 } });
         }
       }
     }
@@ -2066,17 +2108,30 @@ export class ZombieModel {
   _updatePieces(dt, fxs) {
     for (const p of this.pieces) {
       if (p.rest) continue;
-      p.vy -= 9.8 * dt;
       const o = p.obj;
-      o.position.x += p.vx * dt; o.position.y += p.vy * dt; o.position.z += p.vz * dt;
-      o.rotation.x += p.wx * dt; o.rotation.y += p.wy * dt; o.rotation.z += p.wz * dt;
-      if (o.position.y < p.floor) {
-        o.position.y = p.floor;
-        if (p.vy < -1.5) {
-          p.vy = -p.vy * 0.3; p.vx *= 0.5; p.vz *= 0.5; p.wx *= 0.5; p.wy *= 0.5; p.wz *= 0.5;
-          if (fxs && typeof fxs.bloodPool === 'function' && p.bleed > 0) fxs.bloodPool(o.position.clone().setY(0), 0.25);
-        } else {
+      if (p.gib) {
+        p.gib.sampleInto(o);
+        const lv = p.gib.body.linvel();
+        p.vx = lv.x; p.vy = lv.y; p.vz = lv.z;
+        if (p.gib.isSettled()) {
+          p.gib.dispose();
+          p.gib = null;
           p.rest = true; p.vx = p.vy = p.vz = 0;
+          if (fxs && typeof fxs.bloodPool === 'function' && p.bleed > 0) fxs.bloodPool(o.position.clone().setY(0), 0.25);
+        }
+      } else {
+        // Respaldo sin física real (Rapier aún no está listo al desmembrar): gravedad + suelo plano fijo.
+        p.vy -= 9.8 * dt;
+        o.position.x += p.vx * dt; o.position.y += p.vy * dt; o.position.z += p.vz * dt;
+        o.rotation.x += p.wx * dt; o.rotation.y += p.wy * dt; o.rotation.z += p.wz * dt;
+        if (o.position.y < p.floor) {
+          o.position.y = p.floor;
+          if (p.vy < -1.5) {
+            p.vy = -p.vy * 0.3; p.vx *= 0.5; p.vz *= 0.5; p.wx *= 0.5; p.wy *= 0.5; p.wz *= 0.5;
+            if (fxs && typeof fxs.bloodPool === 'function' && p.bleed > 0) fxs.bloodPool(o.position.clone().setY(0), 0.25);
+          } else {
+            p.rest = true; p.vx = p.vy = p.vz = 0;
+          }
         }
       }
       if (p.bleed > 0 && fxs && typeof fxs.blood === 'function') {
@@ -2130,7 +2185,7 @@ export class ZombieModel {
   // ------------------------------------------------------------------ Limpieza
   dispose() {
     if (this.group.parent) this.group.parent.remove(this.group);
-    for (const p of this.pieces) if (p.obj.parent) p.obj.parent.remove(p.obj);
+    for (const p of this.pieces) { if (p.obj.parent) p.obj.parent.remove(p.obj); if (p.gib) p.gib.dispose(); }
     this.pieces.length = 0;
     if (this._fadeMats) { for (const m of this._fadeMats.values()) m.dispose(); this._fadeMats = null; }
     if (this.pustMat) { this.pustMat.dispose(); this.pustMat = null; }

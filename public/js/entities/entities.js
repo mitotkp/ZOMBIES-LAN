@@ -44,7 +44,7 @@ export class EntityManager {
     this.targets = [];            // caché de getZombieTargets()
     this.t = 0;
     this.frame = 0;
-    this.env = { effects: this.ctx.effects || null };
+    this.env = { effects: this.ctx.effects || null, physics: this.ctx.physics || null };
     this.snd = { groan: -9, step: -9, hit: -9, die: [], atk: -9 };
 
     // Recursos compartidos y precompilación de sombreadores (evita tirones con el primer zombi)
@@ -70,6 +70,7 @@ export class EntityManager {
       ev.on('ev:bossAbility', (e) => this._onBossAbility(e));
       ev.on('ev:fire', (e) => this._onRemoteFire(e));
       ev.on('ev:proj', (e) => this._onRemoteFire(e));
+      ev.on('ev:down', (e) => this._onPlayerDown(e));
     }
   }
 
@@ -80,6 +81,7 @@ export class EntityManager {
     this.bossFx.update(dt);
     this.frame++;
     this.env.effects = this.ctx.effects || null;
+    this.env.physics = this.ctx.physics || null;
     let sample = null;
     const net = this.ctx.net;
     if (net && typeof net.sample === 'function') {
@@ -511,7 +513,9 @@ export class EntityManager {
     let px = 0, pz = 0;
     if (from) { px = rec.x - from.x; pz = rec.z - from.z; }
     const m = rec.model;
-    try { m.startDeath(fxName, px, pz, this.env); } catch (err) { console.warn('[EntityManager] startDeath:', err); }
+    // env propio de esta muerte (no this.env directamente: es compartido y se reutiliza cada frame para
+    // todos los zombis, así que no debe llevar un amt fijo pegado de una muerte anterior).
+    try { m.startDeath(fxName, px, pz, { ...this.env, amt: e.amt }); } catch (err) { console.warn('[EntityManager] startDeath:', err); }
     this.corpses.push(rec);
 
     // Efectos de la muerte
@@ -588,6 +592,17 @@ export class EntityManager {
   }
 
   // ------------------------------------------------------------------ Jugadores remotos
+  // Un jugador remoto acaba de caer: arranca su ragdoll físico (si ctx.physics ya está listo; si no, se
+  // queda con la pose estática de "última batalla" de siempre).
+  _onPlayerDown(e) {
+    const rec = this.players.get(String(e && e.pid));
+    if (!rec) return;
+    const from = e && e.from;
+    const fx = Number.isFinite(from && from.x) ? from.x : rec.model.group.position.x;
+    const fz = Number.isFinite(from && from.z) ? from.z : rec.model.group.position.z;
+    rec.model.startRagdoll(fx, fz, this.ctx.physics, e && e.amt);
+  }
+
   _updatePlayers(dt, ps) {
     const ctx = this.ctx;
     const gs = ctx.gs;

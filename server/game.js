@@ -1488,7 +1488,7 @@ export class Game {
     d.lastDamageAt = now;
     if (heavy && amt >= BALANCE.heavyHitMin) d.invulnUntil = Math.max(d.invulnUntil || 0, now + BALANCE.heavyHitInvuln * 1000);
     this.markDirty();
-    if (p.hp <= 0) { this._goDown(p, d, now); return { hit: true, blocked: false }; }
+    if (p.hp <= 0) { this._goDown(p, d, now, z, amt); return { hit: true, blocked: false }; }
     if (!p.infected && Math.random() < INFECTION.chance) {
       p.infected = true;
       d.infT = 0; d.infAcc = 0;
@@ -1497,7 +1497,7 @@ export class Game {
     return { hit: true, blocked: false };
   }
 
-  _goDown(p, d, now) {
+  _goDown(p, d, now, z, amt) {
     this._cancelHold(p, d, now);
     p.state = 'down';
     p.hp = 0;
@@ -1528,7 +1528,11 @@ export class Game {
     }
     this.markDirty();
     this.flushGs();
-    this._ev({ e: 'down', pid: p.id });
+    this._ev({
+      e: 'down', pid: p.id,
+      from: (z && isNum(z.x) && isNum(z.z)) ? { x: r2(z.x), z: r2(z.z) } : null,
+      amt: isNum(amt) ? Math.round(amt) : 0,
+    });
     this._log(`${p.name} cayó (ronda ${this.gs.round}).`);
   }
 
@@ -1796,7 +1800,7 @@ export class Game {
       const t = this._randomPowerupType(this.clock());
       if (t) this.spawnPowerup(t, z.x, z.z, undefined, z.y);
     }
-    this._ev({ e: 'zdie', id: z.id, pid: p ? p.id : null, part, fx });
+    this._ev({ e: 'zdie', id: z.id, pid: p ? p.id : null, part, fx, amt: isNum(info.amt) ? Math.round(info.amt) : 0 });
     // Potenciadores
     const scoreDrop = this.puScore >= this.puScoreStep;
     if (scoring && this.dropsThisRound < POWERUPS.maxPerRound && (scoreDrop || Math.random() < POWERUPS.dropChance)) {
