@@ -13,6 +13,8 @@ import {
 
 const CRATE_GLB = '/models/props/crate.glb';
 const BARREL_GLB = '/models/props/barrel.glb';
+const CAR_GLB = '/models/props/car.glb';
+const BUS_GLB = '/models/props/bus.glb';
 import { facadePoint, facadePlaneYaw } from './levelgeo.js';
 import { Doors, Windows } from './barriers.js';
 import { PerkMachines, PackAPunch, PowerSwitch, Workbench } from './machines.js';
@@ -144,11 +146,16 @@ function bench(B, p, r) {
   P.cyl('plastic', 0.04, 0.035, 0.12, lx / 2 - 1.2, 0.53, -0.26, { color: 0xd8d0c0, seg: 8 });
 }
 
-function bus(B, p, r, signs) {
+// world: si se pasa y bus.glb ya está cargado (ver gltfProps.js), la carrocería completa es una instancia
+// real (pintura TranZit ya incluida en el modelo, sin tinte); el cartel de destino y las letras laterales
+// siguen siendo del SignSet de siempre en cualquier caso, apoyados sobre la superficie del modelo real.
+function bus(B, p, r, signs, world) {
   const { cx, cz } = rectOf(p);
   const P = B.at(cx, 0, cz, 0);      // frente hacia +X
   const L = 9.8, Wd = 2.56;
   const BLUE = 0x1e4c9c, WHITE = 0xd6dad6, DARK = 0x16181a;
+  const real = world && placeGltfProp(world, BUS_GLB, cx, 0, cz, 0);
+  if (!real) {
   P.box('metal', L - 0.5, 0.3, Wd - 0.3, 0, 0.45, 0, { color: DARK });
   P.box('metal', L, 1.0, Wd, 0, 1.05, 0, { color: BLUE });
   P.box('metal', L, 1.4, Wd, 0, 2.25, 0, { color: WHITE });
@@ -190,6 +197,7 @@ function bus(B, p, r, signs) {
     const x = -L / 2 + 0.6 + r() * (L - 1.2), s = r() < 0.5 ? -1 : 1;
     P.box('rust', 0.5 + r() * 0.8, 0.2 + r() * 0.4, 0.01, x, 0.8 + r() * 0.5, s * (Wd / 2 + 0.008), {});
   }
+  }
   // cartel de destino (emisivo)
   const [wx, , wz] = [cx + L / 2 + 0.035, 0, cz];
   signs.add('tranzit', posterTexture('tranzit'), 1.9, 0.34, wx, 2.86, wz, Math.PI / 2, { emissive: true });
@@ -199,11 +207,17 @@ function bus(B, p, r, signs) {
   signs.add('buslogo', side, 2.6, 0.48, cx - 1.2, 1.08, cz - Wd / 2 - 0.013, Math.PI, { transparent: true });
 }
 
-function car(B, p, r, flames) {
+// world: si se pasa y car.glb ya está cargado (ver gltfProps.js), la carrocería es una instancia real
+// teñida por instancia con el mismo BODY que antes usaba la caja procedural; el punto de fuego del motor
+// sigue calculándose igual en cualquier caso (misma posición relativa, real o de respaldo).
+function car(B, p, r, flames, world) {
   const { cx, cz, lx } = rectOf(p);
-  const P = B.at(cx, 0, cz, (r() - 0.5) * 0.08);
+  const ry = (r() - 0.5) * 0.08;
+  const P = B.at(cx, 0, cz, ry);
   const len = Math.min(4.1, lx), wd = 1.78;
   const BODY = [0x5a4638, 0x4a3c34, 0x3e3632][(r() * 3) | 0];
+  const real = world && placeGltfProp(world, CAR_GLB, cx, 0, cz, ry, BODY);
+  if (!real) {
   P.box('rust', len, 0.6, wd, 0, 0.58, 0, { color: BODY, rz: 0.02 });
   P.box('rust', len * 0.28, 0.12, wd - 0.1, len * 0.33, 0.93, 0, { color: BODY, rz: -0.08 });
   P.box('rust', len * 0.2, 0.1, wd - 0.1, -len * 0.38, 0.92, 0, { color: BODY });
@@ -222,6 +236,7 @@ function car(B, p, r, flames) {
   }
   // hollín
   P.box('dark', len * 0.5, 0.01, wd * 0.6, 0.3, 0.885, 0, { ry: 0.3 });
+  }
   if (flames) {
     const a = P.parent.elements;
     // punto del motor en mundo
@@ -572,8 +587,8 @@ export function buildStaticProps(B, world) {
   for (const p of PROPS) {
     switch (p.kind) {
       case 'bench': bench(B, p, r); break;
-      case 'bus': bus(B, p, r, signs); break;
-      case 'car': car(B, p, r, p.x0 > 40 ? world.flames : null); break;
+      case 'bus': bus(B, p, r, signs, world); break;
+      case 'car': car(B, p, r, p.x0 > 40 ? world.flames : null, world); break;
       case 'barrel': barrels(B, p, r, world.flames, world); break;
       case 'counter': counter(B, p, r); break;
       case 'table': table(B, p, r); break;
