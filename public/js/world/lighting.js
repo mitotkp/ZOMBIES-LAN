@@ -12,7 +12,8 @@ export const L = { TERMINAL: 0, BAR: 1, ALMACEN: 2, PLANTA: 3, STREET: 4, FIRE: 
 
 const SHADOW_HALF = 26;     // m de la sombra de la luna a cada lado del jugador
 const SHADOW_RES = 2048;
-const HEMI_HIGH = 2.8, HEMI_LOW = 3.0;   // luz ambiente: lo bastante para leer las zonas oscuras
+const HEMI_HIGH = 1.7, HEMI_LOW = 1.9;   // luz ambiente: bajada ~40% (atmósfera BO2: interiores tenues,
+                                          // el contraste lo dan las luces de cada zona y los acentos de color)
 
 const C_WARM = new THREE.Color(0xffb46a), C_COLD = new THREE.Color(0xe4ecff);
 const C_SODIUM = new THREE.Color(0xffa040), C_RED = new THREE.Color(0xff2a14);
@@ -161,7 +162,7 @@ export class Lighting {
     const high = !this.ctx.settings || this.ctx.settings.quality !== 'low';
     if (this.moon) {
       this.moon.castShadow = high;
-      this.moon.intensity = high ? 1.55 : 1.1;
+      this.moon.intensity = high ? 1.25 : 0.95;
     }
     if (this.hemi) this.hemi.intensity = high ? HEMI_HIGH : HEMI_LOW;
   }
@@ -219,14 +220,17 @@ export class Lighting {
     const pts = this.points;
     // Terminal: cálida y titilante sin luz, fría y estable con luz
     const tf = 0.75 + 0.25 * flickerNoise(t * 1.3, 2.2);
+    // Estas 5 son la luz de verdad de cada zona (la ambiental de arriba ya casi no aporta a propósito):
+    // recortadas a ~48-58 % de lo que eran. Con esto la sala deja de "llenarse" de luz y los acentos de
+    // color (ventajas, caja, Pack-a-Punch) empiezan a notarse por contraste, sin dejar de poder apuntar.
     pts[L.TERMINAL].color.copy(C_WARM).lerp(C_COLD, P);
-    pts[L.TERMINAL].intensity = THREE.MathUtils.lerp(28 * tf, 40, P);
-    pts[L.BAR].intensity = 42 * (0.9 + 0.1 * flickerNoise(t * 0.8, 5));
+    pts[L.TERMINAL].intensity = THREE.MathUtils.lerp(14 * tf, 20, P);
+    pts[L.BAR].intensity = 20 * (0.9 + 0.1 * flickerNoise(t * 0.8, 5));
     pts[L.ALMACEN].color.copy(C_SODIUM).lerp(C_COLD, P);
-    pts[L.ALMACEN].intensity = THREE.MathUtils.lerp(30, 38, P);
+    pts[L.ALMACEN].intensity = THREE.MathUtils.lerp(14, 18, P);
     pts[L.PLANTA].color.copy(C_RED).lerp(C_COLD, P);
-    pts[L.PLANTA].intensity = THREE.MathUtils.lerp(22 + 14 * pulse, 40, P);
-    pts[L.STREET].intensity = 52 * this.streetFlick * (0.95 + 0.05 * flick);
+    pts[L.PLANTA].intensity = THREE.MathUtils.lerp(11 + 7 * pulse, 20, P);
+    pts[L.STREET].intensity = 22 * this.streetFlick * (0.95 + 0.05 * flick);
     pts[L.FIRE].intensity = 7 + 5 * flickerNoise(t * 2.2, 7.7);
     pts[L.FIRE].position.y = 1.5 + 0.1 * flickerNoise(t * 3, 1.1);
   }
