@@ -18,6 +18,7 @@ import { PERKS, PERK_LIMIT, perkPrice, perkNeedsPower } from '../shared/perks.js
 import { PF, r2, safeParse } from '../shared/protocol.js';
 import { ZombieManager } from './zombies.js';
 import { EasterEgg, EE_STEP } from './easteregg.js';
+import { Player, TELEPORT_GRACE } from './entities/player.js';
 import crypto from 'node:crypto';
 
 const DEG = Math.PI / 180;
@@ -35,13 +36,9 @@ function pickWeighted(weights) {
   return entries[entries.length - 1][0];
 }
 const GAMEOVER_TIME = 15000;          // ms en la pantalla final antes de volver al lobby
-const TELEPORT_GRACE = 3000;          // ms tras reaparecer en los que se acepta cualquier salto de posición
-const MAX_SPEED_MPS = PLAYER.sprintSpeed * 1.5; // margen sobre la velocidad real máxima (sprint)
-const MAX_JUMP_MARGIN = 0.75;         // m de tolerancia fija (redondeo/ráfagas de mensajes)
-const MAX_STATE_GAP_MS = 2000;        // tope de "crédito" de tiempo tras una pausa larga entre mensajes 'st'
-const RESYNC_AFTER = 30;              // mensajes rechazados seguidos antes de aceptar la posición igualmente
+// TELEPORT_GRACE: ahora vive en entities/player.js (junto con el resto de tuneables de movimiento/
+// reanimar que usa esa clase); se sigue usando aquí también, así que se importa en vez de duplicarse.
 const RECONNECT_GRACE_MS = 25000;     // ventana para recuperar el mismo jugador tras una desconexión no voluntaria
-const REVIVE_INVULN = 1500;           // ms de invulnerabilidad tras ser reanimado
 const SPAWN_INVULN = 2000;            // ms de invulnerabilidad tras reaparecer
 const NADE_WINDOW = 6000;             // ms de validez de una granada lanzada
 const MSG_RATE_LIMIT = 250;           // mensajes por segundo por conexión
@@ -94,6 +91,10 @@ export class Game {
     this.conns = new Set();
     this.byPid = new Map();        // pid -> conexión
     this.pd = new Map();           // pid -> datos privados (posición, sostener, temporizadores...)
+    // pid -> Player: envuelve gs.players[pid] (pub) + this.pd.get(pid) (priv) con los métodos de la
+    // clase (ver entities/player.js). Se mantiene en paralelo a gs.players/this.pd, que siguen siendo
+    // los mismos objetos de siempre (el resto de este archivo los sigue leyendo/escribiendo directo).
+    this.players = new Map();
     this.sessions = new Map();     // token -> pid (para reconexión)
     this.reconnectTimers = new Map(); // pid -> temporizador de limpieza tras desconexión
     this.nextPid = 1;
@@ -362,6 +363,7 @@ export class Game {
     const wasHost = p.host;
     delete gs.players[pid];
     this.pd.delete(pid);
+    this.players.delete(pid);
     const t = this.reconnectTimers.get(pid);
     if (t) { clearTimeout(t); this.reconnectTimers.delete(pid); }
     for (const [token, spid] of this.sessions) if (spid === pid) this.sessions.delete(token);
@@ -621,6 +623,7 @@ export class Game {
     }
     gs.players[pid] = p;
     this.pd.set(pid, this._newPriv(spawn));
+    this.players.set(pid, new Player(p, this.pd.get(pid)));
     conn.pid = pid;
     this.byPid.set(pid, conn);
     const now = this.clock();
@@ -646,32 +649,14 @@ export class Game {
     return PLAYER_COLORS.find((c) => !taken.has(c)) || want || PLAYER_COLORS[0];
   }
 
+  // Delegado a Player.applyMovementReport (entities/player.js); ver ese archivo para la lógica real
+  // y por qué la autoridad de movimiento sigue siendo del cliente por ahora.
   _onState(p, d, m, now) {
     if (this.gs.phase !== 'playing') return;
-    if (isNum(m.yaw)) d.yaw = r2(m.yaw);
-    if (isNum(m.pitch)) d.pitch = r2(clamp(m.pitch, -1.5, 1.5));
-    if (isNum(m.f)) d.flags = (m.f | 0) & 0x3ff;
-    if (Number.isInteger(m.cur)) {
-      const c = clamp(m.cur, 0, Math.max(0, p.weapons.length - 1));
-      if (c !== p.cur) { p.cur = c; this.markDirty(); }
-    }
-    if (p.state === 'dead') return; // espectador: su posición no importa
-    const pos = vec3(m.p, 500);
-    if (!pos) return;
-    const topLv = this.M.levels[this.M.NL - 1];
-    const x = clamp(pos[0], 0, W), y = clamp(pos[1], this.M.levels[0].y - 1, topLv.y + topLv.h + 2), z = clamp(pos[2], 0, H);
-    const jump = Math.hypot(x - d.x, z - d.z);
-    if (d.hasPos && now > d.teleportUntil) {
-      // Presupuesto de velocidad real (no una distancia fija por mensaje): tolera jitter/ráfagas
-      // de internet, ya que compara contra el tiempo real transcurrido desde el último 'st' aceptado.
-      const dtMs = clamp(now - d.lastMoveAt, 0, MAX_STATE_GAP_MS);
-      const allowed = MAX_JUMP_MARGIN + MAX_SPEED_MPS * (dtMs / 1000);
-      if (jump > allowed) { if (++d.badPos < RESYNC_AFTER) return; }
-    }
-    d.badPos = 0;
-    d.lastMoveAt = now;
-    d.x = x; d.y = y; d.z = z;
-    d.hasPos = true;
+    const player = this.players.get(p.id);
+    if (!player) return; // no debería pasar (se crea junto con gs.players[id]), defensivo
+    const { curChanged } = player.applyMovementReport(m, now, { W, H, M: this.M });
+    if (curChanged) this.markDirty();
   }
 
   // ---- combate
@@ -1457,75 +1442,36 @@ export class Game {
     return lineOfSight(z.x, (z.y || 0) + 1.4, z.z, t.x, (t.y || 0) + 1.3, t.z, this.gs.doors);
   }
 
+  // Delegado a Player.takeDamage (entities/player.js): esa clase decide y muta (daño, escudo, golpe
+  // fuerte de jefe/tanque, infección); aquí solo se traduce el resultado a eventos de red / gs.dirty.
   damagePlayer(pid, amount, z) {
     const gs = this.gs;
     const p = gs.players[pid];
     const d = this.pd.get(pid);
-    if (!p || !d || p.state !== 'alive' || gs.phase !== 'playing') return { hit: false, blocked: false };
+    const player = this.players.get(pid);
+    if (!p || !d || !player || p.state !== 'alive' || gs.phase !== 'playing') return { hit: false, blocked: false };
     const now = this.clock();
-    if (d.god || now < d.invulnUntil) return { hit: false, blocked: false };
-    let amt = Math.max(0, Math.round(Number(amount) || 0));
-    // golpes de jefes y tanques: menos daño jugando solo y nunca más de heavyHitCap de la salud máxima
-    const heavy = !!(z && (z.boss || z.type === 'tank'));
-    if (heavy) {
-      if (this.playerCount() <= 1) amt = Math.round(amt * BALANCE.soloHeavyDamage);
-      amt = Math.min(amt, Math.round((p.maxHp || PLAYER.health) * BALANCE.heavyHitCap));
+    const r = player.takeDamage(amount, z, now, this.playerCount() <= 1);
+    if (!r.hit && !r.blocked) return r; // god / invulnerable: sin efectos, como antes
+    if (r.blocked) {
+      this.markDirty();
+      this._ev({ e: 'shieldHit', pid: p.id });
+      if (r.shieldBroke) this._breakShield(p);
+      return { hit: false, blocked: true };
     }
-    if (p.shield && z && isNum(z.x) && isNum(z.z)) {
-      const ang = Math.abs(angleDiff(d.yaw, yawTo(d.x, d.z, z.x, z.z)));
-      const out = (d.flags & PF.SHIELD_OUT) !== 0;
-      const front = ang <= (SHIELD.frontArcDeg / 2) * DEG;
-      const back = ang >= Math.PI - (SHIELD.backArcDeg / 2) * DEG;
-      if ((out && front) || (!out && back)) {
-        p.shield.hp -= amt;
-        this.markDirty();
-        this._ev({ e: 'shieldHit', pid: p.id });
-        if (p.shield.hp <= 0) this._breakShield(p);
-        return { hit: false, blocked: true };
-      }
-    }
-    p.hp = Math.max(0, p.hp - amt);
-    d.lastDamageAt = now;
-    if (heavy && amt >= BALANCE.heavyHitMin) d.invulnUntil = Math.max(d.invulnUntil || 0, now + BALANCE.heavyHitInvuln * 1000);
     this.markDirty();
-    if (p.hp <= 0) { this._goDown(p, d, now, z, amt); return { hit: true, blocked: false }; }
-    if (!p.infected && Math.random() < INFECTION.chance) {
-      p.infected = true;
-      d.infT = 0; d.infAcc = 0;
-      this._ev({ e: 'infected', pid: p.id });
-    }
+    if (r.wentDown) { this._goDown(p, d, now, z, r.amt); return { hit: true, blocked: false }; }
+    if (r.newlyInfected) this._ev({ e: 'infected', pid: p.id });
     return { hit: true, blocked: false };
   }
 
+  // Delegado a Player.goDown (entities/player.js) para la mutación; se queda en Game lo que toca
+  // recursos compartidos (cancelar lo que sostenía) y los avisos de red.
   _goDown(p, d, now, z, amt) {
     this._cancelHold(p, d, now);
-    p.state = 'down';
-    p.hp = 0;
-    p.infected = false;
-    p.healing = null;
-    p.downs++;
-    const loss = Math.floor(p.points * PLAYER.downPointsLoss);
-    if (loss > 0) {
-      p.points -= loss;
-      this._ev({ e: 'pts', pid: p.id, n: -loss }, { to: p.id });
-    }
-    const hadQR = p.perks.includes('quickrevive');
-    const hadMule = p.perks.includes('mulekick');
-    p.perks = [];
-    p.maxHp = PLAYER.health;
-    if (hadMule && p.weapons.length > PLAYER.maxWeapons) {
-      p.weapons.length = PLAYER.maxWeapons;
-      p.cur = clamp(p.cur, 0, Math.max(0, p.weapons.length - 1));
-    }
-    p.bleedUntil = now + PLAYER.bleedoutTime * 1000;
-    p.reviver = null;
-    p.reviveUntil = 0;
-    p.selfReviveAt = 0;
-    const solo = this.playerCount() <= 1;
-    if (solo && hadQR && p.qrUses < PLAYER.soloQuickReviveUses) {
-      p.qrUses++;
-      p.selfReviveAt = now + PLAYER.soloQuickReviveTime * 1000;
-    }
+    const player = this.players.get(p.id);
+    const { pointsLost } = player ? player.goDown(now, this.playerCount() <= 1) : { pointsLost: 0 };
+    if (pointsLost > 0) this._ev({ e: 'pts', pid: p.id, n: -pointsLost }, { to: p.id });
     this.markDirty();
     this.flushGs();
     this._ev({
@@ -1536,17 +1482,11 @@ export class Game {
     this._log(`${p.name} cayó (ronda ${this.gs.round}).`);
   }
 
+  // Delegado a Player.revive; el contador de reanimaciones vive en OTRO jugador (quien reanimó), así
+  // que sigue siendo cosa de Game.
   _revive(p, byPid, now) {
-    const d = this.pd.get(p.id);
-    p.state = 'alive';
-    p.hp = p.maxHp;
-    p.infected = false;
-    p.healing = null;
-    p.bleedUntil = 0;
-    p.selfReviveAt = 0;
-    p.reviver = null;
-    p.reviveUntil = 0;
-    if (d) { d.lastDamageAt = now; d.invulnUntil = now + REVIVE_INVULN; }
+    const player = this.players.get(p.id);
+    if (player) player.revive(now);
     if (byPid != null) {
       const r = this.gs.players[byPid];
       if (r) r.revives++;
@@ -1572,6 +1512,7 @@ export class Game {
   _respawnPlayer(p, now) {
     const d = this.pd.get(p.id) || this._newPriv(p.spawn);
     this.pd.set(p.id, d);
+    const pl = this.players.get(p.id); if (pl) pl.resetPriv(d);
     const sp = PLAYER_SPAWNS[p.spawn % PLAYER_SPAWNS.length];
     Object.assign(p, {
       state: 'alive', hp: PLAYER.health, maxHp: PLAYER.health, perks: [],
@@ -1972,7 +1913,9 @@ export class Game {
     for (const bp of this.boxPriv) { bp.teddy = false; bp.weapon = null; bp.paid = 0; }
     for (const p of this._players()) {
       this._resetPlayer(p);
-      this.pd.set(p.id, this._newPriv(p.spawn));
+      const d = this._newPriv(p.spawn);
+      this.pd.set(p.id, d);
+      const pl = this.players.get(p.id); if (pl) pl.resetPriv(d);
     }
     this.gameOverAt = 0;
     this.markDirty();

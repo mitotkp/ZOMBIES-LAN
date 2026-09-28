@@ -216,3 +216,41 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
 - **2026-09-26 (18)**: modelos y animaciones nuevos de jefes y zombis especiales.
 - **2026-09-26 (19)**: zombi común rehecho (modelo, variantes, heridas, andares, ataques) y ataques/rugidos de los jefes.
 - **2026-09-26 (20)**: idioma inglés.
+- **2026-09-28: iluminación/atmósfera + arreglo de carteles tapados** (sesiones de otra rama de trabajo,
+  ver los commits `Ilumina el mapa al estilo BO2...` y `Arregla el cartel de Salidas...`): atmósfera
+  más sombría con acentos de color al estilo BO2 (luces de cada zona recortadas ~50 %, ambiente/luna más
+  tenues, sin postprocesado — se probó con bloom/viñeta/mapa de reflejos genérico y se deshizo por verse
+  mal), y un bug real de geometría en `props.js` (el marco del cartel de Salidas y el del reloj de la
+  Terminal tapaban la pantalla del cartel en vez de quedar detrás; diagnosticado con un raycast).
+  ⚠️ Pendiente re-aplicar en esta rama: la PR #2 de Rodrigo (`cambios-rodrigo`, perros que aturden en vez
+  de dañar + arreglo de escaleras) sigue abierta en GitHub sin fusionar aquí.
+- **2026-09-28: arranca la refactorización a clases (Player/Zombie/Weapon/Renderer)**. Decisiones
+  tomadas con el usuario antes de programar (quedan documentadas por si hace falta revisarlas):
+  BO2 como referencia de iluminación (ya aplicado, ítem de arriba); autoridad de movimiento del jugador
+  pasa al SERVIDOR (hoy sigue siendo del cliente — cambio de red grande, pendiente, ver más abajo);
+  `Weapon` será una jerarquía real (clase base + las armas concretas derivan de ella), no una tabla
+  plana ni una clase por arma; migración incremental verificando en cada paso; se empieza por `Player`.
+  - **Paso 1 (hecho): `server/entities/player.js`**, clase `Player` que envuelve `gs.players[id]` (pub)
+    + `Game.pd.get(id)` (priv) — mismas referencias, no copias; el resto de `game.js` (compras, ventajas,
+    caja, Pack-a-Punch, puertas...) sigue leyendo/escribiendo esos mismos objetos sin cambios. Métodos:
+    `takeDamage`, `goDown`, `revive`, `applyMovementReport` (esta última sigue validando la posición que
+    manda el cliente, todavía no la calcula — eso es el paso de autoridad de movimiento, aparte).
+    `game.js` pasa a delegar en estos métodos desde `damagePlayer`/`_goDown`/`_revive`/`_onState`, y solo
+    se encarga de lo que sigue siendo suyo de verdad: eventos de red, `markDirty`, y tocar a OTRO jugador
+    (ej. `revives++` de quien reanima). `server/game.js` bajó ~60 líneas netas en el intercambio.
+    Verificado: `node --check`, `validate-map`, `bot-test.js` 140 s (ronda 3, 0 errores, movimiento y
+    daño a jugador ejercitados en vivo sin denegaciones ni rubber-banding), prueba aislada de la clase
+    (32 aserciones: daño normal/god/invulnerable/tope de golpe fuerte/reducción en solitario/escudo que
+    bloquea y se rompe/infección/caer con pérdida de puntos y ventajas/Mule Kick recorta arma/reanimar
+    restaura vida e invulnerabilidad breve/movimiento acepta normal y rechaza teletransporte imposible),
+    y una caída real de punta a punta en el navegador (puntos 500→475, exactamente el 5% esperado).
+  - **Pendiente dentro de "Player"**: `_bleedout` (la transición a `'dead'` tras desangrarse del todo)
+    todavía muta `gs.players[id]` directo con `Object.assign`, no pasa por la clase — se dejó así a
+    propósito para no ampliar el primer paso; falta un método `Player.bleedOut()` más adelante.
+  - **Pendiente, más grande, aparte**: autoridad de movimiento en el servidor (el cliente pasaría a
+    mandar su input, no su posición; el servidor simula con la física de `shared/collision.js`; hace
+    falta predicción + reconciliación en el cliente para que no se sienta con retraso en LAN). Se aborda
+    después de que `Player` esté terminado, no mezclado con este paso.
+  - **Siguiente en la cola**: clase `Zombie` (`server/zombies.js`, ~51 KB) — ahí hay más variedad real
+    de comportamiento (perro, corredor, bombardero, tanque, 5 jefes) que en `Weapon`, así que rinde más
+    tener una clase (con lugar para subclases) desde ya.
