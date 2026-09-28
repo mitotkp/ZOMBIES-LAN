@@ -384,15 +384,19 @@ function generator(B, p, r, signs) {
 // Decorado de paredes, fachadas y callejones (no bloquea el paso: pegado a muros o en zonas inaccesibles)
 function buildDecor(B, r, signs) {
   // --- Terminal
+  // El marco tiene que quedar DETRÁS de la pantalla (más lejos de quien mira, z menor que 20.03 aquí);
+  // con offset 0.05 el marco llegaba hasta z=20.10 y tapaba la pantalla (z=20.03) por completo.
   signs.add('departures', departureBoardTexture(), 2.3, 1.15, 14.3, 2.95, 20.03, 0, { emissive: true });
-  B.at(14.3, 2.95, 20, 0).box('metal', 2.5, 1.32, 0.1, 0, 0, 0.05, { color: 0x1a1a1a });
+  B.at(14.3, 2.95, 20, 0).box('metal', 2.5, 1.32, 0.1, 0, 0, -0.03, { color: 0x1a1a1a });
   signs.add('route', posterTexture('route'), 1.0, 1.0, 4.02, 1.7, 27.5, Math.PI / 2);
   signs.add('route', posterTexture('route'), 1.0, 1.0, 5.6, 1.8, 31.98, Math.PI);
   signs.add('nosmoke', posterTexture('nosmoke'), 0.9, 0.45, 4.02, 2.1, 30.5, Math.PI / 2);
   signs.add('nosmoke', posterTexture('nosmoke'), 0.9, 0.45, 17.98, 2.1, 22.2, -Math.PI / 2);
   signs.add('clock', posterTexture('clock'), 0.6, 0.6, 11.5, 3.05, 31.97, Math.PI, { transparent: true });
   signs.add('exit', posterTexture('exit'), 0.85, 0.32, 17.97, 3.2, 26, -Math.PI / 2, { emissive: true });
-  B.at(11.5, 3.05, 32, Math.PI).cyl('metal', 0.33, 0.33, 0.05, 0, 0, 0.02, { rx: Math.PI / 2, seg: 20, color: 0x2a2a2a });
+  // Mismo problema que el cartel de salidas: con yaw=PI el eje Z local se invierte, así que offset +0.02
+  // ponía la carcasa hacia el lado de quien mira (delante de la esfera del reloj en z=31.97) y la tapaba.
+  B.at(11.5, 3.05, 32, Math.PI).cyl('metal', 0.33, 0.33, 0.05, 0, 0, -0.02, { rx: Math.PI / 2, seg: 20, color: 0x2a2a2a });
   // tablón de anuncios y papeles pegados
   for (let i = 0; i < 6; i++) B.at(4, 0, 21.5 + i * 0.3, Math.PI / 2).box('paint', 0.22, 0.3, 0.004, 0, 1.5 + r() * 0.6, 0.004, { color: 0xd8d2c0 });
 
