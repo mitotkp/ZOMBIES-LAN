@@ -1077,6 +1077,59 @@ export function getTex(name) {
 }
 
 // ---------------------------------------------------------------------------
+// Mapas de normales derivados de las propias texturas de color
+// ---------------------------------------------------------------------------
+// Convierte un canvas ya pintado en un mapa de normales, usando su luminancia como mapa de alturas (Sobel).
+// No hace falta pintar nada nuevo: las grietas, juntas de baldosas, vetas de madera y desconchones que ya
+// dibujan los generadores de arriba pasan a ser relieve real que responde a la luz, en vez de solo variación
+// de color plano (que es como se veían antes con MeshLambertMaterial, que no admite mapa de normales).
+function normalFromHeight(canvas, strength) {
+  const w = canvas.width, h = canvas.height;
+  const src = canvas.getContext('2d').getImageData(0, 0, w, h).data;
+  const height = (x, y) => {
+    const i = (((y + h) % h) * w + ((x + w) % w)) * 4;
+    return (src[i] * 0.299 + src[i + 1] * 0.587 + src[i + 2] * 0.114) / 255;
+  };
+  const out = mk(w, h);
+  const id = out.g.createImageData(w, h);
+  const d = id.data;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const tl = height(x - 1, y - 1), tc = height(x, y - 1), tr = height(x + 1, y - 1);
+      const ml = height(x - 1, y), mr = height(x + 1, y);
+      const bl = height(x - 1, y + 1), bc = height(x, y + 1), br = height(x + 1, y + 1);
+      const gx = (tr + 2 * mr + br) - (tl + 2 * ml + bl);
+      const gy = (bl + 2 * bc + br) - (tl + 2 * tc + tr);
+      let nx = -gx * strength, ny = -gy * strength, nz = 1;
+      const len = Math.hypot(nx, ny, nz) || 1;
+      const i = (y * w + x) * 4;
+      d[i] = ((nx / len) * 0.5 + 0.5) * 255;
+      d[i + 1] = ((ny / len) * 0.5 + 0.5) * 255;
+      d[i + 2] = ((nz / len) * 0.5 + 0.5) * 255;
+      d[i + 3] = 255;
+    }
+  }
+  out.g.putImageData(id, 0, 0);
+  return out.c;
+}
+
+const normalCache = new Map();
+// Mapa de normales para la textura `name` (misma clave que getTex), o null si no tiene relieve utilizable.
+// Se deriva una sola vez de su canvas de color ya generado y se cachea igual que getTex.
+export function getNormalTex(name, strength = 1.4) {
+  if (normalCache.has(name)) return normalCache.get(name);
+  const colorTex = getTex(name);
+  const srcCanvas = colorTex.image;
+  let t = null;
+  if (srcCanvas && typeof srcCanvas.getContext === 'function') {
+    // espacio de color LINEAL, nunca sRGB: son vectores, no una imagen para el ojo
+    t = toTex(normalFromHeight(srcCanvas, strength), { srgb: false });
+  }
+  normalCache.set(name, t);
+  return t;
+}
+
+// ---------------------------------------------------------------------------
 // Sprites y texturas especiales
 // ---------------------------------------------------------------------------
 
