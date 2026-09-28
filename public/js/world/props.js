@@ -6,9 +6,15 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { PROPS, WALLBUYS, INTERACTABLE_BY_ID, CEIL_H, WINDOW_INFO } from '/shared/map.js';
 import { matrixFrom, yawForFace, uvRectPlane, TAU, flickerNoise } from './kit.js';
+import { placeGltfProp } from './gltfProps.js';
 import {
   makeRng, chalkAtlas, posterTexture, departureBoardTexture, neonBarTexture, makeSign, flameTexture, glowTexture,
 } from './textures.js';
+
+const CRATE_GLB = '/models/props/crate.glb';
+const BARREL_GLB = '/models/props/barrel.glb';
+const CAR_GLB = '/models/props/car.glb';
+const BUS_GLB = '/models/props/bus.glb';
 import { facadePoint, facadePlaneYaw } from './levelgeo.js';
 import { Doors, Windows } from './barriers.js';
 import { PerkMachines, PackAPunch, PowerSwitch, Workbench } from './machines.js';
@@ -140,11 +146,16 @@ function bench(B, p, r) {
   P.cyl('plastic', 0.04, 0.035, 0.12, lx / 2 - 1.2, 0.53, -0.26, { color: 0xd8d0c0, seg: 8 });
 }
 
-function bus(B, p, r, signs) {
+// world: si se pasa y bus.glb ya está cargado (ver gltfProps.js), la carrocería completa es una instancia
+// real (pintura TranZit ya incluida en el modelo, sin tinte); el cartel de destino y las letras laterales
+// siguen siendo del SignSet de siempre en cualquier caso, apoyados sobre la superficie del modelo real.
+function bus(B, p, r, signs, world) {
   const { cx, cz } = rectOf(p);
   const P = B.at(cx, 0, cz, 0);      // frente hacia +X
   const L = 9.8, Wd = 2.56;
   const BLUE = 0x1e4c9c, WHITE = 0xd6dad6, DARK = 0x16181a;
+  const real = world && placeGltfProp(world, BUS_GLB, cx, 0, cz, 0);
+  if (!real) {
   P.box('metal', L - 0.5, 0.3, Wd - 0.3, 0, 0.45, 0, { color: DARK });
   P.box('metal', L, 1.0, Wd, 0, 1.05, 0, { color: BLUE });
   P.box('metal', L, 1.4, Wd, 0, 2.25, 0, { color: WHITE });
@@ -186,6 +197,7 @@ function bus(B, p, r, signs) {
     const x = -L / 2 + 0.6 + r() * (L - 1.2), s = r() < 0.5 ? -1 : 1;
     P.box('rust', 0.5 + r() * 0.8, 0.2 + r() * 0.4, 0.01, x, 0.8 + r() * 0.5, s * (Wd / 2 + 0.008), {});
   }
+  }
   // cartel de destino (emisivo)
   const [wx, , wz] = [cx + L / 2 + 0.035, 0, cz];
   signs.add('tranzit', posterTexture('tranzit'), 1.9, 0.34, wx, 2.86, wz, Math.PI / 2, { emissive: true });
@@ -195,11 +207,17 @@ function bus(B, p, r, signs) {
   signs.add('buslogo', side, 2.6, 0.48, cx - 1.2, 1.08, cz - Wd / 2 - 0.013, Math.PI, { transparent: true });
 }
 
-function car(B, p, r, flames) {
+// world: si se pasa y car.glb ya está cargado (ver gltfProps.js), la carrocería es una instancia real
+// teñida por instancia con el mismo BODY que antes usaba la caja procedural; el punto de fuego del motor
+// sigue calculándose igual en cualquier caso (misma posición relativa, real o de respaldo).
+function car(B, p, r, flames, world) {
   const { cx, cz, lx } = rectOf(p);
-  const P = B.at(cx, 0, cz, (r() - 0.5) * 0.08);
+  const ry = (r() - 0.5) * 0.08;
+  const P = B.at(cx, 0, cz, ry);
   const len = Math.min(4.1, lx), wd = 1.78;
   const BODY = [0x5a4638, 0x4a3c34, 0x3e3632][(r() * 3) | 0];
+  const real = world && placeGltfProp(world, CAR_GLB, cx, 0, cz, ry, BODY);
+  if (!real) {
   P.box('rust', len, 0.6, wd, 0, 0.58, 0, { color: BODY, rz: 0.02 });
   P.box('rust', len * 0.28, 0.12, wd - 0.1, len * 0.33, 0.93, 0, { color: BODY, rz: -0.08 });
   P.box('rust', len * 0.2, 0.1, wd - 0.1, -len * 0.38, 0.92, 0, { color: BODY });
@@ -218,6 +236,7 @@ function car(B, p, r, flames) {
   }
   // hollín
   P.box('dark', len * 0.5, 0.01, wd * 0.6, 0.3, 0.885, 0, { ry: 0.3 });
+  }
   if (flames) {
     const a = P.parent.elements;
     // punto del motor en mundo
@@ -227,14 +246,20 @@ function car(B, p, r, flames) {
   }
 }
 
-function barrels(B, p, r, flames) {
+// world: si se pasa y barrel.glb ya está cargado (ver gltfProps.js), el cuerpo del barril es una instancia
+// real (teñida por instancia según el mismo color que antes elegía la caja procedural); la tapa, la plancha
+// carbonizada del primero y el fuego siguen siendo del StaticBatch/Flames de siempre en cualquier caso.
+function barrels(B, p, r, flames, world) {
   let first = true;
   for (let z = p.z0; z <= p.z1; z++) for (let x = p.x0; x <= p.x1; x++) {
-    const P = B.at(x + 0.5 + (r() - 0.5) * 0.1, 0, z + 0.5 + (r() - 0.5) * 0.1, r() * TAU);
+    const bx = x + 0.5 + (r() - 0.5) * 0.1, bz = z + 0.5 + (r() - 0.5) * 0.1, bry = r() * TAU;
+    const P = B.at(bx, 0, bz, bry);
     const col = first ? 0x5a3a28 : [0x2a4a7a, 0x8a2a1a, 0x3a5a3a][(r() * 3) | 0];
-    P.cyl('metal', 0.29, 0.28, 0.9, 0, 0.45, 0, { color: col, seg: 16 });
-    for (const y of [0.2, 0.45, 0.72]) P.cyl('metal', 0.3, 0.3, 0.03, 0, y, 0, { color: col, seg: 16 });
-    P.cyl('rust', 0.24, 0.24, 0.01, 0, 0.3 + r() * 0.3, 0.2, { rx: Math.PI / 2, seg: 10 });
+    if (!(world && placeGltfProp(world, BARREL_GLB, bx, 0, bz, bry, col))) {
+      P.cyl('metal', 0.29, 0.28, 0.9, 0, 0.45, 0, { color: col, seg: 16 });
+      for (const y of [0.2, 0.45, 0.72]) P.cyl('metal', 0.3, 0.3, 0.03, 0, y, 0, { color: col, seg: 16 });
+      P.cyl('rust', 0.24, 0.24, 0.01, 0, 0.3 + r() * 0.3, 0.2, { rx: Math.PI / 2, seg: 10 });
+    }
     if (first) {
       P.cyl('dark', 0.26, 0.26, 0.02, 0, 0.86, 0, { seg: 14 });
       P.box('wood', 0.5, 0.06, 0.08, 0.02, 0.9, 0.05, { ry: 0.6, rz: 0.2, color: 0x2a1a10 });
@@ -298,17 +323,24 @@ function table(B, p, r) {
   P.cyl('metal', 0.06, 0.06, 0.015, -0.15, 0.8, 0.1, { color: 0x8a8a8a, seg: 10 });
 }
 
-function crates(B, p, r) {
+// world: si se pasa y ya tiene el modelo real cargado (ver gltfProps.js), cada cajón individual es una
+// instancia de public/models/props/crate.glb en vez de una caja procedural; si aún no ha terminado de
+// cargar, cae al respaldo procedural de siempre (idéntico al de antes de este cambio).
+function crates(B, p, r, world) {
   const { cx, cz } = rectOf(p);
   const P = B.at(cx, 0, cz, 0);
   P.box('wood', 1.9, 0.12, 1.9, 0, 0.06, 0, { color: 0x9a8060 });
   const tint = () => [0xffffff, 0xe0d4c0, 0xc8b8a0, 0xf0e0c8][(r() * 4) | 0];
+  const crateAt = (x, yBase, z, ry, sx, sy, sz) => {
+    if (world && placeGltfProp(world, CRATE_GLB, cx + x, yBase, cz + z, ry)) return;
+    P.box('crate', sx, sy, sz, x, yBase + sy / 2, z, { color: tint(), ry });
+  };
   for (const [x, z] of [[-0.47, -0.47], [0.47, -0.47], [-0.47, 0.47], [0.47, 0.47]]) {
     if (r() < 0.12) continue;
-    P.box('crate', 0.88, 0.6, 0.88, x, 0.42, z, { color: tint(), ry: (r() - 0.5) * 0.12 });
+    crateAt(x, 0.12, z, (r() - 0.5) * 0.12, 0.88, 0.6, 0.88);
   }
   const top = [[-0.45, -0.2], [0.42, 0.3]];
-  for (const [x, z] of top) P.box('crate', 0.82, 0.56, 0.82, x, 1.0, z, { color: tint(), ry: (r() - 0.5) * 0.4 });
+  for (const [x, z] of top) crateAt(x, 0.72, z, (r() - 0.5) * 0.4, 0.82, 0.56, 0.82);
   if (r() < 0.6) P.box('tarp', 1.0, 0.03, 1.0, -0.4, 1.3, -0.2, { color: 0xffffff, rz: 0.08, ry: 0.3 });
   P.box('rust', 0.05, 1.3, 0.02, 0.92, 0.65, 0.3, { color: 0x3a3a3a });
 }
@@ -555,12 +587,12 @@ export function buildStaticProps(B, world) {
   for (const p of PROPS) {
     switch (p.kind) {
       case 'bench': bench(B, p, r); break;
-      case 'bus': bus(B, p, r, signs); break;
-      case 'car': car(B, p, r, p.x0 > 40 ? world.flames : null); break;
-      case 'barrel': barrels(B, p, r, world.flames); break;
+      case 'bus': bus(B, p, r, signs, world); break;
+      case 'car': car(B, p, r, p.x0 > 40 ? world.flames : null, world); break;
+      case 'barrel': barrels(B, p, r, world.flames, world); break;
       case 'counter': counter(B, p, r); break;
       case 'table': table(B, p, r); break;
-      case 'crate': crates(B, p, r); break;
+      case 'crate': crates(B, p, r, world); break;
       case 'generator': generator(B, p, r, signs); break;
       default: {
         const { cx, cz, lx, lz } = rectOf(p);

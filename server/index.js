@@ -79,10 +79,22 @@ function resolveThreeDir() {
   }
 }
 
+function resolveRapierDir() {
+  const local = path.join(ROOT, 'node_modules', '@dimforge', 'rapier3d-compat');
+  if (fs.existsSync(local)) return local;
+  try {
+    const require = createRequire(import.meta.url);
+    return path.dirname(require.resolve('@dimforge/rapier3d-compat/package.json'));
+  } catch {
+    return local;
+  }
+}
+
 // Prefijo de URL → carpeta en disco (el orden importa: el más específico primero)
 const MOUNTS = [
   { prefix: '/shared/', dir: path.join(ROOT, 'shared') },
   { prefix: '/vendor/three/', dir: resolveThreeDir() },
+  { prefix: '/vendor/rapier3d/', dir: resolveRapierDir() },
   { prefix: '/', dir: path.join(ROOT, 'public') },
 ];
 

@@ -412,6 +412,9 @@ function getTorchAssets() {
   return torchAssets;
 }
 const _tv = new THREE.Vector3();
+const _blendQ = new THREE.Quaternion();
+const _blendV = new THREE.Vector3();
+const RAGDOLL_BLEND = 0.4;
 
 export class PlayerModel {
   constructor(opts = {}) {
@@ -479,6 +482,12 @@ export class PlayerModel {
     this.armL = arm(-1);
     this.armR = arm(1);
     this._tinted = [this.torso, this.armL.um, this.armL.fm, this.armR.um, this.armR.fm];
+    // Orden padre→hijo: lo usa el ragdoll para leer/escribir cada Group (ver startRagdoll/_applyRagdoll).
+    this._boneGroups = [
+      this.hips, this.spine, this.neck,
+      this.armL.sh, this.armL.el, this.armR.sh, this.armR.el,
+      this.legL.th, this.legL.kn, this.legR.th, this.legR.kn,
+    ];
 
     // Puntería: el arma y el escudo cuelgan de este pivote (en el pecho)
     this.aim = new THREE.Group();
@@ -530,6 +539,13 @@ export class PlayerModel {
     this.flags = 0;
     this.pitch = 0;
     this._first = true;
+
+    // Ragdoll físico (Rapier) al caer: 'none' | 'active' | 'blend' (vuelta a la pose animada tras asentarse)
+    this._ragdoll = null;
+    this._ragdollPhysics = null;
+    this._ragdollState = 'none';
+    this._blendT = 0;
+    this._blendFrom = null;
 
     this.setColor(opts.color || '#ffffff');
     this.setName(opts.name || '');
@@ -733,14 +749,17 @@ export class PlayerModel {
     this.pitch = Math.max(-1.2, Math.min(1.2, +st.pitch || 0));
 
     this._setWeapon(st.w || '', !!st.up);
-    this._pose(dt, flags, y, !!st.hasShield);
 
-    // suavizado
-    const tp = this.tp, cp = this.cp;
-    if (this._first) { cp.set(tp); this._first = false; }
-    const kk = 1 - Math.exp(-12 * dt);
-    for (let i = 0; i < NP; i++) cp[i] += (tp[i] - cp[i]) * kk;
-    this._apply(flags, !!st.hasShield);
+    if (this._ragdollState === 'active') {
+      this._ragdoll.sampleInto(this);
+      if (this._ragdollPhysics.isRagdollSettled(this._ragdoll) || !(flags & PF.DOWN)) this._startRagdollBlend();
+    } else if (this._ragdollState === 'blend') {
+      this._poseAndApply(dt, flags, y, !!st.hasShield);
+      this._applyRagdollBlend(dt);
+      if (this._blendT >= RAGDOLL_BLEND) this._ragdollState = 'none';
+    } else {
+      this._poseAndApply(dt, flags, y, !!st.hasShield);
+    }
     this._updateTorch(!!(flags & PF.FLASHLIGHT));
 
     // destello y retroceso
@@ -749,9 +768,56 @@ export class PlayerModel {
 
     // nombre
     if (this.tag) {
-      this.tag.position.y = cp[TAGY];
+      this.tag.position.y = this.cp[TAGY];
       const m = this.tag.material;
       m.opacity += (this.tagOpacity - m.opacity) * (1 - Math.exp(-8 * dt));
+    }
+  }
+
+  _poseAndApply(dt, flags, y, hasShield) {
+    this._pose(dt, flags, y, hasShield);
+    const tp = this.tp, cp = this.cp;
+    if (this._first) { cp.set(tp); this._first = false; }
+    const kk = 1 - Math.exp(-12 * dt);
+    for (let i = 0; i < NP; i++) cp[i] += (tp[i] - cp[i]) * kk;
+    this._apply(flags, hasShield);
+  }
+
+  // ------------------------------------------------------------------ Ragdoll (caída física con Rapier3D)
+  // fromX/fromZ: posición del atacante (o null si se desconoce, p. ej. caída por infección) — solo decide la
+  // dirección del impulso inicial. physics: la instancia de PhysicsWorld compartida (ctx.physics). amt: daño
+  // del golpe que derribó al jugador — escala la fuerza inicial del ragdoll.
+  startRagdoll(fromX, fromZ, physics, amt) {
+    if (!physics || typeof physics.createRagdoll !== 'function' || this._ragdollState === 'active') return;
+    if (this._ragdoll) { this._ragdollPhysics.destroyRagdoll(this._ragdoll); this._ragdoll = null; }
+    const rd = physics.createRagdoll(this, fromX, fromZ, amt);
+    if (!rd) return;   // Rapier aún no está listo: se queda con la pose estática de "última batalla"
+    this._ragdoll = rd;
+    this._ragdollPhysics = physics;
+    this._ragdollState = 'active';
+    if (this.weapon) this.weapon.visible = false;   // sin IK de brazos durante el ragdoll: se vería rígida
+  }
+
+  _startRagdollBlend() {
+    this._blendFrom = this._boneGroups.map((g) => ({ pos: g.position.clone(), quat: g.quaternion.clone() }));
+    this._blendT = 0;
+    this._ragdollPhysics.destroyRagdoll(this._ragdoll);
+    this._ragdoll = null;
+    this._ragdollState = 'blend';
+  }
+
+  // Mezcla corta desde la pose donde quedó el ragdoll hacia la pose animada normal (ya escrita por _apply
+  // este mismo frame), para no dar un salto visual al recuperar el control de la animación.
+  _applyRagdollBlend(dt) {
+    this._blendT += dt;
+    const t = Math.min(1, this._blendT / RAGDOLL_BLEND);
+    const s = t * t * (3 - 2 * t);
+    const groups = this._boneGroups;
+    for (let i = 0; i < groups.length; i++) {
+      const g = groups[i], from = this._blendFrom[i];
+      _blendQ.copy(from.quat).slerp(g.quaternion, s);
+      g.quaternion.copy(_blendQ);
+      if (i === 0) { _blendV.copy(from.pos).lerp(g.position, s); g.position.copy(_blendV); }
     }
   }
 
@@ -946,6 +1012,7 @@ export class PlayerModel {
   }
 
   dispose() {
+    if (this._ragdoll) { this._ragdollPhysics.destroyRagdoll(this._ragdoll); this._ragdoll = null; this._ragdollState = 'none'; }
     if (this.group.parent) this.group.parent.remove(this.group);
     if (this.tag) {
       if (this.tag.material.map) this.tag.material.map.dispose();

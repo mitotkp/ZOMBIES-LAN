@@ -188,7 +188,10 @@ export class ZombieManager {
     z.hp -= amt;
     if (z.boss) this._syncBosses();
     if (z.hp <= 0) {
-      this._kill(z, pid || null, inf);
+      // Copia, no mutación: info puede venir compartido entre varias llamadas (p. ej. el impacto directo y
+      // el bucle de salpicadura de una misma explosión) — escribir amt directamente en él se filtraría a
+      // los demás zombis golpeados por la misma explosión.
+      this._kill(z, pid || null, { ...inf, amt });
       return { killed: true, existed: true };
     }
     if (canCrawl && Math.random() < CRAWL_SURVIVE_CHANCE) this._makeCrawler(z);

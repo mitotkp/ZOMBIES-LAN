@@ -7,6 +7,7 @@ import { updateCamo } from './weapons/models.js';
 import { ZombieModel } from './entities/zombieModel.js';
 import { DogModel } from './entities/dogModel.js';
 import { PlayerModel } from './entities/playerModel.js';
+import { PhysicsWorld } from './physics/physicsWorld.js';
 import { World } from './world/level.js';
 import { WEAPONS, MELEE_WEAPONS, weaponDef } from '/shared/weapons.js';
 import { MEDS, ZOMBIE_TYPES, PLAYER } from '/shared/constants.js';
@@ -41,6 +42,11 @@ camera.position.set(SPAWN.x, (SPAWN.y || 0) + (PLAYER.eyeHeight || 1.62), SPAWN.
 camera.rotation.set(-0.05, 0, 0, 'YXZ');
 scene.add(camera);
 const ctx = { scene, camera, renderer, settings: { quality: 'high', brightness: 1.2 }, gs: null, events: null };
+// La pestaña "Modelos" renderiza en mScene, una escena aislada sin relación con las coordenadas del mapa
+// real — de ahí el suelo plano adicional (los muros/props del mapa real sí sirven para probar en la pestaña
+// "Armas y manos" con ?map=castillo, aunque esa pestaña no muestra el ragdoll del jugador).
+const physics = new PhysicsWorld(ctx);
+physics.addFlatGroundPlane(0, 50);
 let world = null;
 try {
   world = new World(ctx);
@@ -335,7 +341,8 @@ $('z-ability').onclick = () => {
     else if (o.type === 'specter') $('cloak').checked = !$('cloak').checked;
   }
 };
-$('z-death').onclick = () => { for (const o of models) if (o.kind === 'zombie') o.m.startDeath(null, 0, 1, {}); };
+$('z-death').onclick = () => { for (const o of models) if (o.kind === 'zombie') o.m.startDeath(null, 0, 1, { physics }); };
+$('z-explode').onclick = () => { for (const o of models) if (o.kind === 'zombie') o.m.startDeath('explode', 0, 1, { physics }); };
 
 // ------------------------------------------------------------------ bucle
 function resize() {
@@ -368,6 +375,7 @@ function frame(now) {
   last = now;
   const dt = realDt * (+$('speed').value);
   const t0 = performance.now();
+  physics.update(dt);
   if (mode === 'weapons') updateWeapons(dt);
   else updateModels(dt);
   for (const z of benchZ) z.update(dt, { anim: ZA.WALK, flags: 0, speed: 1 });
@@ -441,6 +449,7 @@ function reloadState(r) {
   return { style: r.style, p, wasEmpty: r.wasEmpty };
 }
 
+let pdownPrev = false;
 function updateModels(dt) {
   const anim = +$('anim').value;
   const spd = +$('mspeed').value;
@@ -448,9 +457,12 @@ function updateModels(dt) {
   if ($('fuse').checked) flags |= ZF.FUSE;
   if ($('cloak').checked) flags |= ZF.CLOAK;
   if (chargeT > 0) { chargeT -= dt; flags |= ZF.CHARGE; }
+  const pdownNow = $('pdown').checked;
+  const pdownRising = pdownNow && !pdownPrev;
+  pdownPrev = pdownNow;
   for (const o of models) {
     if (o.kind === 'zombie') {
-      if (o.m.death) { o.m.updateDeath(dt, {}); continue; }
+      if (o.m.death) { o.m.updateDeath(dt, { physics }); continue; }
       let a = anim;
       if (o.attackT > 0) { o.attackT -= dt; a = ZA.ATTACK; }
       if (flags & ZF.CHARGE) a = ZA.SPRINT;
@@ -459,9 +471,10 @@ function updateModels(dt) {
       let pf = 0;
       if ($('pcrouch').checked) pf |= PF.CROUCH;
       if ($('pads').checked) pf |= PF.ADS;
-      if ($('pdown').checked) pf |= PF.DOWN;
+      if (pdownNow) pf |= PF.DOWN;
       if ($('ptorch').checked) pf |= PF.FLASHLIGHT;
       o.m.update(dt, { x: o.x, y: 0, z: 0, yaw: Math.PI, pitch: 0, flags: pf, w: $('pweapon').value, up: false, hasShield: false });
+      if (pdownRising) o.m.startRagdoll(o.x, 2, physics);   // "atacante" ficticio 2 m al frente
     }
   }
   mControls.update();
@@ -490,4 +503,4 @@ function lastModel() {
   const box = new THREE.Box3().setFromObject(o.m.group);
   return Math.max(0.5, box.max.y);
 }
-window.testroom = { vm, ACTIONS, setMode, vmCamera, controls, mCamera, mControls, lastModel, models: () => models, camera, world, renderer, camBaseY: SPAWN.y || 0 };
+window.testroom = { vm, ACTIONS, setMode, vmCamera, controls, mCamera, mControls, lastModel, models: () => models, camera, world, physics, renderer, camBaseY: SPAWN.y || 0 };

@@ -44,6 +44,7 @@ const MODULES = [
   { key: 'audio', path: './audio.js', cls: 'Audio' },
   { key: 'effects', path: './entities/effects.js', cls: 'Effects' },
   { key: 'world', path: './world/level.js', cls: 'World' },
+  { key: 'physics', path: './physics/physicsWorld.js', cls: 'PhysicsWorld' },
   { key: 'entities', path: './entities/entities.js', cls: 'EntityManager' },
   { key: 'weapons', path: './weapons/weaponSystem.js', cls: 'WeaponSystem' },
   { key: 'player', local: PlayerController },
@@ -51,7 +52,7 @@ const MODULES = [
   { key: 'hud', path: './ui/hud.js', cls: 'HUD' },
   { key: 'menus', path: './ui/menus.js', cls: 'Menus' },
 ];
-const UPDATE_ORDER = ['player', 'interaction', 'weapons', 'entities', 'world', 'effects', 'hud', 'audio'];
+const UPDATE_ORDER = ['player', 'interaction', 'weapons', 'physics', 'entities', 'world', 'effects', 'hud', 'audio'];
 
 // ---------------------------------------------------------------------------------------------
 // Ajustes persistidos
@@ -279,7 +280,7 @@ async function boot() {
     debug: DEBUG,
     lan: [],
     time: 0,
-    player: null, interaction: null, world: null, entities: null, effects: null, weapons: null, hud: null, menus: null, audio: null,
+    player: null, interaction: null, world: null, physics: null, entities: null, effects: null, weapons: null, hud: null, menus: null, audio: null,
     saveSettings: () => saveSettings(settings),
   };
   window.game = ctx;

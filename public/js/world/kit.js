@@ -2,7 +2,7 @@
 // colocación de primitivas en coordenadas locales y pequeños ayudantes (sonido 3D, reloj del servidor).
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { getTex, glowTexture, poolTexture } from './textures.js';
+import { getTex, getNormalTex, glowTexture, poolTexture } from './textures.js';
 
 export const TAU = Math.PI * 2;
 
@@ -189,11 +189,18 @@ export class MaterialLib {
     if (d.depthWrite === false) p.depthWrite = false;
     if (d.alphaTest) p.alphaTest = d.alphaTest;
     if (d.polygonOffset) { p.polygonOffset = true; p.polygonOffsetFactor = d.polygonOffset; p.polygonOffsetUnits = d.polygonOffset; }
-    if (d.type === 'standard') {
+    // Un 'lambert' con textura de color sube a 'standard' con mapa de normales derivado de esa misma
+    // textura (ver getNormalTex): Lambert no admite relieve, así que sin esto las grietas/juntas/vetas ya
+    // pintadas solo se verían como variación de color plano. Las calcomanías con transparencia (sangre,
+    // suciedad...) y los 'basic' se quedan igual: no hay relieve que resaltar en una capa translúcida.
+    const bump = d.map && d.type !== 'basic' && !d.transparent ? getNormalTex(d.map, d.bumpStrength) : null;
+    if (bump) p.normalMap = bump;
+    const type = bump && d.type !== 'standard' ? 'standard' : d.type;
+    if (type === 'standard') {
       p.metalness = d.metalness != null ? d.metalness : 0;
-      p.roughness = d.roughness != null ? d.roughness : 0.8;
+      p.roughness = d.roughness != null ? d.roughness : 0.85;
       m = new THREE.MeshStandardMaterial(p);
-    } else if (d.type === 'basic') {
+    } else if (type === 'basic') {
       m = new THREE.MeshBasicMaterial(p);
     } else {
       m = new THREE.MeshLambertMaterial(p);

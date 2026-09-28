@@ -175,6 +175,7 @@ export class World {
     scene.remove(this.root);
     const mats = new Set(this.mats.all());
     this.root.traverse((o) => {
+      if (o.userData.sharedAsset) return;   // geometría/material de un modelo cargado (gltfProps.js): no es de este World
       if (o.geometry) o.geometry.dispose();
       const m = o.material;
       if (m) for (const mm of Array.isArray(m) ? m : [m]) mats.add(mm);
