@@ -141,8 +141,10 @@ export class FlowField {
       // a una escalera se entra (y se sale) de frente, no en diagonal
       if (this.NL > 1) {
         const M = this.M, W = this.W;
-        const a = M.stairIdx[cz * W + cx], b = M.stairIdx[(cz + dz) * W + cx + dx];
-        const c = M.stairIdx[cz * W + cx + dx], d = M.stairIdx[(cz + dz) * W + cx];
+        // solo escaleras de esta planta o de la de abajo (la rejilla de escaleras es 2D, común a todas las plantas)
+        const S = (k) => (k >= 0 && (M.STAIRS[k].lv === l || M.STAIRS[k].lv === l - 1) ? k : -1);
+        const a = S(M.stairIdx[cz * W + cx]), b = S(M.stairIdx[(cz + dz) * W + cx + dx]);
+        const c = S(M.stairIdx[cz * W + cx + dx]), d = S(M.stairIdx[(cz + dz) * W + cx]);
         if ((a !== b || a !== c || a !== d) && (a >= 0 || b >= 0 || c >= 0 || d >= 0)) return -1;
       }
     }

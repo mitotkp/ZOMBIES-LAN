@@ -407,6 +407,10 @@ export class HUD {
       if (e.k === 'fight') this._flash('rgba(120,60,255,0.45)', 1.2);
       this._banner(tr(T[0]), tr(T[1]), T[2]);
     });
+    this._on('ev:stun', (e) => {
+      if (!this._isSelf(e.pid)) return;
+      this._flash('rgba(255,236,210,0.55)', Math.max(0.5, Math.min(2, +e.t || 1)));
+    });
     this._on('ev:eeBrazier', (e) => {
       if (e.ok) this.message(tr('El brasero arde'), 1.8);
     });

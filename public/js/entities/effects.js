@@ -625,8 +625,8 @@ export class Effects {
     const P = _boom.set(+e.p[0] || 0, Math.max(0.05, +e.p[1] || 0), +e.p[2] || 0);
     if (!isFinite(P.x) || !isFinite(P.z)) return;
     let def = null;
-    if (e.w && e.w !== 'frag' && e.w !== 'bomber') { try { def = weaponDef(e.w, !!e.up); } catch { def = null; } }
-    let kind = e.w === 'bomber' ? 'bomber' : 'frag';
+    if (e.w && e.w !== 'frag' && e.w !== 'bomber' && e.w !== 'dog') { try { def = weaponDef(e.w, !!e.up); } catch { def = null; } }
+    let kind = e.w === 'bomber' || e.w === 'dog' ? 'bomber' : 'frag';   // el perro infernal estalla en llamas
     if (def) {
       if (def.model === 'raygun') kind = e.up ? 'raygun_up' : 'raygun';
       else if (def.model === 'launcher') kind = 'launcher';

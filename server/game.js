@@ -5,7 +5,7 @@
 import {
   MAX_PLAYERS, TICK_RATE, GS_MAX_RATE, SNAPSHOT_RATE, PLAYER, POINTS, BOARDS_PER_WINDOW, REPAIR_TIME,
   BOX, PAP, SHIELD, MELEE, GRENADE, POWERUPS, PLAYER_COLORS, clamp, angleDiff, yawTo, forwardXZ,
-  MEDS, MED_KEYS, MED_DROPS, INFECTION, ZOMBIE_TYPES, BOSS_RULES,
+  MEDS, MED_KEYS, MED_DROPS, INFECTION, ZOMBIE_TYPES, BOSS_RULES, DOG_ROUND,
   BALANCE,
 } from '../shared/constants.js';
 import {
@@ -1791,6 +1791,8 @@ export class Game {
       this.spawnItem('medkit', z.x + 0.8, z.z + 0.4, undefined, z.y);
       this._ev({ e: 'bossDown', id: z.id, key: z.boss, pid: p ? p.id : null });
     }
+    // Perro infernal: estalla al morir (aturde a los que estén muy cerca)
+    if (z.dog && kind !== 'dev' && kind !== 'nuke') this._dogBurst(z);
     // El tanque deja siempre un potenciador
     if (z.type === 'tank' && kind !== 'dev') {
       const t = this._randomPowerupType(this.clock());
@@ -1832,6 +1834,23 @@ export class Game {
     d.infT = 0; d.infAcc = 0;
     this.markDirty();
     this._ev({ e: 'infected', pid: p.id });
+  }
+
+  // Estallido de un perro infernal: sin daño; aturde (s) según la distancia a los jugadores a la vista
+  _dogBurst(z) {
+    const B = DOG_ROUND.burst;
+    const y = z.y || 0;
+    this._ev({ e: 'boom', pid: 0, w: 'dog', up: false, p: [r2(z.x), r2(y + 0.5), r2(z.z)], r: B.radius });
+    for (const p of this._players()) {
+      if (p.state !== 'alive') continue;
+      const d = this.pd.get(p.id);
+      if (!d || !d.hasPos || d.god) continue;
+      const dist = Math.hypot(d.x - z.x, d.z - z.z, ((d.y || 0) - y) * 1.5);
+      if (dist > B.radius) continue;
+      if (!lineOfSight(z.x, y + 0.5, z.z, d.x, (d.y || 0) + 1.2, d.z, this.gs.doors)) continue;
+      const t = B.stunMin + (B.stunMax - B.stunMin) * (1 - dist / B.radius);
+      this._ev({ e: 'stun', pid: p.id, t: Math.round(t * 100) / 100 });
+    }
   }
 
   // Explosión de un zombi explosivo: daña a los jugadores y a los zombis cercanos
