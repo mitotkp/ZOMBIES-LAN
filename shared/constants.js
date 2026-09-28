@@ -173,7 +173,7 @@ export const BALANCE = {
 Object.assign(ZOMBIE_TYPES, {
   dog: {
     code: 9, name: 'Perro infernal', dog: true,
-    hpBase: 160, hpPerRound: 24, speed: 6.3, damage: 18, attackRange: 1.15, windup: 0.22, cooldown: 0.85, scale: 1,
+    hpBase: 1, hpPerRound: 0, speed: 6.3, damage: 18, attackRange: 1.15, windup: 0.22, cooldown: 0.85, scale: 1,   // mueren de un disparo
   },
 });
 export const DOG_ROUND = {
@@ -182,6 +182,8 @@ export const DOG_ROUND = {
   aliveBase: 3, alivePerPlayer: 2,                    // perros vivos a la vez
   spawnDelay: 1.2,                                    // s entre apariciones
   minDist: 6, maxDist: 16,                            // m de camino desde el jugador al aparecer
+  // al morir estallan: no hacen daño, pero aturden a quien esté muy cerca (más cuanto más cerca)
+  burst: { radius: 2.8, stunMax: 1.6, stunMin: 0.5 },
 };
 export function isDogRound(round) { return round > 0 && round % DOG_ROUND.every === 0; }
 

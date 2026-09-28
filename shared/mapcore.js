@@ -295,10 +295,15 @@ export function buildMap(def) {
     const st = stairAt(ex, ez);
     return st && Math.abs(rampY(st, ex, ez) - y) < 1.0 ? st : null;
   };
+  // La rejilla de escaleras es 2D (compartida por todas las plantas): una escalera solo cuenta para quien está en
+  // su rango de alturas. Sin esto, bajo o sobre una escalera de otra planta había paredes invisibles.
+  const stairNear = (st, y) => y >= baseY(st.lv) - 1.3 && y <= baseY(st.lv + 1) + 1.3;
+  M.stairNear = stairNear;
   M.walkable = (cx, cz, doors, y = levels[0].y, ex, ez) => {
     if (!inBounds(cx, cz)) return false;
     const i = idx(cx, cz);
-    const s = stairIdx[i];
+    const s0 = stairIdx[i];
+    const s = s0 >= 0 && stairNear(STAIRS[s0], y) ? s0 : -1;
     const cur = ex !== undefined && STAIRS.length ? onStairAt(ex, ez, y) : null;
     if (s >= 0) {
       const st = STAIRS[s];

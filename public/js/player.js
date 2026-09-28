@@ -87,9 +87,22 @@ export class PlayerController {
     if (ev && typeof ev.on === 'function') {
       ev.on('local:damage', (d) => {
         const amount = d && typeof d.amount === 'number' ? d.amount : 50;
-        this.shake(amount > 0 ? 0.45 : 0.2, 0.3);
-        // pequeño golpe de cámara que se recupera solo
-        this._kick((Math.random() * 0.5 + 0.5) * 0.03, (Math.random() - 0.5) * 0.03, 1);
+        // el golpe se tiene que notar: sacudida fuerte y la cabeza se va hacia el lado del que viene
+        this.shake(amount > 0 ? clamp(0.85 + amount / 60, 0.85, 1.6) : 0.25, amount > 0 ? 0.42 : 0.3);
+        let side = (Math.random() - 0.5) * 0.04;
+        if (d && isFinite(d.fromX) && isFinite(d.fromZ)) {
+          const a = Math.atan2(-(d.fromX - this.position.x), -(d.fromZ - this.position.z));   // yaw hacia el atacante
+          side = -Math.sin(angleDiff(this.yaw, a)) * 0.06;
+        }
+        this._kick(amount > 0 ? 0.05 + Math.random() * 0.03 : 0.015, side, 1);
+      });
+      // estallido de un perro infernal cerca: aturdido (más lento, la cámara se tambalea)
+      ev.on('ev:stun', (e) => {
+        if (!e || !sameId(e.pid, this.ctx.selfId)) return;
+        const t = clamp(Number(e.t) || 0.8, 0.2, 3);
+        this._stunT = Math.max(this._stunT || 0, t);
+        this._stunDur = Math.max(this._stunDur || 0, this._stunT);
+        this.shake(1.2, Math.min(0.8, t));
       });
       ev.on('ev:down', (e) => { if (e && sameId(e.pid, this.ctx.selfId)) this.shake(0.8, 0.6); });
       ev.on('ev:shieldHit', (e) => { if (e && sameId(e.pid, this.ctx.selfId)) this.shake(0.25, 0.2); });
@@ -127,7 +140,7 @@ export class PlayerController {
     this.stamina01 = 1;
     this._exhausted = false;
     this._recoilP = 0; this._recoilY = 0;
-    this._shakeTime = 0; this._shakeAmp = 0;
+    this._shakeTime = 0; this._shakeAmp = 0; this._stunT = 0;
     this._landDip = 0;
     this._bobAmp = 0;
     this._roll = 0;
@@ -383,6 +396,7 @@ export class PlayerController {
     if (staminUp && !down) speed *= STAMINUP_SPEED;
     const mm = Number(this.moveMult);
     speed *= isFinite(mm) ? clamp(mm, 0.1, 1.5) : 1;
+    if (this._stunT > 0) speed *= 0.5;   // aturdido por el estallido de un perro
     if (!sprint) {
       if (fwd < 0) speed *= 0.88;
       else if (fwd === 0 && str !== 0) speed *= 0.95;
@@ -489,6 +503,13 @@ export class PlayerController {
     let rollTarget = -lateral * 0.0045;
     if (down) rollTarget += 0.11;
     rollTarget += 0.07 * this._slideFx;
+    // aturdido: la cabeza se tambalea (se apaga al final)
+    if (this._stunT > 0) {
+      this._stunT = Math.max(0, this._stunT - dt);
+      const k = this._stunDur > 0 ? this._stunT / this._stunDur : 0;
+      rollTarget += 0.09 * k * Math.sin(this._t * 3.1);
+      this._kick(0.004 * k * Math.sin(this._t * 2.3), 0.006 * k * Math.sin(this._t * 1.7), 1);
+    }
     this._roll += (rollTarget - this._roll) * (1 - Math.exp(-8 * dt));
 
     // Altura de los ojos (agacharse / caído suave)
