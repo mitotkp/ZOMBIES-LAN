@@ -73,6 +73,14 @@ export const ZOMBIE = {
   spawnDelayDecay: 0.95,    // multiplicador por ronda
   minSpawnDelay: 0.15,
   stuckRespawnTime: 25,     // si no avanza en este tiempo, reaparece
+  speedVariance: 0.15,      // cada zombi normal sale con velocidad base * (1 ± esto): la horda no se mueve al unísono
+  aiInterval: 0.25,         // s entre replanificaciones de ruta (el movimiento sigue cada tick; ver Zombie._steer)
+  // Merodeo -> persecución: un zombi normal que entra sin jugadores cerca ni ruido merodea un rato; se activa
+  // por vista (vision, m), por ruido (disparo: noiseShot, correr: noiseSprint) o al agotarse el tiempo (idleMin..idleMax s)
+  // -- así la horda siempre acaba llegando (una ronda no se atasca) pero no todos se lanzan a la vez.
+  aggro: { vision: 14, noiseShot: 40, noiseSprint: 10, idleMin: 4, idleMax: 10 },
+  // Retroceso por impacto (sin aturdir del todo): la velocidad se multiplica durante `time` s
+  stagger: { bodyMult: 0.6, bodyTime: 0.3, legMult: 0.35, legTime: 0.6 },
 };
 
 // Tipos especiales de zombi (además de los normales). code = valor en el snapshot.

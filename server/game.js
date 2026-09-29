@@ -667,6 +667,7 @@ export class Game {
     const { curChanged } = player.applyMovementReport(m);
     const separate = (x, z, dt, y, solid) => separateFromZombies(this.zombies.list(), 'y', x, z, dt, y, solid);
     player.applyMoveCommands(m.c, now, { doors: this.gs.doors, separate });
+    if (d.sim && d.sim.sprinting && d.hasPos && now - (d.lastNoiseAt || 0) > 400) { d.lastNoiseAt = now; this.zombies.hearSprint(d.x, d.z, d.y); }
     if (curChanged) this.markDirty();
   }
 
@@ -700,6 +701,7 @@ export class Game {
     const def = weaponDef(w, up);
     if (!def || def.melee) return;
     if (!this._rate(d.fireTimes, now, 1000, 40)) return;
+    if (d.hasPos) this.zombies.hearShot(d.x, d.z, d.y);
     const o = vec3(m.o), dir = vec3(m.d, 2);
     let e = vec3(m.e);
     if (o && dir) {

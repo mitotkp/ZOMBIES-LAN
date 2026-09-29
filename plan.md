@@ -343,4 +343,54 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
     sea correcta), y en el navegador real (caminar 9 m: posición del cliente == posición del servidor, pendientes
     a 0, sin errores). **Sin probar**: latencia alta/pérdida de paquetes (solo localhost), teletransportador real
     del castillo, escaleras con reconciliación, y jugar a mano con teclado/ratón reales.
-  - **Siguiente en la cola**: migrar movimiento/ataque de Zombie a su clase (fase grande, confirmar antes)..
+  - **Paso 7 (hecho): Zombie completo + plan de IA/físicas/horda (`server/entities/zombie.js`, `server/zombies.js`,
+    `shared/pool.js`, `shared/constants.js`).** `Zombie` ahora es dueña de TODO el comportamiento de UN zombi:
+    `update(dt, now)` (máquina de estados), `moveToward` ("procesar movimiento"), `startAttack/_updAttack` ("atacar"),
+    `takeDamage`, `die`. `ZombieManager` conserva lo compartido (colección, campo de flujo, objetivos, colisiones,
+    separación, rondas, aparición, ruido, atascos, piscina) y las habilidades de los jefes (invocan zombis y usan el
+    campo de flujo); la clase le pide esos recursos por `this.manager`. `z._c` (no enumerable) es el envoltorio
+    persistente: ya no se crea un `Zombie` por llamada.
+    **Revisión del plan pegado por el usuario, punto por punto:**
+    - *1. FSM*: hecha. Estados `outside → tearing → climbing → inside` (+ `attacking`, `stunned`) y, dentro,
+      `mode`: **wander → chase** (Idle/Wander → Agro). El merodeo solo lo hacen los zombis normales recién entrados:
+      se activan por **vista** (`ZOMBIE.aggro.vision` 14 m, misma planta), por **ruido** (disparo 40 m vía
+      `Game._onFire`, correr 10 m vía `_onState`; `ZombieManager.noise/hearShot/hearSprint`), al ser **dañados**, o
+      al agotarse su tiempo de merodeo (4–10 s desde que entran). Ese tope es a propósito: en un modo por rondas, un
+      zombi que no persigue jamás atasca la ronda; la horda siempre llega. Perros, jefes, tipos especiales,
+      invocados y oleadas continuas (`rush`) persiguen desde el principio. Efecto de juego: la ronda 1 dura ~10 s
+      más. *Stagger/Death*: la muerte ya existía; nuevo **retroceso** = velocidad x0.6 0.3 s (cuerpo/cabeza) o x0.35
+      0.6 s (piernas), solo balas/cuerpo a cuerpo, sin jefes/tanques/perros (`ZOMBIE.stagger`, `Zombie._stagger`).
+      **No adoptado**: "headshot = muerte instantánea" (el daño ya escala por arma: `def.head` x1.5–x5; un headshot
+      con pistola inicial no mata a un zombi de ronda 10 y así debe ser el equilibrio) — cambiarlo es decisión de diseño.
+    - *2. Rapier3D*: **no aplica a la simulación de zombis y no se cambió.** Rapier existe solo en el CLIENTE
+      (`public/js/physics/`: ragdolls de jugadores caídos y gibs, ya con cápsulas/bolas dinámicas). Los zombis vivos
+      los simula el SERVIDOR (Node, multi-sala, autoritativo) con colisión de círculo sobre la cuadrícula
+      (`moveCircle`, `resolveCircle`), campo de flujo y separación: determinista, barato para 24 zombis x N salas y
+      sin riesgo de desincronía por física. Meter un motor de físicas en el servidor por cápsulas + `lockRotations`
+      no aporta nada porque el círculo ya no rota ni cae. *Hitboxes*: ya existen y separadas
+      (`shared/collision.js`: `ZOMBIE_HITBOX`, `rayZombie`: cabeza esférica, torso cilíndrico, piernas; multiplicador
+      por arma, no un x3 fijo).
+    - *3. Movimiento y animación*: velocidad variable **hecha** (`ZOMBIE.speedVariance` 0.15 → base x [0.85, 1.15]; antes
+      era +-8 %). Animación sincronizada con la velocidad real: **ya lo hacía** el cliente
+      (`entities.js` mide el desplazamiento real por fotograma y `ZombieModel.update` deriva el ritmo del ciclo de
+      paso de `speed/zancada`) — sin cambios; el merodeo lento se ve como paso lento.
+    - *4. Rendimiento*: **IA diferida** hecha: la elección de ruta (rayos + campo de flujo, lo caro) se rehace cada
+      `ZOMBIE.aiInterval` = 0.25 s con azar +-20 % por zombi (`Zombie._plan`); el paso de movimiento se da cada tick
+      hacia lo último decidido y el cliente ya interpola snapshots. Medido: 7 planificaciones en 40 ticks (antes 40).
+      **Piscina de objetos**: `shared/pool.js` (`ObjectPool`: acquire/release/deferRelease/flush) y los datos del zombi se
+      reciclan (`_blankZombie` declara todos los campos; `_newZombie` los reinicia uno a uno sin crear objetos);
+      la liberación es DIFERIDA (un zombi muerto espera al siguiente tick porque eventos/puntos/explosiones aún lo
+      leen). **No hecho en el cliente**: `InstancedMesh`/piscina de modelos. `ZombieModel` es un grafo procedural
+      distinto por semilla (materiales propios, piezas/desmembrado que se mutan al morir y pasa a cadáver); reciclarlo
+      exige un `reset()` completo que hoy no existe y un fallo se vería como zombis con miembros de otro. Lo caro
+      (geometrías, texturas, materiales base) ya está compartido/cacheado en `getZombieAssets`. Queda anotado como
+      trabajo aparte si el perfil lo pide.
+    Verificado: `node --check`, prueba aislada previa de daño (29 aserciones, sigue OK), prueba nueva de la FSM con un
+    `ZombieManager` real (~40 aserciones: velocidad variable, piscina y reinicio total de campos, cuarentena,
+    merodeo → persecución por vista/ruido/tiempo/daño, no cuenta como atascado, retroceso, planificación diferida,
+    ataque con windup, ventana outside→tearing→climbing→inside), y `bot-test.js`: partida normal (ronda 3), ronda 12
+    con jefe/habilidades/tanques/explosivos (3 bots), castillo, y escenario completo 11/11; 0 errores en todas.
+    **Sin probar**: latencia alta, partida real con teclado/ratón, ni el efecto del merodeo en el "feeling" (ajustar
+    `ZOMBIE.aggro` si la ronda se siente lenta).
+  - **Siguiente en la cola**: (a) probar a mano todo lo de los pasos 6-7; (b) opcional: piscina/`reset()` de `ZombieModel`
+    en el cliente si el rendimiento lo pide; (c) subir a GitHub cuando `gh` tenga la sesión de `mitotkp`..
