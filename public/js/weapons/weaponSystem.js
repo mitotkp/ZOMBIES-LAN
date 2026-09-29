@@ -14,6 +14,7 @@ import { ViewModel, KNIFE_DUR, KNIFE_HIT, THROW_DUR, THROW_RELEASE, BASH_DUR, BA
 import { Projectiles } from './projectiles.js';
 import { coneDir, traceBullet, meleeTargets, blockedBetween, MAX_RANGE } from './ballistics.js';
 import { tr } from '../i18n.js';
+import { createWeapon } from './weapon.js';
 
 const V3 = THREE.Vector3;
 const TRACER_DEFAULT = 0xffe0a0;
@@ -45,33 +46,8 @@ const FLASH = {
   raygun: [1.2, 0x6dff6d], raygun2: [1.1, 0x6dff6d], launcher: [1.4, 0xffb060],
 };
 
-// Sonidos de la recarga completa: [progreso 0..1, sonido, solo si el cargador estaba vacío]
-const RELOAD_SFX = {
-  mag: [[0.2, 'reload_out'], [0.58, 'reload_in'], [0.8, 'reload_bolt', true]],
-  pistol: [[0.2, 'reload_out'], [0.55, 'reload_in'], [0.8, 'reload_bolt', true]],
-  raygun: [[0.2, 'reload_out'], [0.55, 'reload_in'], [0.78, 'reload_bolt']],
-  lmg: [[0.1, 'reload_bolt'], [0.28, 'reload_out'], [0.6, 'reload_in'], [0.84, 'reload_bolt']],
-  bolt: [[0.2, 'reload_out'], [0.56, 'reload_in'], [0.75, 'reload_bolt']],
-  revolver: [[0.14, 'reload_out'], [0.52, 'reload_in'], [0.8, 'reload_bolt']],
-  break: [[0.16, 'reload_out'], [0.5, 'reload_in'], [0.78, 'reload_bolt']],
-  launcher: [[0.18, 'reload_out'], [0.5, 'reload_in'], [0.8, 'reload_bolt']],
-};
-// Momento de la recarga en que la munición pasa al cargador (si se cancela después, se conserva)
-const RELOAD_COMMIT = { mag: 0.62, pistol: 0.6, raygun: 0.6, lmg: 0.66, bolt: 0.6, revolver: 0.56, break: 0.52, launcher: 0.6 };
-
-function reloadStyle(def) {
-  switch (def.model) {
-    case 'pistol': return 'pistol';
-    case 'revolver': return 'revolver';
-    case 'raygun': return 'raygun';
-    case 'doublebarrel': return 'break';
-    case 'shotgun': return def.mode === 'pump' ? 'shell' : 'mag';
-    case 'lmg': return 'lmg';
-    case 'sniper': return def.mode === 'bolt' ? 'bolt' : 'mag';
-    case 'launcher': return 'launcher';
-    default: return 'mag';
-  }
-}
+// (la tabla de sonidos de recarga, el momento en que se confirma la munición, y reloadStyle() ahora
+// viven en weapon.js -- Weapon.processReload() las usa directamente)
 
 function tracerColor(def, up) {
   if (!def) return TRACER_DEFAULT;
@@ -142,9 +118,9 @@ export class WeaponSystem {
     const def = weaponDef(a.key, a.up);
     if (!def) return null;
     const am = this._ammo();
-    return { slot: a.temp ? null : a.slot, key: a.key, up: !!a.up, def, mag: am ? am.mag : 0, reserve: am ? am.reserve : 0 };
+    return { slot: a.temp ? null : a.slot, key: a.key, up: !!a.up, def, mag: am ? am.currentBullets : 0, reserve: am ? am.reserveBullets : 0 };
   }
-  get isReloading() { return !!this.reload; }
+  get isReloading() { const am = this._ammo(); return !!am && am.state === 'reloading'; }
   get isShieldOut() { return !!this.shieldOut; }
   get isDrinking() { return this.drinkT >= 0; }
 
@@ -153,8 +129,8 @@ export class WeaponSystem {
     const a = this.active;
     const def = a ? weaponDef(a.key, a.up) : null;
     const am = def ? this._ammo() : null;
-    const mag = am ? am.mag : null;
-    const reserve = am ? am.reserve : null;
+    const mag = am ? am.currentBullets : null;
+    const reserve = am ? am.reserveBullets : null;
     const grenades = this._gsNades === null ? (self ? Number(self.grenades) || 0 : 0) : this.nadesLocal;
     return {
       name: def ? def.name : null,
@@ -179,7 +155,7 @@ export class WeaponSystem {
 
   // Vuelve al estado inicial (nueva partida / vuelta a la sala)
   reset() {
-    this.ammo = new Map();            // k -> { up, mag, reserve }
+    this.weapons = new Map();         // k -> instancia de Weapon (ver weapon.js)
     this.inv = [];                    // copia de self.weapons ({ k, up } o null si no es válida)
     this.invSig = null;
     this.active = null;               // { key, up, slot, temp }
@@ -195,9 +171,7 @@ export class WeaponSystem {
     this.burstLeft = 0;
     this.fireQueued = -1;
     this.bloom = 0;
-    this.reload = null;
     this.cycle = null;
-    this.autoReloadAt = -1;
     this.knifeT = -1; this.knifeHitDone = false; this.meleeCd = 0; this.knifeDur = KNIFE_DUR; this.knifeHitAt = KNIFE_HIT;
     this.throwT = -1; this.throwDone = false;
     this.drinkT = -1; this.drinkDur = DRINK_DUR; this.drinkKind = 'perk'; this.healKey = null;
@@ -273,10 +247,10 @@ export class WeaponSystem {
     for (const w of this.inv) {
       if (!w) continue;
       keep.add(w.k);
-      const am = this.ammo.get(w.k);
+      const am = this.weapons.get(w.k);
       if (!am || am.up !== w.up) this._fillAmmo(w.k, w.up);
     }
-    for (const k of [...this.ammo.keys()]) if (!keep.has(k)) this.ammo.delete(k);
+    for (const k of [...this.weapons.keys()]) if (!keep.has(k)) this.weapons.delete(k);
     return true;
   }
 
@@ -366,34 +340,40 @@ export class WeaponSystem {
   }
 
   _fillAmmo(k, up) {
-    const def = weaponDef(k, up);
-    const am = { up: !!up, mag: def ? def.mag : 0, reserve: def ? def.reserve : 0 };
-    this.ammo.set(k, am);
-    return am;
+    const w = createWeapon(k, up);
+    this.weapons.set(k, w);
+    return w;
+  }
+
+  // Arma temporal de "última batalla" (M1911 con munición propia, aparte del inventario real)
+  _makeTempAmmo() {
+    const w = createWeapon('m1911', false);
+    w.currentBullets = LAST_STAND_AMMO.mag;
+    w.reserveBullets = LAST_STAND_AMMO.reserve;
+    this.tempAmmo = w;
   }
 
   _ammo() {
     const a = this.active;
     if (!a) return null;
     if (a.temp) {
-      if (!this.tempAmmo) this.tempAmmo = { up: false, mag: LAST_STAND_AMMO.mag, reserve: LAST_STAND_AMMO.reserve };
+      if (!this.tempAmmo) this._makeTempAmmo();
       return this.tempAmmo;
     }
-    const am = this.ammo.get(a.key);
+    const am = this.weapons.get(a.key);
     if (am && am.up === a.up) return am;
     return this._fillAmmo(a.key, a.up);
   }
 
   _refillReserve(k, up) {
-    const am = this.ammo.get(k);
+    const am = this.weapons.get(k);
     if (!am || am.up !== !!up) { this._fillAmmo(k, up); return; }
-    const def = weaponDef(k, up);
-    if (def) am.reserve = def.reserve;
+    am.refill({ mag: false, reserve: true });
   }
 
   _refillAll() {
     for (const w of this.inv) if (w) this._refillReserve(w.k, w.up);
-    if (this.tempAmmo) this.tempAmmo.reserve = LAST_STAND_AMMO.reserve;
+    if (this.tempAmmo) this.tempAmmo.reserveBullets = LAST_STAND_AMMO.reserve;
     this._scheduleAutoReload(0.2);
   }
 
@@ -414,7 +394,7 @@ export class WeaponSystem {
   _equipTemp() {
     this._interrupt();
     this.shieldOut = false;
-    this.tempAmmo = { up: false, mag: LAST_STAND_AMMO.mag, reserve: LAST_STAND_AMMO.reserve };
+    this._makeTempAmmo();
     this.active = { key: 'm1911', up: false, slot: null, temp: true };
     this._showWeapon('m1911', false, false);
     this._play('switch', { volume: 0.7 });
@@ -463,11 +443,11 @@ export class WeaponSystem {
 
   // Corta disparo/recarga/ciclo en curso
   _interrupt() {
-    this.reload = null;
+    const am = this._ammo();
+    if (am) { am.cancelReload(); am.cancelAutoReload(); }
     this.cycle = null;
     this.burstLeft = 0;
     this.fireQueued = -1;
-    this.autoReloadAt = -1;
   }
 
   // Corta además cuchillo, granada, bebida y golpe de escudo
@@ -568,9 +548,9 @@ export class WeaponSystem {
     const am = this._ammo();
     if (!am) return;
     // la recarga cartucho a cartucho se interrumpe al disparar si queda algo en el cargador
-    if (this.reload && this.reload.kind === 'shell' && am.mag > 0 && (pressed || held)) this.reload = null;
-    if (this.reload || this.cycle || this._fireBlocked(player)) {
-      if (this.reload || this._fireBlocked(player)) this.burstLeft = 0;
+    if (am.reloadKind === 'shell' && am.currentBullets > 0 && (pressed || held)) am.cancelReload();
+    if (this.isReloading || this.cycle || this._fireBlocked(player)) {
+      if (this.isReloading || this._fireBlocked(player)) this.burstLeft = 0;
       return;
     }
     const interval = fireInterval(def, this._hasPerk('doubletap'));
@@ -582,7 +562,7 @@ export class WeaponSystem {
       else want = this.fireQueued >= 0 && this.time - this.fireQueued <= FIRE_BUFFER;
       if (!want) break;
       this.fireQueued = -1;
-      if (am.mag <= 0) {
+      if (am.currentBullets <= 0) {
         this.burstLeft = 0;
         if (pressed || def.mode !== 'auto') this._dryFire(am);
         break;
@@ -593,11 +573,11 @@ export class WeaponSystem {
       this.fireCd += interval;
       if (this.burstLeft > 0) {
         this.burstLeft--;
-        if (am.mag <= 0) this.burstLeft = 0;
+        if (am.currentBullets <= 0) this.burstLeft = 0;
         if (this.burstLeft === 0) this.fireCd += interval * 1.8;
       }
       if (def.mode === 'pump' || def.mode === 'bolt') {
-        if (am.mag > 0) {
+        if (am.currentBullets > 0) {
           this.cycle = { style: def.mode, t: 0, dur: Math.max(0.3, interval * 0.9), sndAt: def.mode === 'pump' ? 0.3 : 0.22, snd: false };
         }
         break;
@@ -608,7 +588,7 @@ export class WeaponSystem {
 
   _dryFire(am) {
     this._play('empty', { volume: 0.8 });
-    if (am.reserve > 0) this._tryReload();
+    if (am.reserveBullets > 0) this._tryReload();
   }
 
   _currentSpread(def) {
@@ -662,7 +642,7 @@ export class WeaponSystem {
     const ctx = this.ctx;
     const a = this.active;
     const key = a.key, up = !!a.up;
-    am.mag = Math.max(0, am.mag - 1);
+    am.tryFire(this.time);
     this.shotCount++;
     const o = this._o, d = this._d;
     this._eyeRay(o, d);
@@ -691,7 +671,7 @@ export class WeaponSystem {
     this._flashMain(o, d, color, fl[0]);
     this._weaponSound(def.sound, { upgraded: up });
 
-    if (am.mag === 0 && am.reserve > 0) this._scheduleAutoReload(Math.min(0.3, interval));
+    if (am.currentBullets === 0 && am.reserveBullets > 0) this._scheduleAutoReload(Math.min(0.3, interval));
     const ev = ctx.events;
     if (ev && typeof ev.emit === 'function') ev.emit('weapons:fired', { key, up, o: arr2(o) });
   }
@@ -794,94 +774,24 @@ export class WeaponSystem {
 
   // ================================================================== recarga y ciclo
   _reloadAllowed() {
-    return !this.reload && this.knifeT < 0 && this.throwT < 0 && this.drinkT < 0 && this.bashT < 0 &&
+    return !this.isReloading && this.knifeT < 0 && this.throwT < 0 && this.drinkT < 0 && this.bashT < 0 &&
       !this.shieldOut && !this.vm.switching;
   }
 
   _tryReload() {
     const def = this._def(), am = this._ammo();
     if (!def || def.melee || !am) return false;
-    if (am.mag >= def.mag || am.reserve <= 0) return false;
     if (!this._reloadAllowed()) return false;
-    this._startReload(def, am);
-    return true;
-  }
-
-  _startReload(def, am) {
-    const a = this.active;
     const sc = this._hasPerk('speedcola') ? 0.5 : 1;
-    const style = reloadStyle(def);
-    this.burstLeft = 0;
-    this.cycle = null;
-    this.autoReloadAt = -1;
-    this.fireQueued = -1;
-    if (style === 'shell') {
-      const per = clamp((def.reload - 0.6) / Math.max(1, def.mag), 0.22, 0.6) * sc;
-      this.reload = {
-        kind: 'shell', key: a.key, up: !!a.up, phase: 'in', t: 0, tilt: 0, shell: 0, pump: -1, pumpSnd: false,
-        per, inDur: 0.28 * sc, outDur: 0.25 * sc, pumpDur: 0.5 * sc, wasEmpty: am.mag === 0, added: false,
-      };
-    } else {
-      this.reload = {
-        kind: 'full', key: a.key, up: !!a.up, style, t: 0, dur: Math.max(0.2, def.reload * sc), wasEmpty: am.mag === 0,
-        committed: false, commitAt: RELOAD_COMMIT[style] || 0.62, sfx: RELOAD_SFX[style] || RELOAD_SFX.mag, si: 0,
-      };
-    }
+    return am.reload(sc);
   }
 
+  // Avanza dt segundos la recarga en curso del arma activa (si hay una) y reproduce sus sonidos
   _updateReload(dt) {
-    const r = this.reload;
-    if (!r) return;
-    const a = this.active;
-    const def = this._def();
-    const am = this._ammo();
-    if (!a || !def || !am || a.key !== r.key || !!a.up !== r.up) { this.reload = null; return; }
-    if (r.kind === 'full') {
-      r.t += dt;
-      const p = r.t / r.dur;
-      while (r.si < r.sfx.length && p >= r.sfx[r.si][0]) {
-        const s = r.sfx[r.si++];
-        if (!s[2] || r.wasEmpty) this._play(s[1], { volume: 0.85 });
-      }
-      if (!r.committed && p >= r.commitAt) {
-        r.committed = true;
-        const take = Math.min(def.mag - am.mag, am.reserve);
-        if (take > 0) { am.mag += take; am.reserve -= take; }
-      }
-      if (r.t >= r.dur) this.reload = null;
-      return;
-    }
-    // cartucho a cartucho (escopetas de bombeo)
-    if (r.phase === 'in') {
-      r.t += dt;
-      r.tilt = Math.min(1, r.t / r.inDur);
-      if (r.t >= r.inDur) { r.phase = 'load'; r.t = 0; r.shell = 0; r.added = false; }
-    } else if (r.phase === 'load') {
-      r.t += dt;
-      r.shell = Math.min(1, r.t / r.per);
-      if (!r.added && r.shell >= 0.6) {
-        r.added = true;
-        if (am.mag < def.mag && am.reserve > 0) {
-          am.mag++;
-          am.reserve--;
-          this._play('reload_in', { volume: 0.8, rate: 0.95 + Math.random() * 0.1 });
-        }
-      }
-      if (r.t >= r.per) {
-        if (am.mag < def.mag && am.reserve > 0) { r.t = 0; r.shell = 0; r.added = false; }
-        else { r.phase = 'out'; r.t = 0; r.shell = 0; r.pump = r.wasEmpty ? 0 : -1; r.pumpSnd = false; }
-      }
-    } else {
-      r.t += dt;
-      r.tilt = Math.max(0, 1 - r.t / r.outDur);
-      let total = r.outDur;
-      if (r.pump >= 0) {
-        total = Math.max(r.outDur, r.pumpDur);
-        r.pump = Math.min(1, r.t / r.pumpDur);
-        if (!r.pumpSnd && r.pump >= 0.3) { r.pumpSnd = true; this._play('pump', { volume: 0.9 }); }
-      }
-      if (r.t >= total) this.reload = null;
-    }
+    const am = this.active ? this._ammo() : null;
+    if (!am) return;
+    const fx = am.update(dt);
+    for (const f of fx) this._play(f.sound, f.opts);
   }
 
   _updateCycle(dt) {
@@ -897,23 +807,27 @@ export class WeaponSystem {
 
   _scheduleAutoReload(delay) {
     const am = this.active ? this._ammo() : null;
-    if (am && am.mag === 0 && am.reserve > 0) this.autoReloadAt = this.time + Math.max(0, delay);
+    if (am) am.scheduleAutoReload(this.time, delay);
   }
 
   _updateAutoReload() {
-    if (this.autoReloadAt < 0 || this.time < this.autoReloadAt) return;
-    const def = this._def(), am = this._ammo();
-    if (!def || def.melee || !am || am.mag > 0 || am.reserve <= 0 || this.reload) { this.autoReloadAt = -1; return; }
+    const am = this.active ? this._ammo() : null;
+    if (!am) return;
+    const at = am.timeToStartReload;
+    if (at < 0 || this.time < at) return;
+    const def = this._def();
+    if (!def || def.melee || am.currentBullets > 0 || am.reserveBullets <= 0 || this.isReloading) { am.cancelAutoReload(); return; }
     if (this._reloadAllowed() && !this.cycle) {
-      this.autoReloadAt = -1;
-      this._startReload(def, am);
+      am.cancelAutoReload();
+      const sc = this._hasPerk('speedcola') ? 0.5 : 1;
+      am.reload(sc);
     }
   }
 
   // ================================================================== apuntar, jugador y mira telescópica
   _updateAds(dt, canAct, input, player) {
     const def = this._def();
-    const want = !!(canAct && input && input.isDown('ads') && def && !def.melee && !this.reload && !this.shieldOut &&
+    const want = !!(canAct && input && input.isDown('ads') && def && !def.melee && !this.isReloading && !this.shieldOut &&
       this.drinkT < 0 && this.knifeT < 0 && this.throwT < 0 && this.bashT < 0 && !this.vm.switching &&
       !(player && player.isSprinting));
     const t = (def && ADS_TIME[def.model]) || 0.2;
@@ -934,7 +848,7 @@ export class WeaponSystem {
 
   _updateScope() {
     const def = this._def();
-    const want = !!(def && def.cls === 'sniper' && this.adsAmount >= 0.94 && !this.reload);
+    const want = !!(def && def.cls === 'sniper' && this.adsAmount >= 0.94 && !this.isReloading);
     if (want === this.scoped) return;
     this.scoped = want;
     this._hud('setScope', want);
@@ -976,24 +890,25 @@ export class WeaponSystem {
       this._cs.p = this.cycle.t / this.cycle.dur;
       s.cycle = this._cs;
     } else s.cycle = null;
-    s.slideLocked = !!(def && am && am.mag === 0 && !this.reload && def.model === 'pistol');
+    s.slideLocked = !!(def && am && am.currentBullets === 0 && !this.isReloading && def.model === 'pistol');
     s.shieldOut = !!this.shieldOut;
     return s;
   }
 
   _reloadAnim() {
-    const r = this.reload;
+    const am = this.active ? this._ammo() : null;
+    const r = am ? am.reloadAnimState() : null;
     if (!r) return null;
-    if (r.kind === 'shell') {
+    if (r.style === 'shell') {
       const o = this._rs;
       o.tilt = r.tilt;
-      o.shell = r.phase === 'load' ? r.shell : 0;
-      o.pump = r.phase === 'out' ? r.pump : -1;
+      o.shell = r.shell;
+      o.pump = r.pump;
       return o;
     }
     const o = this._ra;
     o.style = r.style;
-    o.p = r.t / r.dur;
+    o.p = r.p;
     o.wasEmpty = r.wasEmpty;
     return o;
   }

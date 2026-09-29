@@ -274,5 +274,19 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
     del Espectro, invulnerabilidad del Conde hecho murciélagos, quemadura de Hades sin reiniciarse con
     su propio tic, salvarse reptante en el borde de una explosión, perder las piernas sin estar en el
     borde, un tanque nunca queda reptante, `die()`).
-  - **Siguiente en la cola**: `Weapon` (cliente, `public/js/weapons/weaponSystem.js` + `shared/weapons.js`)
-    — jerarquía real acordada con el usuario (clase base + las armas concretas derivan de ella).
+  - **Paso 3 (hecho): `public/js/weapons/weapon.js`**, jerarquía `Weapon` (base) -> `HitscanWeapon` /
+    `ProjectileWeapon` / `MeleeWeapon`, fábrica `createWeapon(key, up)`. Cada instancia guarda su propia
+    munición (`currentBullets`/`reserveBullets`), su ciclo de recarga (completa o cartucho a cartucho) y su
+    autorecarga programada; `state` ('ready'|'reloading'|'empty') se calcula, no se guarda. `WeaponSystem`
+    conserva el input, los modos de disparo (semi/auto/ráfaga/bombeo/cerrojo), la balística y el mundo;
+    `this.ammo` (objetos planos) pasó a `this.weapons` (Map de instancias) y `this.reload/autoReloadAt`
+    desaparecieron (`isReloading` ahora sale del arma activa). La M1911 temporal de "última batalla" también
+    es una `Weapon` (con munición propia fija 8/24). `_interrupt()` cancela la recarga del arma saliente.
+    `MeleeWeapon` existe pero NO está conectada aún a `_tryKnife/_knifeHit` (paso aparte).
+    Verificado: `node --check`, `validate-map`, prueba aislada (`node --experimental-loader` para resolver
+    los imports `/shared/...`; 68 aserciones) y prueba en vivo en el navegador (disparo, vaciar cargador,
+    autorecarga, escopeta de bombeo con corte al disparar, cancelar al cambiar de arma, Ray Gun como
+    proyectil, M1911 temporal; 0 errores de consola). `bot-test.js` NO aplica (no carga código cliente).
+    Nota de pruebas: el navegador de automatización pausa `requestAnimationFrame` entre acciones y no logra
+    pointer lock, así que el ciclo se condujo llamando a los métodos del `WeaponSystem` real (`window.game.weapons`).
+  - **Siguiente en la cola**: `Renderer` (fachada fina sobre Three.js, sin reimplementarlo), o conectar melee.
