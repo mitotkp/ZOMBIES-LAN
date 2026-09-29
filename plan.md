@@ -289,4 +289,17 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
     proyectil, M1911 temporal; 0 errores de consola). `bot-test.js` NO aplica (no carga código cliente).
     Nota de pruebas: el navegador de automatización pausa `requestAnimationFrame` entre acciones y no logra
     pointer lock, así que el ciclo se condujo llamando a los métodos del `WeaponSystem` real (`window.game.weapons`).
-  - **Siguiente en la cola**: `Renderer` (fachada fina sobre Three.js, sin reimplementarlo), o conectar melee.
+  - **Paso 4 (hecho): `public/js/render/renderer.js`**, clase `Renderer`: fachada fina sobre
+    `THREE.WebGLRenderer` (no lo reimplementa; el recorte por frustum y la ordenación ya los hace Three).
+    Absorbió de `main.js`: creación/configuración del renderer, montaje del canvas, `pixelRatioFor`/`resize`,
+    `applySettings` (calidad/brillo/sombras), resolución dinámica (`adaptResolution`, antes 3 variables sueltas
+    en `boot`), sombras a 30 Hz (`tickShadows`) y el pase de dibujo (`render(scene, camera, overlay)`, con el
+    arma en primera persona como `overlay` y `clearDepth` entre pases). Principio de solo lectura: `render`
+    no cambia estado; `main.js` decide qué se dibuja (¿hay partida?, ¿muerto?). `ctx.renderer` sigue siendo
+    el `WebGLRenderer` (lo usan entities/input/level); la fachada es `ctx.gfx`. Interpolación temporal de
+    entidades: ya vive en `entities/`, no se movió. `main.js` bajó ~70 líneas.
+    Verificado: `node --check`, recarga real (menú con órbita de cámara, partida con mundo + arma), 0 errores de
+    consola, cambio de brillo/calidad por eventos `settings` (exposición 1.45→1.74, sombras y tamaño de canvas
+    según calidad), resolución dinámica simulada (baja, deshace si no sirve, recupera), alternancia de sombras.
+  - **Siguiente en la cola**: conectar `MeleeWeapon` a `_tryKnife/_knifeHit`; luego Player servidor-autoritativo
+    y migrar movimiento/ataque de Zombie (fases grandes, confirmar antes).

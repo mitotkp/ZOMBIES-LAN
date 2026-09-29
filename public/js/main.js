@@ -12,6 +12,7 @@ import { GAME_TITLE, PLAYER_COLORS, CLIENT_SEND_RATE, ZOMBIE, clamp } from '/sha
 import { PLAYER_SPAWNS, PLAYER_SPAWN_YAW, MAP_NAME, MAP_ID, setActiveMap, isMapId } from '/shared/map.js';
 import { r2, r3 } from '/shared/protocol.js';
 import { tr } from './i18n.js';
+import { Renderer } from './render/renderer.js';
 
 const SETTINGS_KEY = 'zlan.settings';
 const ROOM_SESSION_KEY = 'zlan.room-session';
@@ -33,7 +34,6 @@ function saveRoomSession(s) {
     else sessionStorage.removeItem(ROOM_SESSION_KEY);
   } catch { /* nada */ }
 }
-const DYN_MIN = 0.75;                  // escala mínima de la resolución dinámica (más baja se ve demasiado borroso)
 const BASE_EXPOSURE = 1.45;           // exposición base (el ajuste 'Brillo' la multiplica)
 
 // Cámara de fondo (título / sala / fin): órbita lenta sobre la calle
@@ -224,37 +224,14 @@ async function boot() {
 
   // ------------------------------------------------------------ renderer
   const appEl = document.getElementById('app') || document.body;
-  let renderer;
+  let gfx;
   try {
-    renderer = new THREE.WebGLRenderer({
-      antialias: settings.quality === 'high',
-      powerPreference: 'high-performance',
-      stencil: false,
-    });
+    gfx = new Renderer({ quality: settings.quality, brightness: settings.brightness, baseExposure: BASE_EXPOSURE, mount: appEl });
   } catch (err) {
     overlays.fatal(tr('SIN WEBGL'), tr('Tu navegador o tu tarjeta gráfica no permiten WebGL.\nPrueba con Chrome, Edge o Firefox actualizados y con la aceleración por hardware activada.'));
     throw err;
   }
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = BASE_EXPOSURE * settings.brightness;
-  renderer.autoClear = false;
-  renderer.shadowMap.type = THREE.PCFShadowMap;
-  renderer.shadowMap.enabled = settings.quality === 'high';
-  renderer.shadowMap.autoUpdate = false;   // se recalcula a 30 Hz (ver frame)
-  renderer.setClearColor(0x000000, 1);
-  // Resolución dinámica: dynScale baja si el juego no llega a ~50 FPS y vuelve a subir cuando sobra margen
-  let dynScale = 1;
-  const pixelRatioFor = (q) => Math.min(window.devicePixelRatio || 1, q === 'low' ? 1 : 1.5) * dynScale;
-  renderer.setPixelRatio(pixelRatioFor(settings.quality));
-  renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.domElement.style.display = 'block';
-  renderer.domElement.tabIndex = -1;
-  appEl.appendChild(renderer.domElement);
-  renderer.domElement.addEventListener('webglcontextlost', (e) => {
-    e.preventDefault();
-    console.warn('[main] Se perdió el contexto WebGL; se intentará recuperar.');
-  });
+  const renderer = gfx.gl;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x000000);
@@ -265,7 +242,7 @@ async function boot() {
 
   // ------------------------------------------------------------ ctx (SPEC 6.1)
   const ctx = {
-    THREE, renderer, scene, camera,
+    THREE, renderer, gfx, scene, camera,
     events,
     net: null, input: null, settings,
     selfId: null,
@@ -381,17 +358,7 @@ async function boot() {
   // ------------------------------------------------------------ ajustes
   function applySettings() {
     sanitizeSettings(settings);
-    renderer.setPixelRatio(pixelRatioFor(settings.quality));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.toneMappingExposure = BASE_EXPOSURE * settings.brightness;
-    const shadows = settings.quality === 'high';
-    if (renderer.shadowMap.enabled !== shadows) {
-      renderer.shadowMap.enabled = shadows;
-      scene.traverse((o) => {
-        const mats = o.material ? (Array.isArray(o.material) ? o.material : [o.material]) : [];
-        for (const mat of mats) mat.needsUpdate = true;
-      });
-    }
+    gfx.applySettings(settings, scene);
     call('audio', 'setVolumes', settings.volume, settings.music);
   }
   events.on('settings', (s) => {
@@ -737,13 +704,11 @@ async function boot() {
 
   // ------------------------------------------------------------ redimensionado
   function onResize() {
-    const w = window.innerWidth, h = Math.max(1, window.innerHeight);
-    renderer.setPixelRatio(pixelRatioFor(settings.quality));
-    renderer.setSize(w, h);
-    camera.aspect = w / h;
+    const aspect = gfx.resize(settings.quality);
+    camera.aspect = aspect;
     camera.updateProjectionMatrix();
     const vc = ctx.weapons && ctx.weapons.vmCamera;
-    if (vc && vc.isPerspectiveCamera) { vc.aspect = w / h; vc.updateProjectionMatrix(); }
+    if (vc && vc.isPerspectiveCamera) { vc.aspect = aspect; vc.updateProjectionMatrix(); }
   }
   window.addEventListener('resize', onResize);
 
@@ -821,67 +786,34 @@ async function boot() {
   // ------------------------------------------------------------ render
   let vmAspect = 0;
   function render() {
-    renderer.autoClear = false;
-    renderer.clear();
-    renderer.render(scene, camera);
     const w = ctx.weapons;
     const self = ctx.self;
+    let overlay = null;
     if (isPlaying() && w && w.vmScene && w.vmCamera && self && self.state !== 'dead') {
       if (w.vmCamera.isPerspectiveCamera && vmAspect !== camera.aspect) {
         vmAspect = camera.aspect;
         w.vmCamera.aspect = camera.aspect;
         w.vmCamera.updateProjectionMatrix();
       }
-      renderer.clearDepth();
-      renderer.render(w.vmScene, w.vmCamera);
+      overlay = { scene: w.vmScene, camera: w.vmCamera };
     }
+    gfx.render(scene, camera, overlay);
   }
 
   // ------------------------------------------------------------ bucle principal
   let lastT = performance.now();
-  let shadowTick = 0;
-  let dynT = 0, dynN = 0, dynGood = 0;
-  let dynProbe = null, dynHoldUntil = 0;   // última bajada (para comprobar si sirvió) y pausa si no sirve
-  function adaptResolution(realDt) {
-    if (!isPlaying() || document.hidden || realDt > 0.25) return;
-    dynT += realDt; dynN++;
-    if (dynT < 1.5) return;
-    const avg = dynT / dynN;
-    dynT = 0; dynN = 0;
-    let next = dynScale;
-    const now = performance.now();
-    if (dynProbe && avg > dynProbe.avg * 0.92) {
-      // bajar la resolución no ha servido (el límite es el procesador, no la gráfica): se deshace y se deja estar
-      next = dynProbe.scale;
-      dynHoldUntil = now + 20000;
-      dynProbe = null;
-    } else if (avg > 1 / 48 && now >= dynHoldUntil && dynScale > DYN_MIN) {
-      dynProbe = { avg, scale: dynScale };
-      next = Math.max(DYN_MIN, dynScale - 0.1); dynGood = 0;
-    } else if (avg < 1 / 57 && ++dynGood >= 3) { dynProbe = null; next = Math.min(1, dynScale + 0.05); dynGood = 0; }
-    else dynProbe = null;
-    if (next !== dynScale) {
-      dynScale = next;
-      renderer.setPixelRatio(pixelRatioFor(settings.quality));
-      renderer.setSize(window.innerWidth, Math.max(1, window.innerHeight));
-    }
-  }
+
   function frame() {
     requestAnimationFrame(frame);
     const t = performance.now();
     let dt = (t - lastT) / 1000;
     lastT = t;
-    adaptResolution(dt);
-    // sombras a 30 Hz: la mitad de pasadas de sombra sin que se note
-    // (el mundo puede pedir menos: en el interior del castillo solo cuando se mueve la zona de sombra)
-    if (renderer.shadowMap.enabled && (shadowTick ^= 1)) {
-      const w = ctx.world;
-      if (!w || typeof w.wantShadowUpdate !== 'function' || w.wantShadowUpdate()) renderer.shadowMap.needsUpdate = true;
-    }
+    gfx.adaptResolution(dt, isPlaying() && !document.hidden, settings.quality);
+    gfx.tickShadows(ctx.world);
     if (!(dt > 0)) dt = 0;
     dt = Math.min(dt, 0.05);
     ctx.time += dt;
-    if (DEBUG) { renderer.info.autoReset = false; renderer.info.reset(); }
+    if (DEBUG) gfx.resetStats();
 
     const open = menusOpen();
     input.enabled = !open && !overlays.statusBlocking;
