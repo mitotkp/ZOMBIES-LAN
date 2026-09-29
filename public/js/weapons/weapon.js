@@ -16,7 +16,7 @@
 // 'raygun', 'shotgun') que createWeaponMesh() usa para construir la geometría; `texture` queda en null
 // a propósito, documentado, en vez de simular una ruta de archivo que no existiría de verdad.
 
-import { WEAPONS, weaponDef, fireInterval, falloff } from '/shared/weapons.js';
+import { WEAPONS, MELEE_WEAPONS, weaponDef, meleeStats, fireInterval, falloff } from '/shared/weapons.js';
 import { clamp } from '/shared/constants.js';
 
 // Estilo de recarga por arquetipo de modelo (antes vivía como función suelta en weaponSystem.js)
@@ -247,26 +247,70 @@ export class ProjectileWeapon extends Weapon {
   }
 }
 
-// Cuerpo a cuerpo (cuchillo/Bowie/bate/machete/hacha): sin cargador ni recarga. El golpe en sí sigue
-// resolviéndose aparte en WeaponSystem (_tryKnife/_knifeHit), con sus propios tiempos de animación
-// (shared/weapons.js: meleeStats) -- no comparte ni cargador ni munición con las de fuego, así que no
-// tendría sentido forzarlas por el mismo ammo/reload de arriba. Se deja la clase para completar la
-// jerarquía que pidió el usuario; conectarla a _tryKnife/_knifeHit queda para un paso aparte.
+// Cuerpo a cuerpo (cuchillo/Bowie/bate/machete/hacha): sin cargador ni recarga. Sus estadísticas no salen
+// de WEAPONS sino de MELEE_WEAPONS (shared/weapons.js: meleeStats -- el cuchillo básico solo existe ahí).
+// Esta clase es el ESTADO Y LAS REGLAS del golpe: enfriamiento, duración del swing y el instante del
+// impacto. Qué zombis caen dentro del arco, el mensaje a la red y los efectos los sigue resolviendo
+// WeaponSystem (_knifeHit) contra el mundo real.
 export class MeleeWeapon extends Weapon {
-  constructor(key, up) {
+  constructor(key, up = false) {
     super(key, up);
     this.type = 'melee';
     this.magazineCapacity = 0;
     this.currentBullets = 0;
     this.reserveBullets = 0;
+    this._cd = 0;          // enfriamiento restante (s)
+    this._swingT = -1;     // tiempo dentro del golpe en curso (-1 = no hay)
+    this._hitDone = false; // el impacto de este golpe ya se resolvió
   }
-  get state() { return 'ready'; }
+  // def sintetizada desde meleeStats() para reutilizar los campos de metadata/stats de la base
+  get def() {
+    const ms = meleeStats(this.key);
+    return {
+      key: ms.key, name: ms.name, model: ms.key, dmg: ms.dmg, range: ms.range, mag: 0, reserve: 0, reload: 0,
+      pellets: 0, spreadHip: 0, spreadAds: 0, minDmgMult: 1, melee: true,
+    };
+  }
+  get arc() { return meleeStats(this.key).arc; }
+  get cooldown() { return meleeStats(this.key).cd; }
+  get maxTargets() { return meleeStats(this.key).targets; }
+  get knock() { return meleeStats(this.key).knock; }
+  get swingDuration() { return meleeStats(this.key).dur; }
+  get hitAt() { return meleeStats(this.key).hit; }
+  get swinging() { return this._swingT >= 0; }
+  get cooldownLeft() { return this._cd; }
+  get state() { return this._swingT >= 0 ? 'swinging' : 'ready'; }
   reload() { return false; }
-  tryFire(now) { this.lastShotTime = now; return { fired: true }; }
+  // "intentar disparo" del cuerpo a cuerpo: empieza un golpe si no hay uno en curso ni enfriamiento
+  trySwing() {
+    if (this._swingT >= 0 || this._cd > 0) return false;
+    this._swingT = 0;
+    this._hitDone = false;
+    this._cd = this.cooldown;
+    return true;
+  }
+  tryFire(now) {
+    if (!this.trySwing()) return { fired: false, reason: this._swingT >= 0 ? 'swinging' : 'cooldown' };
+    this.lastShotTime = now;
+    return { fired: true };
+  }
+  cancel() { this._swingT = -1; }
+  // Avanza dt segundos; devuelve { hit: true } en el frame en que llega el instante del impacto
+  update(dt) {
+    this._cd = Math.max(0, this._cd - dt);
+    let hit = false;
+    if (this._swingT >= 0) {
+      this._swingT += dt;
+      if (!this._hitDone && this._swingT >= this.hitAt) { this._hitDone = true; hit = true; }
+      if (this._swingT >= this.swingDuration) this._swingT = -1;
+    }
+    return { hit };
+  }
 }
 
 // Construye la instancia de la subclase que corresponde según el tipo de arma (metadata.type).
 export function createWeapon(key, up = false) {
+  if (MELEE_WEAPONS[key]) return new MeleeWeapon(key, up);
   const def = weaponDef(key, up) || WEAPONS[key];
   if (!def) return null;
   if (def.melee) return new MeleeWeapon(key, up);

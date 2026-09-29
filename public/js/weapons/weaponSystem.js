@@ -10,7 +10,7 @@ import { PLAYER, MELEE, SHIELD, GRENADE, MEDS, clamp, lerp } from '/shared/const
 import { raycastMap } from '/shared/collision.js';
 import { r2, r3 } from '/shared/protocol.js';
 import { updateCamo } from './models.js';
-import { ViewModel, KNIFE_DUR, KNIFE_HIT, THROW_DUR, THROW_RELEASE, BASH_DUR, BASH_HIT, DRINK_DUR } from './viewmodel.js';
+import { ViewModel, THROW_DUR, THROW_RELEASE, BASH_DUR, BASH_HIT, DRINK_DUR } from './viewmodel.js';
 import { Projectiles } from './projectiles.js';
 import { coneDir, traceBullet, meleeTargets, blockedBetween, MAX_RANGE } from './ballistics.js';
 import { tr } from '../i18n.js';
@@ -172,7 +172,7 @@ export class WeaponSystem {
     this.fireQueued = -1;
     this.bloom = 0;
     this.cycle = null;
-    this.knifeT = -1; this.knifeHitDone = false; this.meleeCd = 0; this.knifeDur = KNIFE_DUR; this.knifeHitAt = KNIFE_HIT;
+    this.meleeW = null;               // MeleeWeapon del arma cuerpo a cuerpo equipada (ver _melee)
     this.throwT = -1; this.throwDone = false;
     this.drinkT = -1; this.drinkDur = DRINK_DUR; this.drinkKind = 'perk'; this.healKey = null;
     this.bashT = -1; this.bashDone = false; this.bashCd = 0;
@@ -206,7 +206,6 @@ export class WeaponSystem {
     const input = ctx.input;
     const canAct = !!(input && input.enabled) && !this._menuOpen();
     if (!self.shield || self.state !== 'alive') this.shieldOut = false;
-    this.meleeCd = Math.max(0, this.meleeCd - dt);
     this.bashCd = Math.max(0, this.bashCd - dt);
     this.fireCd -= dt;
     this.bloom *= Math.exp(-dt * 4.5);
@@ -453,7 +452,7 @@ export class WeaponSystem {
   // Corta además cuchillo, granada, bebida y golpe de escudo
   _cancelAll() {
     this._interrupt();
-    this.knifeT = -1;
+    this._melee().cancel();
     this.throwT = -1;
     this.drinkT = -1;
     this.bashT = -1;
@@ -472,7 +471,7 @@ export class WeaponSystem {
     if (!this.lastStand && this.drinkT < 0 && this.throwT < 0) this._handleSwitch(input);
     if (input.pressed('melee') && alive) {
       if (this.shieldOut) this._tryBash();
-      else this._tryKnife(self);
+      else this._tryKnife();
     }
     if (input.pressed('grenade') && alive) this._tryThrow();
     if (input.pressed('heal') && alive) this._requestHeal(self);
@@ -523,7 +522,7 @@ export class WeaponSystem {
     this.shieldOut = !this.shieldOut;
     if (this.shieldOut) {
       this._interrupt();
-      this.knifeT = -1;
+      this._melee().cancel();
     } else {
       this.bashT = -1;
       this._scheduleAutoReload(0.45);
@@ -534,7 +533,7 @@ export class WeaponSystem {
   // ================================================================== disparo
   _fireBlocked(player) {
     const vm = this.vm;
-    return vm.switching || this.knifeT >= 0 || this.throwT >= 0 || this.drinkT >= 0 || this.bashT >= 0 ||
+    return vm.switching || this._melee().swinging || this.throwT >= 0 || this.drinkT >= 0 || this.bashT >= 0 ||
       this.shieldOut || vm.shieldBlend > 0.1 || !!(player && player.isSprinting) || vm.sprintBlend > 0.45;
   }
 
@@ -774,7 +773,7 @@ export class WeaponSystem {
 
   // ================================================================== recarga y ciclo
   _reloadAllowed() {
-    return !this.isReloading && this.knifeT < 0 && this.throwT < 0 && this.drinkT < 0 && this.bashT < 0 &&
+    return !this.isReloading && !this._melee().swinging && this.throwT < 0 && this.drinkT < 0 && this.bashT < 0 &&
       !this.shieldOut && !this.vm.switching;
   }
 
@@ -828,7 +827,7 @@ export class WeaponSystem {
   _updateAds(dt, canAct, input, player) {
     const def = this._def();
     const want = !!(canAct && input && input.isDown('ads') && def && !def.melee && !this.isReloading && !this.shieldOut &&
-      this.drinkT < 0 && this.knifeT < 0 && this.throwT < 0 && this.bashT < 0 && !this.vm.switching &&
+      this.drinkT < 0 && !this._melee().swinging && this.throwT < 0 && this.bashT < 0 && !this.vm.switching &&
       !(player && player.isSprinting));
     const t = (def && ADS_TIME[def.model]) || 0.2;
     this.adsAmount = clamp(this.adsAmount + (want ? dt / t : -dt / (t * 0.8)), 0, 1);
@@ -915,11 +914,7 @@ export class WeaponSystem {
 
   // ================================================================== cuchillo, escudo, granadas y ventajas
   _updateActions(dt) {
-    if (this.knifeT >= 0) {
-      this.knifeT += dt;
-      if (!this.knifeHitDone && this.knifeT >= this.knifeHitAt) { this.knifeHitDone = true; this._knifeHit(); }
-      if (this.knifeT >= this.knifeDur) this.knifeT = -1;
-    }
+    if (this._melee().update(dt).hit) this._knifeHit();
     if (this.bashT >= 0) {
       this.bashT += dt;
       if (!this.bashDone && this.bashT >= BASH_HIT) { this.bashDone = true; this._bashHit(); }
@@ -947,29 +942,40 @@ export class WeaponSystem {
     }
   }
 
-  _tryKnife(self) {
-    if (this.knifeT >= 0 || this.throwT >= 0 || this.drinkT >= 0 || this.meleeCd > 0) return;
+  // MeleeWeapon del arma cuerpo a cuerpo que lleva el jugador (self.melee); se rehace si la cambia
+  // (el enfriamiento pendiente se conserva). Sin partida cae al cuchillo básico.
+  _melee() {
+    const self = this.ctx && this.ctx.self;
+    const key = meleeStats(self && self.melee).key;
+    const cur = this.meleeW;
+    if (!cur || cur.key !== key) {
+      const next = createWeapon(key, false);
+      if (cur) { next._cd = cur._cd; }
+      this.meleeW = next;
+    }
+    return this.meleeW;
+  }
+
+  _tryKnife() {
+    if (this.throwT >= 0 || this.drinkT >= 0) return;
+    const mw = this._melee();
+    if (mw.swinging || mw.cooldownLeft > 0) return;
     this._interrupt();
-    const ms = meleeStats(self.melee);
-    this.knifeT = 0;
-    this.knifeHitDone = false;
-    this.knifeDur = ms.dur;
-    this.knifeHitAt = ms.hit;
-    this.meleeCd = ms.cd;
-    this._safe('vm.playKnife', () => this.vm.playKnife(ms.key, ms.dur));
-    this._play('knife', { volume: 0.9, rate: ms.dur > 0.5 ? 0.7 : 1 });
+    mw.tryFire(this.time);
+    this._safe('vm.playKnife', () => this.vm.playKnife(mw.key, mw.swingDuration));
+    this._play('knife', { volume: 0.9, rate: mw.swingDuration > 0.5 ? 0.7 : 1 });
   }
 
   _knifeHit() {
     const self = this.ctx.self, p = this.ctx.player;
     if (!self || self.state !== 'alive' || !p || !p.position) return;
     const eyeY = p.eye ? p.eye.y : p.position.y + PLAYER.eyeHeight;
-    const ms = meleeStats(self.melee);
+    const mw = this._melee();
     const list = meleeTargets(this._targets(), p.position.x, p.position.z, eyeY, p.yaw || 0,
-      ms.range, ms.arc, ms.targets, this._doors());
+      mw.range, mw.arc, mw.maxTargets, this._doors());
     if (!list.length) return;
     this._send({ t: 'melee', hits: list.map((z) => zidOf(z.id)), shield: false });
-    const heavy = ms.key !== 'knife';
+    const heavy = mw.key !== 'knife';
     for (const z of list) {
       const dir = new V3(z.x - p.position.x, 0, z.z - p.position.z);
       if (dir.lengthSq() > 1e-6) dir.normalize(); else dir.set(0, 0, -1);
@@ -977,7 +983,7 @@ export class WeaponSystem {
       this._ents('hitReact', z.id, 'b');
     }
     this._hud('hitmarker', 'hit');
-    this._play(ms.knock ? 'bash' : 'knife_hit', { volume: 0.9 });
+    this._play(mw.knock ? 'bash' : 'knife_hit', { volume: 0.9 });
     if (typeof p.shake === 'function') p.shake(heavy ? 0.2 : 0.12, heavy ? 0.14 : 0.1);
   }
 
@@ -1012,7 +1018,7 @@ export class WeaponSystem {
   }
 
   _tryThrow() {
-    if (this.throwT >= 0 || this.knifeT >= 0 || this.drinkT >= 0 || this.bashT >= 0) return;
+    if (this.throwT >= 0 || this._melee().swinging || this.drinkT >= 0 || this.bashT >= 0) return;
     if (this.nadesLocal <= 0) return;
     this._interrupt();
     this.throwT = 0;
@@ -1073,7 +1079,7 @@ export class WeaponSystem {
 
   _requestHeal(self) {
     if (self.healing) { this._send({ t: 'heal', item: null }); return; }   // volver a pulsar H cancela
-    if (this.drinkT >= 0 || this.throwT >= 0 || this.knifeT >= 0) return;
+    if (this.drinkT >= 0 || this.throwT >= 0 || this._melee().swinging) return;
     const item = this._pickMed(self);
     if (!item) {
       const meds = self.meds || {};

@@ -301,5 +301,16 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
     Verificado: `node --check`, recarga real (menú con órbita de cámara, partida con mundo + arma), 0 errores de
     consola, cambio de brillo/calidad por eventos `settings` (exposición 1.45→1.74, sombras y tamaño de canvas
     según calidad), resolución dinámica simulada (baja, deshace si no sirve, recupera), alternancia de sombras.
-  - **Siguiente en la cola**: conectar `MeleeWeapon` a `_tryKnife/_knifeHit`; luego Player servidor-autoritativo
-    y migrar movimiento/ataque de Zombie (fases grandes, confirmar antes).
+  - **Paso 5 (hecho): `MeleeWeapon` conectada al cuchillo.** Ahora tiene estado y reglas reales: enfriamiento,
+    duración del golpe e instante de impacto (`trySwing/tryFire`, `update(dt)` -> `{hit}`, `cancel`), leyendo
+    `meleeStats()` (el cuchillo básico solo existe en `MELEE_WEAPONS`, por eso `createWeapon('knife')` ya la
+    construye y su `def` se sintetiza). `WeaponSystem` perdió `knifeT/knifeHitDone/meleeCd/knifeDur/knifeHitAt`
+    (y los imports `KNIFE_DUR/KNIFE_HIT`): usa `_melee()` (instancia según `self.melee`, conserva el enfriamiento
+    al cambiar de arma). Se queda en `WeaponSystem` lo del mundo: quién cae en el arco (`meleeTargets`), mensaje
+    `melee`, sangre, sonido, sacudida y las condiciones cruzadas (granada/bebida). El golpe de escudo (`_tryBash`)
+    no se tocó.
+    Verificado: `node --check`, prueba aislada (Weapon ampliada, sección melee: stats, tiempos, hit único,
+    enfriamiento, cancel) y en vivo (swing con animación 0.42 s, bloqueo por enfriamiento, segundo golpe,
+    `_cancelAll`, mensaje `melee` con 1 objetivo falso delante; 0 errores de consola).
+  - **Siguiente en la cola**: Player servidor-autoritativo y migrar movimiento/ataque de Zombie (fases grandes,
+    confirmar antes).
