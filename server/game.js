@@ -18,7 +18,8 @@ import { PERKS, PERK_LIMIT, perkPrice, perkNeedsPower } from '../shared/perks.js
 import { PF, r2, safeParse } from '../shared/protocol.js';
 import { ZombieManager } from './zombies.js';
 import { EasterEgg, EE_STEP } from './easteregg.js';
-import { Player, TELEPORT_GRACE } from './entities/player.js';
+import { Player } from './entities/player.js';
+import { separateFromZombies, packMoveState } from '../shared/movement.js';
 import crypto from 'node:crypto';
 
 const DEG = Math.PI / 180;
@@ -36,8 +37,6 @@ function pickWeighted(weights) {
   return entries[entries.length - 1][0];
 }
 const GAMEOVER_TIME = 15000;          // ms en la pantalla final antes de volver al lobby
-// TELEPORT_GRACE: ahora vive en entities/player.js (junto con el resto de tuneables de movimiento/
-// reanimar que usa esa clase); se sigue usando aquí también, así que se importa en vez de duplicarse.
 const RECONNECT_GRACE_MS = 25000;     // ventana para recuperar el mismo jugador tras una desconexión no voluntaria
 const SPAWN_INVULN = 2000;            // ms de invulnerabilidad tras reaparecer
 const NADE_WINDOW = 6000;             // ms de validez de una granada lanzada
@@ -190,7 +189,7 @@ export class Game {
     const sp = PLAYER_SPAWNS[spawn % PLAYER_SPAWNS.length];
     return {
       x: sp.x, y: sp.y || 0, z: sp.z, yaw: PLAYER_SPAWN_YAW, pitch: 0, flags: 0,
-      hasPos: false, teleportUntil: 0, badPos: 0, lastMoveAt: 0,
+      hasPos: false, sim: null, moveBudget: 0.25, lastCmdAt: 0, ackSeq: 0,
       lastDamageAt: 0, invulnUntil: 0,
       hold: null, nades: [], lastMeleeAt: 0, boomTimes: [], fireTimes: [],
       repairPts: 0, god: false, chatTimes: [], bleedRemain: 0,
@@ -456,6 +455,14 @@ export class Game {
     }
     const snap = { t: 'snap', now, z: this.zombies.snapshot(), p: players };
     this._broadcastRaw(JSON.stringify(snap), null, true);
+    // Confirmación de movimiento a cada jugador: último comando atendido + su estado simulado (para reconciliar)
+    for (const p of this._players()) {
+      const d = this.pd.get(p.id);
+      if (!d || !d.sim || p.state === 'dead') continue;
+      const c = this.byPid.get(p.id);
+      if (!c || c.ws.readyState !== 1 || c.ws.bufferedAmount > 1 << 20) continue;
+      try { c.ws.send(JSON.stringify({ t: 'mv', seq: d.ackSeq, s: packMoveState(d.sim) })); } catch { /* nada */ }
+    }
   }
 
   _pingAll(now) {
@@ -579,6 +586,7 @@ export class Game {
     }
     conn.pid = pid;
     this.byPid.set(pid, conn);
+    const rpl = this.players.get(pid); if (rpl) rpl.resetMoveSync();
     this.markDirty();
     this._log(`${p.name} (#${pid}) reconectó desde ${conn.ip}.`);
     this._system(`${p.name} reconectó.`);
@@ -655,7 +663,10 @@ export class Game {
     if (this.gs.phase !== 'playing') return;
     const player = this.players.get(p.id);
     if (!player) return; // no debería pasar (se crea junto con gs.players[id]), defensivo
-    const { curChanged } = player.applyMovementReport(m, now, { W, H, M: this.M });
+    this._use();
+    const { curChanged } = player.applyMovementReport(m);
+    const separate = (x, z, dt, y, solid) => separateFromZombies(this.zombies.list(), 'y', x, z, dt, y, solid);
+    player.applyMoveCommands(m.c, now, { doors: this.gs.doors, separate });
     if (curChanged) this.markDirty();
   }
 
@@ -1000,9 +1011,8 @@ export class Game {
     const to = tp.to;
     const y = this.M.baseY(to.lv);
     d.tpCooldown = now + 1500;
-    d.x = to.x; d.y = y; d.z = to.z;
-    d.teleportUntil = now + TELEPORT_GRACE;
-    d.badPos = 0;
+    const pl = this.players.get(p.id);
+    if (pl) pl.placeAt(to.x, y, to.z);
     this._cancelHold(p, d, now);
     this._ev({ e: 'tp', pid: p.id, id: tp.id, fx: tp.x + 0.5, fy: this.M.baseY(tp.lv || 0), fz: tp.z + 0.5, x: to.x, y, z: to.z, yaw: to.yaw || 0 });
   }
@@ -1522,7 +1532,8 @@ export class Game {
     });
     d.infT = 0; d.infAcc = 0;
     d.x = sp.x; d.y = sp.y || 0; d.z = sp.z; d.yaw = PLAYER_SPAWN_YAW; d.pitch = 0; d.flags = 0;
-    d.hasPos = true; d.teleportUntil = now + TELEPORT_GRACE; d.badPos = 0; d.lastMoveAt = now;
+    d.hasPos = true; d.lastCmdAt = now;
+    const pl2 = this.players.get(p.id); if (pl2) pl2.placeAt(sp.x, sp.y || 0, sp.z);
     d.lastDamageAt = 0; d.invulnUntil = now + SPAWN_INVULN; d.hold = null; d.nades = [];
     this.markDirty();
     return { pid: p.id, x: sp.x, y: sp.y || 0, z: sp.z, yaw: PLAYER_SPAWN_YAW };

@@ -747,7 +747,7 @@ async function boot() {
     try { f = p.flags(); } catch { f = 0; }
     net.send({
       t: 'st',
-      p: [r2(p.position.x), r2(p.position.y), r2(p.position.z)],
+      c: p.drainCommands(),
       yaw: r3(p.yaw), pitch: r3(p.pitch), f, cur: currentSlot(),
     });
   }

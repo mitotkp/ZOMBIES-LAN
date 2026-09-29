@@ -11,32 +11,25 @@
 // objetos de siempre sin cambios: `player.pub` ES gs.players[id] y `player.priv` ES lo que devolvía
 // Game.pd.get(id) — mismas referencias, no copias.
 //
-// Autoridad de movimiento: hoy sigue siendo la del cliente (reporta su posición, aquí solo se valida
-// con un presupuesto de velocidad real). Pasar el cálculo al servidor es un cambio de red aparte y más
-// grande (predicción + reconciliación en el cliente); se aborda en un paso posterior, no en este.
+// Autoridad de movimiento (paso 6): el SERVIDOR simula el movimiento. El cliente ya no manda su posición
+// sino comandos (intención por fotograma, ver shared/movement.js); aquí se ejecutan con el mismo
+// stepMovement() que usa el cliente para predecir, y se limita el tiempo simulado al tiempo real
+// transcurrido (un cliente no puede correr más rápido mandando comandos de más).
 
 import { PLAYER, BALANCE, SHIELD, INFECTION, clamp, angleDiff, yawTo } from '../../shared/constants.js';
 import { PF, r2 } from '../../shared/protocol.js';
+import { spawnMoveState, stepMovement, unpackCmd } from '../../shared/movement.js';
 
 const DEG = Math.PI / 180;
 
 // Tuneables de validación de movimiento y de reanimar (únicos, importados también por game.js:
 // antes vivían duplicados como constantes sueltas en ese archivo).
-export const MAX_STATE_GAP_MS = 2000;  // tope de "crédito" de tiempo tras una pausa larga entre mensajes 'st'
-export const RESYNC_AFTER = 30;        // mensajes de posición rechazados seguidos antes de aceptarla igual
-export const MAX_JUMP_MARGIN = 0.75;   // m de tolerancia fija (redondeo/ráfagas de mensajes)
-export const MAX_SPEED_MPS = PLAYER.sprintSpeed * 1.5; // margen sobre la velocidad real máxima (sprint)
-export const TELEPORT_GRACE = 3000;    // ms tras reaparecer en los que se acepta cualquier salto de posición
+export const MAX_MOVE_BUDGET = 0.5;    // s: tope de tiempo de movimiento acumulable (ráfagas/jitter de internet)
+export const BUDGET_SLACK = 1.15;      // tolerancia sobre el tiempo real (relojes que no coinciden del todo)
+export const MAX_CMDS_PER_MSG = 20;    // comandos que se atienden por mensaje 'st'
 export const REVIVE_INVULN = 1500;     // ms de invulnerabilidad tras ser reanimado
 
 function isNum(v) { return typeof v === 'number' && Number.isFinite(v); }
-function vec3(a, max) {
-  if (!Array.isArray(a) || a.length < 3) return null;
-  const x = Number(a[0]), y = Number(a[1]), z = Number(a[2]);
-  if (!isNum(x) || !isNum(y) || !isNum(z)) return null;
-  if (Math.abs(x) > max || Math.abs(y) > max || Math.abs(z) > max) return null;
-  return [x, y, z];
-}
 
 export class Player {
   // pub  = el objeto que se serializa y manda por red (antes creado por Game._newPlayer, guardado en
@@ -56,11 +49,8 @@ export class Player {
   resetPriv(priv) { this.priv = priv; }
 
   // ---------------------------------------------------------------- movimiento
-  // Aplica un mensaje 'st' del cliente (posición, mirada, banderas, arma en mano). La posición se
-  // valida con un presupuesto de velocidad real (tolera ráfagas/jitter de internet) en vez de una
-  // distancia fija por mensaje. bounds = { W, H, M } — el mapa activo DE ESTA PARTIDA (Game.M), no un
-  // valor global: cada sala puede tener un mapa distinto.
-  applyMovementReport(m, now, bounds) {
+  // Mirada, banderas y arma en mano de un mensaje 'st' (la posición ya no viaja: ver applyMoveCommands).
+  applyMovementReport(m) {
     const p = this.pub, d = this.priv;
     if (isNum(m.yaw)) d.yaw = r2(m.yaw);
     if (isNum(m.pitch)) d.pitch = r2(clamp(m.pitch, -1.5, 1.5));
@@ -70,23 +60,52 @@ export class Player {
       const c = clamp(m.cur, 0, Math.max(0, p.weapons.length - 1));
       if (c !== p.cur) { p.cur = c; curChanged = true; }
     }
-    if (p.state === 'dead') return { curChanged, posApplied: false }; // espectador: su posición no importa
-    const pos = vec3(m.p, 500);
-    if (!pos) return { curChanged, posApplied: false };
-    const { W, H, M } = bounds;
-    const topLv = M.levels[M.NL - 1];
-    const x = clamp(pos[0], 0, W), y = clamp(pos[1], M.levels[0].y - 1, topLv.y + topLv.h + 2), z = clamp(pos[2], 0, H);
-    const jump = Math.hypot(x - d.x, z - d.z);
-    if (d.hasPos && now > d.teleportUntil) {
-      const dtMs = clamp(now - d.lastMoveAt, 0, MAX_STATE_GAP_MS);
-      const allowed = MAX_JUMP_MARGIN + MAX_SPEED_MPS * (dtMs / 1000);
-      if (jump > allowed) { if (++d.badPos < RESYNC_AFTER) return { curChanged, posApplied: false }; }
-    }
-    d.badPos = 0;
-    d.lastMoveAt = now;
+    return { curChanged };
+  }
+
+  // Coloca al jugador en un punto (reaparecer, teletransporte): el estado de simulación se rehace desde
+  // ahí en el siguiente comando.
+  placeAt(x, y, z) {
+    const d = this.priv;
     d.x = x; d.y = y; d.z = z;
+    d.sim = null;
+  }
+
+  // Tras reconectar el cliente empieza su numeración de comandos de cero
+  resetMoveSync() {
+    this.priv.ackSeq = 0;
+    this.priv.sim = null;
+  }
+
+  // Ejecuta los comandos de movimiento de un mensaje 'st'. env = { doors, separate? } (el mapa activo ya
+  // es el de la sala). Devuelve cuántos comandos movieron al jugador.
+  applyMoveCommands(rawCmds, now, env) {
+    const p = this.pub, d = this.priv;
+    if (p.state === 'dead' || !Array.isArray(rawCmds)) return 0;
+    if (!d.sim) d.sim = spawnMoveState(d.x, d.z, d.y, env.doors);
+    const elapsed = clamp((now - d.lastCmdAt) / 1000, 0, MAX_MOVE_BUDGET);
+    d.lastCmdAt = now;
+    d.moveBudget = Math.min(MAX_MOVE_BUDGET, d.moveBudget + elapsed * BUDGET_SLACK);
+    const stepEnv = {
+      doors: env.doors, down: p.state === 'down', staminUp: Array.isArray(p.perks) && p.perks.includes('staminup'),
+      separate: env.separate,
+    };
+    let applied = 0;
+    const n = Math.min(rawCmds.length, MAX_CMDS_PER_MSG);
+    for (let i = 0; i < n; i++) {
+      const c = unpackCmd(rawCmds[i]);
+      if (!c || c.seq <= d.ackSeq) continue;   // repetido o viejo
+      d.ackSeq = c.seq;
+      const dt = Math.min(c.dt, d.moveBudget);
+      if (dt <= 0) continue;                   // sin tiempo disponible: se confirma pero no se mueve
+      d.moveBudget -= dt;
+      stepMovement(d.sim, c, dt, stepEnv);
+      applied++;
+    }
+    const s = d.sim;
+    d.x = s.x; d.y = s.y; d.z = s.z;
     d.hasPos = true;
-    return { curChanged, posApplied: true };
+    return applied;
   }
 
   // ---------------------------------------------------------------- daño / muerte / reanimación

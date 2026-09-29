@@ -6,7 +6,8 @@
 
 import WebSocket from 'ws';
 import { INTERACTABLE_BY_ID, PLAYER_SPAWNS, WINDOW_INFO, zoneAt, setActiveMap } from '../shared/map.js';
-import { moveCircle, solidForPlayer, lineOfSight } from '../shared/collision.js';
+import { solidForPlayer, lineOfSight } from '../shared/collision.js';
+import { CB, spawnMoveState, quantizeCmd, packCmd, stepMovement } from '../shared/movement.js';
 import { WEAPONS, weaponDef, fireInterval } from '../shared/weapons.js';
 import { PLAYER, MELEE, GRENADE, PLAYER_COLORS, yawTo, forwardXZ } from '../shared/constants.js';
 import { PF } from '../shared/protocol.js';
@@ -60,6 +61,9 @@ class Bot {
     this.yaw = 0;
     this.pitch = 0;
     this.flags = 0;
+    this.sim = null;        // estado de movimiento (mismo stepMovement que el servidor)
+    this.seq = 0;
+    this.outbox = [];       // comandos por enviar en el próximo 'st'
     this.field = new FlowField();
     this.goal = null;
     this.goalKey = '';
@@ -79,11 +83,21 @@ class Bot {
     this.closed = false;
     this.seen = {};             // eventos recibidos por nombre (para el escenario)
     this.lastGive = null;
-    this.connect();
+    if (index === 0) this.connect();
+    else this.connectWhenHostReady();
   }
 
   get self() { return this.gs && this.id != null ? this.gs.players[this.id] : null; }
   get doors() { return (this.gs && this.gs.doors) || {}; }
+
+  // Los que se unen esperan a que el anfitrión haya creado la sala (si llegan antes, el servidor los rechaza)
+  connectWhenHostReady() {
+    const t0 = Date.now();
+    const iv = setInterval(() => {
+      if (bots[0] && bots[0].gs) { clearInterval(iv); this.connect(); }
+      else if (Date.now() - t0 > 5000) { clearInterval(iv); stats.errors.push(`${this.name}: el anfitrión no creó la sala a tiempo`); }
+    }, 50);
+  }
 
   connect() {
     this.ws = new WebSocket(URL);
@@ -157,7 +171,7 @@ class Bot {
     if (this.index === 0) countEv(ev.e);
     switch (ev.e) {
       case 'respawn':
-        if (mine) { this.x = ev.x; this.z = ev.z; this.yaw = ev.yaw || 0; this.goal = null; }
+        if (mine) { this.x = ev.x; this.z = ev.z; this.yaw = ev.yaw || 0; this.goal = null; this.sim = null; this.outbox.length = 0; }
         break;
       case 'roundStart':
         if (this.index === 0) log(`=== RONDA ${ev.round} === (zombis: ${this.gs ? this.gs.zLeft : '?'})`);
@@ -275,11 +289,27 @@ class Bot {
     const dx = tx - this.x, dz = tz - this.z;
     const d = Math.hypot(dx, dz);
     if (d < 1e-3) return dGoal < 0.6;
-    const step = Math.min(d, speed * dt);
-    const r = moveCircle(this.x, this.z, (dx / d) * step, (dz / d) * step, PLAYER.radius, solid);
-    this.x = r.x; this.z = r.z;
     this.moveYaw = yawTo(0, 0, dx, dz);
+    this.walk(dt, speed, this.moveYaw);
     return false;
+  }
+
+  // Avanza `dt` s hacia `yaw` a `speed` m/s mandando comandos de movimiento (el servidor es quien mueve)
+  walk(dt, speed, yaw) {
+    const down = this.self && this.self.state === 'down';
+    if (!this.sim) this.sim = spawnMoveState(this.x, this.z, 0, this.doors);
+    let left = dt;
+    while (left > 1e-4) {
+      const piece = Math.min(left, 0.05);
+      left -= piece;
+      const cmd = quantizeCmd({
+        seq: ++this.seq, dt: piece, fwd: 1, str: 0, analogK: 1, yaw,
+        mm: Math.min(1, speed / PLAYER.walkSpeed), bits: speed > PLAYER.walkSpeed + 0.2 ? CB.SPRINT : 0,
+      });
+      stepMovement(this.sim, cmd, cmd.dt, { doors: this.doors, down, staminUp: false });
+      this.outbox.push(cmd);
+    }
+    this.x = this.sim.x; this.z = this.sim.z;
   }
 
   nearIt(id, extra = 0) {
@@ -476,7 +506,7 @@ class Bot {
 
   sendState() {
     const s = this.self;
-    this.send({ t: 'st', p: [this.x, 0, this.z], yaw: this.yaw, pitch: this.pitch, f: this.flags, cur: s ? s.cur : 0 });
+    this.send({ t: 'st', c: this.outbox.splice(0).map(packCmd), yaw: this.yaw, pitch: this.pitch, f: this.flags, cur: s ? s.cur : 0 });
   }
 }
 
@@ -669,6 +699,8 @@ function fuzz() {
       'hola', '{', '[]', 'null', '{"t":5}', '{"t":"st","p":"x"}', '{"t":"fire","hits":[[null,"h",1e99]]}',
       JSON.stringify({ t: 'hello', name: { a: 1 }, color: 12 }),
       JSON.stringify({ t: 'st', p: [NaN, 'a', null], yaw: 'x', cur: 99 }),
+      JSON.stringify({ t: 'st', c: [[1], 'x', null, [NaN, 1, 1, 1, 1, 1, 1, 1], [9e9, 9e9, 9e9, 9e9, 9e9, 9e9, 9e9, 9e9]], yaw: 0, cur: 0 }),
+      JSON.stringify({ t: 'st', c: 'x' }),
       JSON.stringify({ t: 'fire', w: 'raygun', up: 1, o: [0, 0], d: null, hits: 'x' }),
       JSON.stringify({ t: 'fire', w: 'm1911', up: false, o: [1, 1, 1], d: [0, 0, -1], hits: [[1, 'h', -5], [2], 'x', [3.5, 'b', 1]] }),
       JSON.stringify({ t: 'boom', w: 'frag', p: [1, 2, 3], direct: 'a' }),

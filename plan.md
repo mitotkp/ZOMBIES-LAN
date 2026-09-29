@@ -312,5 +312,35 @@ Esfuerzo estimado: grande (varias sesiones). Recomendación: hacerlo por fases (
     Verificado: `node --check`, prueba aislada (Weapon ampliada, sección melee: stats, tiempos, hit único,
     enfriamiento, cancel) y en vivo (swing con animación 0.42 s, bloqueo por enfriamiento, segundo golpe,
     `_cancelAll`, mensaje `melee` con 1 objetivo falso delante; 0 errores de consola).
-  - **Siguiente en la cola**: Player servidor-autoritativo y migrar movimiento/ataque de Zombie (fases grandes,
-    confirmar antes).
+  - **Paso 6 (hecho): movimiento AUTORITATIVO en el servidor (Player).** Cambio de red: el cliente ya NO manda
+    su posición; manda comandos y el servidor mueve al jugador.
+    - `shared/movement.js` (nuevo, compartido): `stepMovement(estado, comando, dt, env)` es el único sitio donde
+      vive la física del jugador (aceleración, correr/estamina, agacharse, deslizarse, saltar, gravedad, rampas,
+      colisión, empuje suave de zombis). Sin nada del navegador/reloj/azar: mismo resultado en ambos lados.
+      `quantizeCmd` redondea el comando ANTES de simular (dt en ms enteros, ejes a 2 decimales, yaw a 4) para que
+      lo simulado sea exactamente lo que viaja. Comando = intención por fotograma (ejes, bits: correr/agacharse/
+      saltar con sus flancos, yaw, multiplicador de velocidad `mm`).
+    - Servidor: `Player.applyMoveCommands` ejecuta los comandos con el mismo `stepMovement`; `applyMovementReport`
+      quedó solo para mirada/banderas/arma. Anti-trampas: **presupuesto de tiempo** (el tiempo simulado no puede
+      superar el tiempo real recibido +15 %, tope 0.5 s; comandos de más se confirman pero no mueven), `seq`
+      repetidos se ignoran, máx. 20 comandos por mensaje, `mm` acotado a [0.1, 1]. Se borraron las constantes de la
+      validación vieja (`MAX_JUMP_MARGIN`, `RESYNC_AFTER`, `TELEPORT_GRACE`...). `Player.placeAt` recoloca
+      (reaparecer/teletransporte: rehace el estado simulado) y `resetMoveSync` reinicia la numeración al reconectar.
+    - Confirmación: con cada snapshot (20 Hz) el servidor manda a cada jugador `{t:'mv', seq, s}` (último comando
+      atendido + estado simulado). Cliente (`public/js/player.js`): predice con el mismo paso, guarda los comandos sin
+      confirmar y, si el estado del servidor difiere >2 cm de lo predicho, lo adopta y **re-simula** los pendientes;
+      la diferencia se disipa como corrección visual (>1.5 m: salto directo). Cámara, balanceo, pasos y sonidos
+      siguen siendo solo del cliente. `main.js` manda `c` (comandos) en vez de `p` en `st`.
+    - Decisiones/limitaciones a saber: (1) el multiplicador `mm` (arma, apuntar, beber, escudo) lo declara el
+      cliente y el servidor solo lo acota: el objetivo es evitar teletransportes/velocidad, no verificar el peso del
+      arma; (2) el empuje de zombis lo calcula cada lado con SUS zombis (el cliente los ve ~100 ms atrás) y la
+      reconciliación absorbe la diferencia; (3) `tools/bot-test.js` ahora camina mandando comandos con el mismo
+      `stepMovement`, y se arregló una carrera real: los bots que se unen esperan a que el anfitrión cree la sala.
+    Verificado: `node --check`, `validate-map`, prueba aislada (~30 aserciones: cuantización idempotente, pack/
+    unpack, determinismo exacto, caminar/correr/saltar/muro, presupuesto de tiempo, repetidos, muerto, caído,
+    basura, tope de comandos), `bot-test.js` (2 bots, ronda 2, 0 errores) y el escenario completo (compras, caja,
+    Pack-a-Punch, ventajas, escudo, ventanas, ronda 6: 11/11 OK, 0 errores: depende de que la posición del servidor
+    sea correcta), y en el navegador real (caminar 9 m: posición del cliente == posición del servidor, pendientes
+    a 0, sin errores). **Sin probar**: latencia alta/pérdida de paquetes (solo localhost), teletransportador real
+    del castillo, escaleras con reconciliación, y jugar a mano con teclado/ratón reales.
+  - **Siguiente en la cola**: migrar movimiento/ataque de Zombie a su clase (fase grande, confirmar antes)..

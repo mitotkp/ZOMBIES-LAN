@@ -1,21 +1,18 @@
 // Controlador del jugador local: movimiento, colisión, cámara en primera persona y modo espectador.
-// La posición local es autoritativa en el cliente (el servidor recibe 'st' a 20 Hz).
+// Movimiento con autoridad en el SERVIDOR (paso 6): aquí se PREDICE con el mismo stepMovement() del
+// servidor (shared/movement.js) para que se sienta inmediato, cada fotograma genera un comando que viaja en
+// 'st', y cuando llega la confirmación del servidor ('mv') se corrige y se re-simulan los comandos aún no
+// confirmados. Lo cosmético (cámara, balanceo, pasos, sonidos) sigue siendo solo del cliente.
 
 import * as THREE from 'three';
 import { PLAYER, clamp, lerp, angleDiff } from '/shared/constants.js';
-import { moveCircle, resolveCircle, solidForPlayer, raycastMap } from '/shared/collision.js';
+import { raycastMap } from '/shared/collision.js';
+import { CB, STAMINUP_SPEED, newMoveState, spawnMoveState, quantizeCmd, packCmd, stepMovement, separateFromZombies, unpackMoveState, copyMoveState } from '/shared/movement.js';
 import { PF } from '/shared/protocol.js';
 import { PLAYER_SPAWNS, PLAYER_SPAWN_YAW, ZONES, MAP } from '/shared/map.js';
 
 const LOOK_SCALE = 0.0022;        // rad por píxel con sensibilidad 1
 const PITCH_LIMIT = 1.5;
-const GROUND_ACCEL = 11;          // respuesta al acelerar (1/s)
-const GROUND_DECEL = 9;           // respuesta al frenar
-const AIR_ACCEL = 2.2;            // control en el aire
-const STAMINUP_SPEED = 1.07;
-const SPRINT_REGEN_DELAY = 0.45;  // s sin correr antes de recuperar estamina
-const EXHAUST_RECOVER = 0.35;     // estamina necesaria para volver a correr tras agotarse
-const ZOMBIE_SEP = 0.62;          // distancia mínima jugador-zombi (empuje suave)
 const RECOIL_RECOVER = 0.6;       // fracción del retroceso que se recupera sola
 const RECOIL_RATE = 7;
 
@@ -53,16 +50,13 @@ export class PlayerController {
     // Internos
     this._lastState = null;
     this._eyeH = PLAYER.eyeHeight;
-    this._crouchWanted = false;
-    this._crouchPressT = 0;
-    this._crouchPressOn = false;
-    this._exhausted = false;
-    this._regenDelay = 0;
+    this.sim = newMoveState(sp.x, 0, sp.z);   // estado simulado (predicción); position/velocity lo reflejan
+    this._seq = 0;                 // numeración de comandos
+    this._pending = [];            // comandos aún sin confirmar: { cmd, post }
+    this._outbox = [];             // comandos por enviar en el próximo 'st'
+    this._corr = new THREE.Vector3();   // corrección visual pendiente (se disipa sola)
     this._sprintT = 0;
-    this._slideT = 0;         // tiempo restante del deslizamiento
     this._slideFx = 0;        // 0..1 suavizado para la cámara
-    this._slideCd = 0;
-    this._slideDir = new THREE.Vector2();
     this._bobPhase = 0;
     this._bobAmp = 0;
     this._roll = 0;
@@ -75,8 +69,6 @@ export class PlayerController {
     this._shakeSeed = Math.random() * 100;
     this._t = 0;
     this._doors = {};
-    // la altura decide la planta y las escaleras
-    this._solid = (cx, cz) => solidForPlayer(cx, cz, this._doors, this.position.y, this.position.x, this.position.z);
     this._spec = {
       angle: 0, elev: 0.35, dist: 4.2, idle: 0, init: false,
       cam: new THREE.Vector3(), focus: new THREE.Vector3(), lastPid: null,
@@ -101,6 +93,8 @@ export class PlayerController {
         if (d < r) this.shake(clamp(1 - d / r, 0.1, 1) * 0.9, 0.5);
       });
       ev.on('ev:pu', (e) => { if (e && e.type === 'nuke') this.shake(0.6, 0.9); });
+      ev.on('net:mv', (m) => this._onServerMove(m));
+      ev.on('net:open', () => { this._seq = 0; this._pending.length = 0; this._outbox.length = 0; });
     }
   }
 
@@ -111,21 +105,20 @@ export class PlayerController {
     if (!isFinite(x) || !isFinite(z)) { x = sp.x; z = sp.z; y = sp.y; }
     if (!isFinite(y)) y = sp.y || 0;
     this._doors = (this.ctx.gs && this.ctx.gs.doors) || {};
-    this.position.y = y;
-    [x, z] = resolveCircle(x, z, PLAYER.radius, this._solid);
-    this.position.set(x, MAP.groundY(x, z, y), z);
+    this.sim = spawnMoveState(x, z, y, this._doors);
+    this._pending.length = 0;
+    this._outbox.length = 0;
+    this._corr.set(0, 0, 0);
+    x = this.sim.x; z = this.sim.z;
+    this.position.set(x, this.sim.y, z);
     this.velocity.set(0, 0, 0);
     this.yaw = isFinite(Number(yaw)) ? wrapAngle(Number(yaw)) : PLAYER_SPAWN_YAW;
     this.pitch = 0;
     this.onGround = true;
     this.isSprinting = false;
     this.isCrouching = false;
-    this._crouchWanted = false;
     this.isSliding = false;
-    this._slideT = 0;
-    this._slideCd = 0;
     this.stamina01 = 1;
-    this._exhausted = false;
     this._recoilP = 0; this._recoilY = 0;
     this._shakeTime = 0; this._shakeAmp = 0;
     this._landDip = 0;
@@ -226,7 +219,7 @@ export class PlayerController {
 
   _onStateChange(prev, next) {
     if (next === 'down') {
-      this._crouchWanted = false;
+      this.sim.crouchWanted = false;
       this.isSprinting = false;
     }
     if (next === 'dead') {
@@ -284,12 +277,63 @@ export class PlayerController {
     this.yaw = wrapAngle(this.yaw);
   }
 
+  _staminUp() { return this._perks().includes('staminup'); }
+
+  // Entorno de la simulación (el mismo que arma el servidor): puertas, si está caído, ventaja y empuje de zombis
+  _moveEnv(state) {
+    const ents = this.ctx.entities;
+    return {
+      doors: this._doors,
+      down: state === 'down',
+      staminUp: this._staminUp(),
+      separate: (x, z, dt, y, solid) => {
+        if (!ents || typeof ents.getZombieTargets !== 'function') return null;
+        let list;
+        try { list = ents.getZombieTargets(); } catch { return null; }
+        return separateFromZombies(list, 'yOff', x, z, dt, y, solid);
+      },
+    };
+  }
+
+  // Comandos por enviar en el próximo 'st' (formato de red)
+  drainCommands() {
+    if (!this._outbox.length) return [];
+    const out = this._outbox.map(packCmd);
+    this._outbox.length = 0;
+    return out;
+  }
+
+  // Confirmación del servidor: descarta lo confirmado, compara con lo predicho y, si hay diferencia,
+  // adopta el estado del servidor y vuelve a simular los comandos aún sin confirmar.
+  _onServerMove(m) {
+    const gs = this.ctx.gs;
+    if (!m || !gs || gs.phase !== 'playing' || this._viewState() === 'dead') return;
+    const srv = unpackMoveState(m.s);
+    const ack = Number(m.seq);
+    if (!srv || !Number.isFinite(ack)) return;
+    let acked = null;
+    while (this._pending.length && this._pending[0].cmd.seq <= ack) acked = this._pending.shift();
+    if (!acked) return;                       // confirmación de algo que ya no recordamos
+    const pr = acked.post;
+    const err = Math.hypot(srv.x - pr.x, srv.z - pr.z) + Math.abs(srv.y - pr.y);
+    if (err < 0.02) return;
+    const bx = this.sim.x, by = this.sim.y, bz = this.sim.z;
+    const env = this._moveEnv(this._viewState());
+    const s = copyMoveState(this.sim, srv);
+    for (const e of this._pending) {
+      stepMovement(s, e.cmd, e.cmd.dt, env);
+      e.post.x = s.x; e.post.y = s.y; e.post.z = s.z;
+    }
+    if (err < 1.5) {
+      this._corr.x += bx - s.x; this._corr.y += by - s.y; this._corr.z += bz - s.z;
+    } else this._corr.set(0, 0, 0);
+  }
+
   _updateMove(dt, state) {
     const ctx = this.ctx;
     const input = ctx.input;
     const down = state === 'down';
-    const perks = this._perks();
-    const staminUp = perks.includes('staminup');
+    const staminUp = this._staminUp();
     const isDown = (a) => !!(input && input.isDown(a));
     const pressed = (a) => !!(input && input.pressed(a));
     const released = (a) => !!(input && input.released(a));
@@ -303,167 +347,62 @@ export class PlayerController {
     let analogK = 1;
     const pm = input && input.enabled ? input.padMove : null;
     if (pm && fwd === 0 && str === 0 && (pm.x || pm.y)) { fwd = -pm.y; str = pm.x; analogK = Math.min(1, Math.hypot(pm.x, pm.y)); }
-    const wantsMove = fwd !== 0 || str !== 0;
 
-    // Deslizarse: agacharse mientras se corre (como en CoD). Termina agachado.
-    if (this._slideCd > 0) this._slideCd -= dt;
-    if (!down && pressed('crouch') && this.isSprinting && this.onGround && this._slideCd <= 0 && !this.isSliding) {
-      const hv = Math.hypot(this.velocity.x, this.velocity.z);
-      if (hv > 0.5) this._slideDir.set(this.velocity.x / hv, this.velocity.z / hv);
-      else this._slideDir.set(-Math.sin(this.yaw), -Math.cos(this.yaw));
-      this._slideT = PLAYER.slideDuration;
-      this._slideCd = PLAYER.slideDuration + PLAYER.slideCooldown;
-      this.isSliding = true;
-      this._crouchWanted = true;
-      this._crouchPressOn = false;     // al soltar la C se sigue agachado
-      this._sound('slide', { volume: 0.8 });
-    }
-    if (this.isSliding && (down || this._slideT <= 0)) this.isSliding = false;
-
-    // Agacharse: pulsación = alternar; mantener y soltar = agacharse solo mientras se mantiene
-    if (!down && !this.isSliding) {
-      if (pressed('crouch')) {
-        this._crouchWanted = !this._crouchWanted;
-        this._crouchPressT = 0;
-        this._crouchPressOn = this._crouchWanted;
-      }
-      if (isDown('crouch')) this._crouchPressT += dt;
-      if (released('crouch') && this._crouchPressOn && this._crouchPressT > 0.3) this._crouchWanted = false;
-    } else if (down) {
-      this._crouchWanted = false;
-    }
-
-    // Correr
     const w = ctx.weapons;
     const adsActive = isDown('ads') || (w && typeof w.adsAmount === 'number' ? w.adsAmount : this.adsAmount) > 0.5;
-    const wantSprint = !down && isDown('sprint') && fwd > 0 && !adsActive;
-    if (wantSprint && this._crouchWanted && pressed('sprint')) this._crouchWanted = false;
-    let sprint = wantSprint && !this.isSliding && !this._crouchWanted && !this._exhausted && this.stamina01 > 0;
-    const dur = PLAYER.sprintDuration * (staminUp ? 2 : 1);
-    if (sprint) {
-      this.stamina01 -= dt / dur;
-      this._regenDelay = SPRINT_REGEN_DELAY;
-      if (this.stamina01 <= 0) { this.stamina01 = 0; this._exhausted = true; sprint = false; }
-    } else {
-      if (this._regenDelay > 0) this._regenDelay -= dt;
-      else this.stamina01 = Math.min(1, this.stamina01 + dt / PLAYER.sprintRecover);
-      if (this._exhausted && this.stamina01 >= EXHAUST_RECOVER) this._exhausted = false;
+    let bits = 0;
+    if (isDown('sprint') && fwd > 0 && !adsActive) bits |= CB.SPRINT;
+    if (pressed('sprint')) bits |= CB.SPRINT_PRESSED;
+    if (pressed('crouch')) bits |= CB.CROUCH_PRESSED;
+    if (isDown('crouch')) bits |= CB.CROUCH_DOWN;
+    if (released('crouch')) bits |= CB.CROUCH_RELEASED;
+    if (pressed('jump')) bits |= CB.JUMP_PRESSED;
+    const mmRaw = Number(this.moveMult);
+
+    // Predicción: el mismo paso que hace el servidor con este comando
+    const sim = this.sim;
+    let ev = null;
+    if (dt > 0.0005) {
+      const cmd = quantizeCmd({
+        seq: ++this._seq, dt, fwd, str, analogK, yaw: this.yaw, mm: isFinite(mmRaw) ? mmRaw : 1, bits,
+      });
+      ev = stepMovement(sim, cmd, cmd.dt, this._moveEnv(state));
+      this._pending.push({ cmd, post: { x: sim.x, y: sim.y, z: sim.z } });
+      this._outbox.push(cmd);
+      if (this._pending.length > 180) this._pending.shift();
+      if (this._outbox.length > 90) this._outbox.shift();
     }
-    this.isSprinting = sprint;
-    this.isCrouching = this._crouchWanted && !down;
+    if (ev) {
+      if (ev.slid) this._sound('slide', { volume: 0.8 });
+      if (ev.jumped) this._sound('jump', { volume: 0.7 });
+      if (ev.impact > 2) {
+        this._landDip = -Math.min(0.14, ev.impact * 0.022);
+        this._sound('land', { volume: clamp(ev.impact / 7, 0.3, 1) });
+      }
+    }
+
+    // La corrección visual pendiente se disipa sola (la simulación ya está en su sitio)
+    const c = this._corr;
+    const kc = Math.exp(-14 * dt);
+    c.x *= kc; c.y *= kc; c.z *= kc;
+    if (Math.abs(c.x) + Math.abs(c.y) + Math.abs(c.z) < 0.0005) c.set(0, 0, 0);
+
+    // Reflejo de la simulación en la API pública
+    const p = this.position, v = this.velocity;
+    p.set(sim.x + c.x, sim.y + c.y, sim.z + c.z);
+    v.set(sim.vx, sim.vy, sim.vz);
+    this.onGround = sim.onGround;
+    this.isSprinting = sim.sprinting;
+    this.isCrouching = sim.crouching;
+    this.isSliding = sim.sliding;
+    this.stamina01 = sim.stamina;
+    const sprint = sim.sprinting;
+    const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);
+    const rx = cy, rz = -sy;           // derecha
     this._sprintT += ((sprint ? 1 : 0) - this._sprintT) * (1 - Math.exp(-6 * dt));
     this._slideFx += ((this.isSliding ? 1 : 0) - this._slideFx) * (1 - Math.exp(-10 * dt));
 
-    // Saltar (agachado: primero se levanta)
-    if (!down && pressed('jump')) {
-      if (this.isSliding) {
-        // Salto desde el deslizamiento: conserva la inercia
-        this.isSliding = false;
-        this._slideT = 0;
-        this._crouchWanted = false;
-        this.isCrouching = false;
-        this.velocity.y = PLAYER.jumpVelocity;
-        this.onGround = false;
-        this._sound('jump', { volume: 0.7 });
-      } else if (this._crouchWanted) {
-        this._crouchWanted = false;
-        this.isCrouching = false;
-      } else if (this.onGround) {
-        this.velocity.y = PLAYER.jumpVelocity;
-        this.onGround = false;
-        this._sound('jump', { volume: 0.7 });
-      }
-    }
-
-    // Velocidad objetivo
-    let speed = down ? PLAYER.downSpeed
-      : sprint ? PLAYER.sprintSpeed
-      : this.isCrouching ? PLAYER.crouchSpeed
-      : PLAYER.walkSpeed;
-    if (staminUp && !down) speed *= STAMINUP_SPEED;
-    const mm = Number(this.moveMult);
-    speed *= isFinite(mm) ? clamp(mm, 0.1, 1.5) : 1;
-    if (!sprint) {
-      if (fwd < 0) speed *= 0.88;
-      else if (fwd === 0 && str !== 0) speed *= 0.95;
-    }
-
-    const sy = Math.sin(this.yaw), cy = Math.cos(this.yaw);
-    const fx = -sy, fz = -cy;          // adelante
-    const rx = cy, rz = -sy;           // derecha
-    let wx = fx * fwd + rx * str, wz = fz * fwd + rz * str;
-    const wl = Math.hypot(wx, wz);
-    if (wl > 0) { wx /= wl; wz /= wl; }
-    const k = sprint ? 1 : Math.max(0.3, analogK);
-    const tx = wx * speed * k, tz = wz * speed * k;
-
-    const v = this.velocity;
-    if (this.isSliding) {
-      // Impulso inicial que se frena hasta la velocidad agachado; se puede torcer un poco con A/D
-      const f = 1 - this._slideT / PLAYER.slideDuration;        // 0 → 1
-      const sp = lerp(PLAYER.slideSpeed * (staminUp ? STAMINUP_SPEED : 1), PLAYER.crouchSpeed, f * f);
-      const steer = -str * 1.6 * dt;   // girar a la derecha = yaw negativo
-      const c = Math.cos(steer), s = Math.sin(steer);
-      const dx = this._slideDir.x, dz = this._slideDir.y;
-      this._slideDir.set(dx * c + dz * s, dz * c - dx * s).normalize();
-      v.x = this._slideDir.x * sp;
-      v.z = this._slideDir.y * sp;
-      this._slideT -= dt;
-    } else {
-      const accel = this.onGround ? (wantsMove ? GROUND_ACCEL : GROUND_DECEL) : AIR_ACCEL;
-      const k = 1 - Math.exp(-accel * dt);
-      v.x += (tx - v.x) * k;
-      v.z += (tz - v.z) * k;
-    }
-
-    // Vertical: suelo de la planta o rampa de la escalera bajo los pies
-    const p = this.position;
-    const ground = MAP.groundY(p.x, p.z, p.y);
-    if (down) {
-      p.y = ground; v.y = 0;
-      this.onGround = true;
-    } else {
-      if (!this.onGround) v.y -= PLAYER.gravity * dt;
-      p.y += v.y * dt;
-      if (p.y <= ground) {
-        if (!this.onGround) {
-          const impact = -v.y;
-          if (impact > 2) {
-            this._landDip = -Math.min(0.14, impact * 0.022);
-            this._sound('land', { volume: clamp(impact / 7, 0.3, 1) });
-          }
-        }
-        p.y = ground; v.y = 0;
-        this.onGround = true;
-      }
-    }
-
-    // Horizontal con colisión y deslizamiento
-    const ox = p.x, oz = p.z;
-    let res = moveCircle(ox, oz, v.x * dt, v.z * dt, PLAYER.radius, this._solid);
-    let nx = res.x, nz = res.z;
-    const sep = this._separateFromZombies(nx, nz, dt);
-    if (sep) { nx = sep[0]; nz = sep[1]; }
-    if (!isFinite(nx) || !isFinite(nz)) {
-      const sp = PLAYER_SPAWNS[0] || { x: 0, z: 0 };
-      nx = sp.x; nz = sp.z;
-      v.set(0, 0, 0);
-    }
-    p.x = nx; p.z = nz;
-    // Al caminar: seguir la rampa (subir o bajar escalones); si el suelo desaparece, caer
-    if (this.onGround && v.y <= 0) {
-      const g2 = MAP.groundY(p.x, p.z, p.y);
-      if (Math.abs(g2 - p.y) <= MAP.STEP + 0.05) p.y = g2;
-      else if (g2 < p.y) this.onGround = false;
-    }
-    if (dt > 0) {
-      const ax = (nx - ox) / dt, az = (nz - oz) / dt;
-      if (Math.abs(ax) < Math.abs(v.x)) v.x = ax;
-      if (Math.abs(az) < Math.abs(v.z)) v.z = az;
-    }
-
     const hs = Math.hypot(v.x, v.z);
-    if (this.isSliding && hs < 1.2 && this._slideT < PLAYER.slideDuration - 0.1) { this.isSliding = false; this._slideT = 0; }
     this.isMoving = hs > 0.4;
     this.speed01 = clamp(hs / (PLAYER.sprintSpeed * (staminUp ? STAMINUP_SPEED : 1)), 0, 1);
 
@@ -495,31 +434,6 @@ export class PlayerController {
     const eyeTarget = down ? PLAYER.downEyeHeight : this.isSliding ? PLAYER.slideEyeHeight : this.isCrouching ? PLAYER.crouchEyeHeight : PLAYER.eyeHeight;
     this._eyeH += (eyeTarget - this._eyeH) * (1 - Math.exp(-(down ? 4.5 : this.isSliding ? 16 : 12) * dt));
     this._landDip *= Math.exp(-9 * dt);
-  }
-
-  _separateFromZombies(x, z, dt) {
-    const ents = this.ctx.entities;
-    if (!ents || typeof ents.getZombieTargets !== 'function') return null;
-    let list;
-    try { list = ents.getZombieTargets(); } catch { return null; }
-    if (!Array.isArray(list) || !list.length) return null;
-    let moved = false;
-    const kk = Math.min(1, dt * 12);
-    for (let i = 0; i < list.length; i++) {
-      const zb = list[i];
-      if (!zb || !isFinite(zb.x) || !isFinite(zb.z)) continue;
-      if (Math.abs((zb.yOff || 0) - this.position.y) > 1.5) continue;   // zombi en otra planta (arriba o abajo)
-      const dx = x - zb.x, dz = z - zb.z;
-      const d2 = dx * dx + dz * dz;
-      if (d2 >= ZOMBIE_SEP * ZOMBIE_SEP || d2 < 1e-8) continue;
-      const d = Math.sqrt(d2);
-      const push = (ZOMBIE_SEP - d) * kk;
-      x += (dx / d) * push;
-      z += (dz / d) * push;
-      moved = true;
-    }
-    if (!moved) return null;
-    return resolveCircle(x, z, PLAYER.radius, this._solid);
   }
 
   _footstep(down, sprint) {
