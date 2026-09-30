@@ -14,27 +14,28 @@ import * as THREE from 'three';
 const DYN_MIN = 0.75;   // escala mínima de la resolución dinámica (más baja se ve demasiado borroso)
 
 export class Renderer {
-  // opts: { quality, brightness, baseExposure, mount }. Lanza si no hay WebGL (quien llama lo muestra).
-  constructor({ quality, brightness, baseExposure, mount }) {
+  // opts: { settings, baseExposure, mount }. Lanza si no hay WebGL (quien llama lo muestra).
+  // settings: los ajustes del jugador ya normalizados (quality, brightness, shadows, renderScale, dynRes, antialias).
+  constructor({ settings, baseExposure, mount }) {
     this.baseExposure = baseExposure;
     this.dynScale = 1;
     this._dyn = { t: 0, n: 0, good: 0, probe: null, holdUntil: 0 };
     this._shadowTick = 0;
 
     const gl = new THREE.WebGLRenderer({
-      antialias: quality === 'high',
+      antialias: !!settings.antialias,        // no se puede cambiar sin recrear el contexto: se aplica al recargar
       powerPreference: 'high-performance',
       stencil: false,
     });
     gl.outputColorSpace = THREE.SRGBColorSpace;
     gl.toneMapping = THREE.ACESFilmicToneMapping;
-    gl.toneMappingExposure = baseExposure * brightness;
+    gl.toneMappingExposure = baseExposure * settings.brightness;
     gl.autoClear = false;
     gl.shadowMap.type = THREE.PCFShadowMap;
-    gl.shadowMap.enabled = quality === 'high';
+    gl.shadowMap.enabled = settings.shadows !== 'off';
     gl.shadowMap.autoUpdate = false;   // se recalcula a 30 Hz (ver tickShadows)
     gl.setClearColor(0x000000, 1);
-    gl.setPixelRatio(this.pixelRatioFor(quality));
+    gl.setPixelRatio(this.pixelRatioFor(settings));
     gl.setSize(window.innerWidth, window.innerHeight);
     gl.domElement.style.display = 'block';
     gl.domElement.tabIndex = -1;
@@ -49,24 +50,27 @@ export class Renderer {
   get domElement() { return this.gl.domElement; }
   get info() { return this.gl.info; }
 
-  pixelRatioFor(quality) {
-    return Math.min(window.devicePixelRatio || 1, quality === 'low' ? 1 : 1.5) * this.dynScale;
+  // Resolución interna: la de la pantalla (con tope según la calidad) x escala elegida x resolución dinámica
+  pixelRatioFor(settings) {
+    const base = Math.min(window.devicePixelRatio || 1, settings.quality === 'low' ? 1 : 1.5);
+    return base * (settings.renderScale || 1) * (settings.dynRes === false ? 1 : this.dynScale);
   }
 
   // Ajusta canvas y resolución al tamaño de la ventana. Devuelve el aspecto (ancho/alto).
-  resize(quality) {
+  resize(settings) {
     const w = window.innerWidth, h = Math.max(1, window.innerHeight);
-    this.gl.setPixelRatio(this.pixelRatioFor(quality));
+    this.gl.setPixelRatio(this.pixelRatioFor(settings));
     this.gl.setSize(w, h);
     return w / h;
   }
 
-  // Aplica los ajustes del jugador (calidad, brillo, sombras). scene: para recompilar materiales al cambiar sombras.
+  // Aplica los ajustes del jugador (resolución, brillo, sombras). scene: para recompilar materiales al cambiar sombras.
   applySettings(settings, scene) {
     const gl = this.gl;
-    this.resize(settings.quality);
+    if (settings.dynRes === false) { this.dynScale = 1; this._dyn.probe = null; }
+    this.resize(settings);
     gl.toneMappingExposure = this.baseExposure * settings.brightness;
-    const shadows = settings.quality === 'high';
+    const shadows = settings.shadows !== 'off';
     if (gl.shadowMap.enabled !== shadows) {
       gl.shadowMap.enabled = shadows;
       scene.traverse((o) => {
@@ -78,8 +82,8 @@ export class Renderer {
 
   // Resolución dinámica: baja si el juego no llega a ~50 FPS y vuelve a subir cuando sobra margen.
   // active: false en menús/pestaña oculta (no se mide entonces).
-  adaptResolution(realDt, active, quality) {
-    if (!active || realDt > 0.25) return;
+  adaptResolution(realDt, active, settings) {
+    if (!active || realDt > 0.25 || settings.dynRes === false) return;
     const d = this._dyn;
     d.t += realDt; d.n++;
     if (d.t < 1.5) return;
@@ -99,7 +103,7 @@ export class Renderer {
     else d.probe = null;
     if (next !== this.dynScale) {
       this.dynScale = next;
-      this.resize(quality);
+      this.resize(settings);
     }
   }
 

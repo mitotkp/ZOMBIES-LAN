@@ -3,7 +3,7 @@
 // (puertas, ventanas, máquinas, caja, mesa, potenciadores) derivan su aspecto de ctx.gs para que volver al lobby
 // y empezar otra partida funcione sin recargar. Los eventos solo disparan animaciones y sonidos.
 import * as THREE from 'three';
-import { MaterialLib, StaticBatch, serverNow, sfx, music, announce } from './kit.js';
+import { MaterialLib, StaticBatch, serverNow, sfx, music, announce, shadowMode } from './kit.js';
 import { setAnisotropy } from './textures.js';
 import { buildLevelGeometry } from './levelgeo.js';
 import { buildStaticProps, createInteractives, SignSet, Flames } from './props.js';
@@ -120,7 +120,8 @@ export class World {
   }
 
   _applyQuality() {
-    const high = !this.ctx.settings || this.ctx.settings.quality !== 'low';
+    const high = shadowMode(this.ctx.settings) !== 'off';
+    this._applyFog();
     if (this.lighting) this._try('lighting.quality', () => this.lighting.applyQuality());
     this.root.traverse((o) => {
       if (!o.isMesh) return;
@@ -128,6 +129,14 @@ export class World {
       if (o.userData.baseCast === undefined) o.userData.baseCast = o.castShadow;
       o.castShadow = high && o.userData.baseCast;
     });
+  }
+
+  // Densidad de la niebla según el ajuste "Niebla" (0.5..1.5 x la del mapa)
+  _applyFog() {
+    const fog = this.ctx.scene && this.ctx.scene.fog;
+    if (!fog || !fog.isFogExp2) return;
+    const k = Number((this.ctx.settings || {}).fog);
+    fog.density = FOG_DENSITY * (Number.isFinite(k) ? k : 1);
   }
 
   // ------------------------------------------------------------------ estado

@@ -1,7 +1,7 @@
 @echo off
 setlocal
 chcp 65001 >nul
-title ZOMBIES LAN - Servidor
+title Zombies: The Last Survivors - Servidor
 cd /d "%~dp0"
 
 where node >nul 2>nul
@@ -15,6 +15,7 @@ if errorlevel 1 (
 
 if not exist "node_modules\ws\package.json" goto install
 if not exist "node_modules\three\package.json" goto install
+if not exist "node_modules\pg\package.json" goto install
 goto run
 
 :install
@@ -31,6 +32,10 @@ if errorlevel 1 (
 )
 
 :run
+rem Conexión a PostgreSQL: crea un archivo database.env junto a este .bat con una línea
+rem   DATABASE_URL=postgres://usuario:clave@host:5432/basededatos
+rem (no se sube a git). Sin él, el servidor arranca solo con el modo un jugador.
+if exist "database.env" for /f "usebackq eol=# tokens=1,* delims==" %%a in ("database.env") do set "%%a=%%b"
 echo.
 node server\index.js %*
 if errorlevel 1 (

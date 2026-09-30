@@ -1,4 +1,4 @@
-# ZOMBIES LAN
+# Zombies: The Last Survivors
 
 Shooter cooperativo en primera persona para **1 a 4 jugadores en red local**, inspirado en el modo Zombies
 de *Call of Duty: Black Ops 2*. Solo hace falta un navegador: uno de los jugadores hace de anfitrión con Node.js

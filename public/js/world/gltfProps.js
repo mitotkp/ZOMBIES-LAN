@@ -4,6 +4,7 @@
 // llama debe caer al respaldo procedural existente.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { shadowMode } from './kit.js';
 
 const loader = new GLTFLoader();
 const cache = new Map();   // url -> THREE.Object3D (la escena original, NUNCA se inserta directamente) | 'failed'
@@ -39,7 +40,7 @@ export function placeGltfProp(world, url, x, y, z, ry = 0, tint = null) {
   const inst = source.clone(true);
   inst.position.set(x, y, z);
   inst.rotation.y = ry;
-  const highQuality = !world.ctx.settings || world.ctx.settings.quality !== 'low';
+  const highQuality = shadowMode(world.ctx.settings) !== 'off';
   const tintedCache = tint != null ? new Map() : null;
   inst.traverse((o) => {
     if (!o.isMesh) return;

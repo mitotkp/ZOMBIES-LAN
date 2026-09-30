@@ -217,6 +217,7 @@ export class EasterEgg {
       if (p.state === 'dead' || p.state === 'disconnected') continue;
       for (const k of PERK_KEYS) if (!p.perks.includes(k)) g._grantPerk(p, k, true);
       g._addPoints(p, REWARD_POINTS, false);
+      g._stat(p, (st) => { st.eeWins++; });
     }
     g.markDirty();
     const stats = g._players().map((p) => ({ id: p.id, name: p.name, color: p.color, points: p.points, kills: p.kills, headshots: p.headshots, downs: p.downs, revives: p.revives }));

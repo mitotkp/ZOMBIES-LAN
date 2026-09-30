@@ -2,7 +2,7 @@
 // e iluminación). Ver shared/maps/castillo.js para el plano.
 import * as THREE from 'three';
 import { MAP } from '/shared/map.js';
-import { makeGlow, makePool, flickerNoise, smoothstep } from '../kit.js';
+import { makeGlow, makePool, flickerNoise, smoothstep, shadowMode, applyMoonShadow } from '../kit.js';
 import { buildChalk } from '../props.js';
 import { MOON_DIR } from '../sky.js';
 import { buildCastleGeometry } from './geo.js';
@@ -242,8 +242,8 @@ export class CastleLighting {
   }
 
   applyQuality() {
-    const high = !this.ctx.settings || this.ctx.settings.quality !== 'low';
-    if (this.moon) { this.moon.castShadow = high; this.moon.intensity = high ? 1.5 : 1.1; }
+    const high = shadowMode(this.ctx.settings) !== 'off';
+    if (this.moon) { this.shadowRes = applyMoonShadow(this.moon, this.ctx.settings); this.moon.intensity = high ? 1.5 : 1.1; }
     if (this.hemi) this.hemi.intensity = high ? 3.6 : 3.9;
   }
 
@@ -272,7 +272,7 @@ export class CastleLighting {
     const zn = MAP.zoneAtL(lv, Math.floor(p.x), Math.floor(p.z));
     const zone = zn >= 0 ? MAP.ZONES[zn] : null;
     this.outdoors = !zone || !zone.indoor;
-    const step = this.outdoors ? (SHADOW_HALF * 2) / SHADOW_RES : 6;
+    const step = this.outdoors ? (SHADOW_HALF * 2) / (this.shadowRes || SHADOW_RES) : 6;
     const x = Math.round(p.x / step) * step;
     const z = Math.round(p.z / step) * step;
     if (x === this.moonTarget.position.x && z === this.moonTarget.position.z) return;

@@ -201,14 +201,20 @@ function shinGeo() {
   knee.scale(1, 1.1, 0.7);
   knee.translate(0, -0.02, -0.045);
   solidColor(knee, 0.55, 0.57, 0.5);                                              // rodillera
-  const boot = roundedBox(0.105, 0.11, 0.26, 0.035, 2);
-  deform(boot, (v) => { if (v.z < -0.06 && v.y > 0) v.y -= 0.03; }, false);
-  boot.translate(0, -D.shin + 0.05, -0.045);
-  paintGeo(boot, (x, y, z, c) => { const sole = y < -D.shin + 0.015 ? 0.08 : 0.2; c.setRGB(sole, sole * 0.9, sole * 0.8); });
   const cuff = new THREE.CylinderGeometry(0.06, 0.062, 0.08, 18);
   cuff.translate(0, -D.shin + 0.13, 0);
   solidColor(cuff, 0.22, 0.2, 0.18);
-  return mergeGeos([shin, knee, boot, cuff]);
+  return mergeGeos([shin, knee, cuff]);
+}
+
+// Bota: geometría propia colgada del tobillo (D.shin bajo la rodilla) para que rote sola al caminar en vez
+// de quedar fundida con la espinilla en un ángulo fijo (ver LANK/RANK en _pose/_apply).
+function bootGeo() {
+  const boot = roundedBox(0.105, 0.11, 0.26, 0.035, 2);
+  deform(boot, (v) => { if (v.z < -0.06 && v.y > 0) v.y -= 0.03; }, false);
+  boot.translate(0, 0.05, -0.045);
+  paintGeo(boot, (x, y, z, c) => { const sole = y < 0.015 ? 0.08 : 0.2; c.setRGB(sole, sole * 0.9, sole * 0.8); });
+  return boot;
 }
 
 function upperArmGeo() {
@@ -264,6 +270,7 @@ export function getPlayerAssets(quality = 'high') {
   A.geos.band = bandGeo();
   A.geos.thigh = thighGeo();
   A.geos.shin = shinGeo();
+  A.geos.boot = bootGeo();
   A.geos.upper = upperArmGeo();
   A.geos.fore = forearmGeo();
   A.glow = glowTexture(64, 2.0);
@@ -339,7 +346,8 @@ function solveArm(arm, S, T, pole, a, b) {
 // --------------------------------------------------------------------------------------------
 const HY = 0, HRX = 1, HZ = 2, SRX = 3, SRY = 4, SRZ = 5, NRX = 6, NRY = 7;
 const LSW = 8, LSP = 9, LKN = 10, RSW = 11, RSP = 12, RKN = 13;
-const WPX = 14, WPY = 15, WPZ = 16, WRX = 17, WRY = 18, WRZ = 19, TAGY = 20, NP = 21;
+const WPX = 14, WPY = 15, WPZ = 16, WRX = 17, WRY = 18, WRZ = 19, TAGY = 20;
+const LANK = 21, RANK = 22, NP = 23;
 
 // Posiciones del arma (empuñadura) relativas al pivote de puntería
 const HOLD = {
@@ -449,7 +457,11 @@ export class PlayerModel {
       kn.position.y = -D.thigh;
       th.add(kn);
       mesh(A.geos.shin, A.mats.pants, kn);
-      return { th, kn };
+      const an = new THREE.Group();
+      an.position.y = -D.shin;
+      kn.add(an);
+      mesh(A.geos.boot, A.mats.pants, an);
+      return { th, kn, an };
     };
     this.legL = leg(-1);
     this.legR = leg(1);
@@ -888,6 +900,11 @@ export class PlayerModel {
       tp[LSW] = 0.03; tp[RSW] = -0.05; tp[LKN] = 0.08; tp[RKN] = 0.1;
       tp[LSP] = 0.05; tp[RSP] = 0.07;
     }
+    // Tobillo: contrarresta parte del giro acumulado de muslo+rodilla para que el pie tienda a quedar
+    // horizontal en vez de seguir rígido el ángulo de la espinilla.
+    const ankleLvl = down ? 0.25 : jumping ? 0.35 : crouch ? 0.6 : 0.7;
+    tp[LANK] = (tp[LKN] - tp[LSW]) * ankleLvl;
+    tp[RANK] = (tp[RKN] - tp[RSW]) * ankleLvl;
     if (ads && !down) tp[SRX] -= 0.04;
 
     // Puntería: el pitch se reparte entre torso (poco), cabeza y pivote del arma
@@ -929,6 +946,8 @@ export class PlayerModel {
     this.legR.th.rotation.set(c[RSW], 0, c[RSP]);
     this.legL.kn.rotation.x = -c[LKN];
     this.legR.kn.rotation.x = -c[RKN];
+    this.legL.an.rotation.x = c[LANK];
+    this.legR.an.rotation.x = c[RANK];
 
     const down = !!(flags & PF.DOWN);
     const net = c[HRX] + c[SRX];

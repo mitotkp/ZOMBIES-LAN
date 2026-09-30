@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { WEAPONS, weaponDef, fireInterval, meleeStats } from '/shared/weapons.js';
 import { PERKS } from '/shared/perks.js';
-import { PLAYER, MELEE, SHIELD, GRENADE, MEDS, clamp, lerp } from '/shared/constants.js';
+import { PLAYER, MELEE, SHIELD, GRENADE, MEDS, MED_KEYS, clamp, lerp } from '/shared/constants.js';
 import { raycastMap } from '/shared/collision.js';
 import { r2, r3 } from '/shared/protocol.js';
 import { updateCamo } from './models.js';
@@ -175,6 +175,7 @@ export class WeaponSystem {
     this.meleeW = null;               // MeleeWeapon del arma cuerpo a cuerpo equipada (ver _melee)
     this.throwT = -1; this.throwDone = false;
     this.drinkT = -1; this.drinkDur = DRINK_DUR; this.drinkKind = 'perk'; this.healKey = null;
+    this.healMenu = null;             // menú de curas abierto: { sel } (ver _requestHeal)
     this.bashT = -1; this.bashDone = false; this.bashCd = 0;
     this.shieldOut = false;
     this.shotCount = 0;
@@ -467,6 +468,8 @@ export class WeaponSystem {
   // ================================================================== entrada
   _handleInput(self, player, input) {
     const alive = self.state === 'alive';
+    if (input.pressed('heal') && alive) this._requestHeal(self);
+    else if (this._handleHealMenu(self, input)) { this.burstLeft = 0; this.fireQueued = -1; return; }
     if (input.pressed('shield') && alive) this._toggleShield(self);
     if (!this.lastStand && this.drinkT < 0 && this.throwT < 0) this._handleSwitch(input);
     if (input.pressed('melee') && alive) {
@@ -474,7 +477,6 @@ export class WeaponSystem {
       else this._tryKnife();
     }
     if (input.pressed('grenade') && alive) this._tryThrow();
-    if (input.pressed('heal') && alive) this._requestHeal(self);
     if (input.pressed('reload')) this._tryReload();
     if (this.shieldOut) {
       this.burstLeft = 0;
@@ -1077,18 +1079,66 @@ export class WeaponSystem {
     return null;
   }
 
+  // ¿Sirve ahora esta cura? (misma regla que el servidor en Game._onHeal)
+  _medUseful(self, key) {
+    const def = MEDS[key];
+    if (!def) return false;
+    return (def.cures && !!self.infected) || (def.heal > 0 && (+self.hp || 0) < (+self.maxHp || PLAYER.health));
+  }
+
+  // H: si hay una cura en curso la cancela; si no, abre/cierra el menú de curas. Dentro del menú se elige con
+  // 1-3 (directo), rueda/cambiar arma (mover la selección) y disparo (usar la seleccionada). La selección
+  // inicial es la sugerencia de _pickMed.
   _requestHeal(self) {
-    if (self.healing) { this._send({ t: 'heal', item: null }); return; }   // volver a pulsar H cancela
+    if (self.healing) { this._send({ t: 'heal', item: null }); this.healMenu = null; return; }   // volver a pulsar H cancela
+    if (this.healMenu) { this.healMenu = null; return; }
     if (this.drinkT >= 0 || this.throwT >= 0 || this._melee().swinging) return;
-    const item = this._pickMed(self);
-    if (!item) {
-      const meds = self.meds || {};
-      const any = (meds.bandage | 0) + (meds.antidote | 0) + (meds.medkit | 0) > 0;
-      this._hud('message', !any ? tr('No tienes curas') : self.infected ? tr('Necesitas un antídoto o un botiquín') : tr('Ya tienes la salud al máximo'), 1.8);
+    const meds = self.meds || {};
+    if (!MED_KEYS.some((k) => (meds[k] | 0) > 0)) {
+      this._hud('message', tr('No tienes curas'), 1.8);
       this._play('deny', { volume: 0.6 });
       return;
     }
-    this._send({ t: 'heal', item });
+    const first = MED_KEYS.find((k) => (meds[k] | 0) > 0);
+    this.healMenu = { sel: this._pickMed(self) || first };
+    this._play('ui_click', { volume: 0.4 });
+  }
+
+  _useMed(self, key) {
+    const meds = self.meds || {};
+    if ((meds[key] | 0) <= 0) {
+      this._hud('message', tr('No tienes {0}', tr(MEDS[key].plural).toLowerCase()), 1.6);
+      this._play('deny', { volume: 0.6 });
+      return;
+    }
+    if (!this._medUseful(self, key)) {
+      this._hud('message', self.infected ? tr('Eso no cura la infección') : tr('Ya tienes la salud al máximo'), 1.8);
+      this._play('deny', { volume: 0.6 });
+      return;
+    }
+    this.healMenu = null;
+    this._send({ t: 'heal', item: key });
+  }
+
+  // Entrada con el menú de curas abierto. Devuelve true si el menú sigue abierto (y se come la entrada de armas).
+  _handleHealMenu(self, input) {
+    const m = this.healMenu;
+    if (!m) return false;
+    if (self.state !== 'alive' || self.healing || this.drinkT >= 0 || this.throwT >= 0) { this.healMenu = null; return false; }
+    // cualquier otra acción de combate cierra el menú y sigue su curso
+    if (input.pressed('melee') || input.pressed('grenade') || input.pressed('reload') || input.pressed('shield')) { this.healMenu = null; return false; }
+    const direct = ['weapon1', 'weapon2', 'weapon3'];
+    for (let i = 0; i < direct.length && i < MED_KEYS.length; i++) {
+      if (input.pressed(direct[i])) { this._useMed(self, MED_KEYS[i]); return !!this.healMenu; }
+    }
+    const step = input.pressed('nextWeapon') ? 1 : input.pressed('prevWeapon') ? -1 : 0;
+    if (step) {
+      const i = MED_KEYS.indexOf(m.sel);
+      m.sel = MED_KEYS[(i + step + MED_KEYS.length) % MED_KEYS.length];
+      this._play('ui_click', { volume: 0.3 });
+    }
+    if (input.pressed('fire')) this._useMed(self, m.sel);
+    return !!this.healMenu;
   }
 
   // La cura la decide el servidor (self.healing); aquí solo se anima

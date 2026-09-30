@@ -13,6 +13,8 @@ import { PLAYER_SPAWNS, PLAYER_SPAWN_YAW, MAP_NAME, MAP_ID, setActiveMap, isMapI
 import { r2, r3 } from '/shared/protocol.js';
 import { tr } from './i18n.js';
 import { Renderer } from './render/renderer.js';
+import { GFX_DEFAULTS, sanitizeGfx } from './ui/menudata.js';
+import { authToken } from './profile.js';
 
 const SETTINGS_KEY = 'zlan.settings';
 const ROOM_SESSION_KEY = 'zlan.room-session';
@@ -58,6 +60,7 @@ const UPDATE_ORDER = ['player', 'interaction', 'weapons', 'physics', 'entities',
 // Ajustes persistidos
 const DEFAULT_SETTINGS = {
   name: '', color: PLAYER_COLORS[0], sensitivity: 1.0, fov: 75, volume: 0.8, music: 0.5, quality: 'high', invertY: false, brightness: 1.0,
+  ...GFX_DEFAULTS,
 };
 
 function sanitizeSettings(s) {
@@ -72,6 +75,7 @@ function sanitizeSettings(s) {
   s.quality = s.quality === 'low' ? 'low' : 'high';
   s.invertY = !!s.invertY;
   s.brightness = num(s.brightness, d.brightness, 0.5, 2);
+  sanitizeGfx(s);
   if (s.lang !== 'es' && s.lang !== 'en') delete s.lang;     // idioma (lo gestiona i18n.js)
   return s;
 }
@@ -120,25 +124,32 @@ class CoreOverlays {
     const mk = (css) => { const e = document.createElement('div'); e.style.cssText = css; document.body.appendChild(e); return e; };
     const font = 'font-family:"Segoe UI",Tahoma,sans-serif;';
 
+    // El aspecto (tema) está en style.css (.zl-loading, .zl-status...); aquí solo lo imprescindible
+    // para que funcionen aunque la hoja de estilos no cargue.
     this.loading = mk(`position:fixed;inset:0;z-index:1000;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#000;color:#aaa;${font}`);
+    this.loading.className = 'zl-loading';
     const t = document.createElement('div');
-    t.style.cssText = 'font:bold 72px Impact,"Arial Black",sans-serif;letter-spacing:8px;color:#a50d0d;text-shadow:0 0 24px #500;';
+    t.className = 'zl-loading-title';
     t.textContent = 'ZOMBIES';
     const sub = document.createElement('div');
-    sub.style.cssText = 'margin-top:6px;letter-spacing:6px;color:#666;font-size:14px;';
-    sub.textContent = 'L A N';
+    sub.className = 'zl-loading-sub';
+    sub.textContent = 'THE LAST SURVIVORS';
+    const bar = document.createElement('div');
+    bar.className = 'zl-loading-bar';
     this.loadingText = document.createElement('div');
-    this.loadingText.style.cssText = 'margin-top:28px;font-size:15px;letter-spacing:2px;';
-    this.loading.append(t, sub, this.loadingText);
+    this.loadingText.className = 'zl-loading-text';
+    this.loading.append(t, sub, bar, this.loadingText);
 
     this.status = mk(`position:fixed;inset:0;z-index:1001;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.72);color:#ddd;${font}`);
+    this.status.className = 'zl-status';
     this.statusBox = document.createElement('div');
-    this.statusBox.style.cssText = 'min-width:320px;max-width:90vw;padding:26px 32px;text-align:center;background:rgba(10,8,8,0.95);border:1px solid #6a1111;box-shadow:0 0 40px rgba(150,0,0,0.35);';
+    this.statusBox.className = 'zl-status-box';
     this.status.appendChild(this.statusBox);
     this.statusVisible = false;
     this.statusBlocking = false;
 
-    this.click = mk(`position:fixed;left:50%;top:58%;transform:translateX(-50%);z-index:30;display:none;pointer-events:none;padding:10px 22px;background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.25);color:#fff;font-size:18px;letter-spacing:1px;${font}`);
+    this.click = mk(`position:fixed;left:50%;top:58%;transform:translateX(-50%);z-index:30;display:none;pointer-events:none;padding:10px 22px;background:rgba(0,0,0,0.55);color:#fff;font-size:18px;letter-spacing:1px;`);
+    this.click.className = 'zl-click';
     this.click.textContent = tr('Haz clic para jugar');
 
     this.spectate = mk(`position:fixed;left:50%;top:11vh;transform:translateX(-50%);z-index:30;display:none;pointer-events:none;text-align:center;color:#eee;text-shadow:0 1px 4px #000;${font}`);
@@ -158,23 +169,23 @@ class CoreOverlays {
     const box = this.statusBox;
     box.innerHTML = '';
     const h = document.createElement('div');
-    h.style.cssText = 'font:bold 28px Impact,"Arial Black",sans-serif;letter-spacing:3px;color:#c21a1a;margin-bottom:10px;';
+    h.className = 'zl-status-title';
     h.textContent = title || '';
     box.appendChild(h);
     if (text) {
       const p = document.createElement('div');
-      p.style.cssText = 'font-size:15px;line-height:1.5;color:#ccc;white-space:pre-line;';
+      p.className = 'zl-status-text';
       p.textContent = text;
       box.appendChild(p);
     }
     if (buttons.length) {
       const row = document.createElement('div');
-      row.style.cssText = 'margin-top:18px;';
-      for (const b of buttons) {
+      row.className = 'zl-status-row';
+      for (const [i, b] of buttons.entries()) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.textContent = b.label;
-        btn.style.cssText = 'margin:0 6px;padding:9px 20px;font:600 15px "Segoe UI",Tahoma,sans-serif;color:#fff;background:#7a0d0d;border:1px solid #c33;border-radius:3px;cursor:pointer;';
+        btn.className = i === 0 ? 'mn-btn primary' : 'mn-btn';
         btn.addEventListener('click', (e) => { e.preventDefault(); b.onClick(); });
         row.appendChild(btn);
       }
@@ -226,7 +237,7 @@ async function boot() {
   const appEl = document.getElementById('app') || document.body;
   let gfx;
   try {
-    gfx = new Renderer({ quality: settings.quality, brightness: settings.brightness, baseExposure: BASE_EXPOSURE, mount: appEl });
+    gfx = new Renderer({ settings, baseExposure: BASE_EXPOSURE, mount: appEl });
   } catch (err) {
     overlays.fatal(tr('SIN WEBGL'), tr('Tu navegador o tu tarjeta gráfica no permiten WebGL.\nPrueba con Chrome, Edge o Firefox actualizados y con la aceleración por hardware activada.'));
     throw err;
@@ -396,12 +407,14 @@ async function boot() {
   const KICK_TEXT = {
     full: tr('La partida está llena (máximo 4 jugadores).'),
     busy: tr('La partida no admite jugadores en este momento.'),
+    auth: tr('Tu sesión caducó: vuelve a iniciar sesión.'),
   };
   const ROOM_DENY_TEXT = {
     notfound: tr('Esa sala ya no existe.'),
     password: tr('Contraseña incorrecta.'),
     full: tr('Esa sala está llena.'),
     bad: tr('No se pudo unir a la sala.'),
+    auth: tr('Tu sesión caducó: vuelve a iniciar sesión.'),
   };
   const LOST_CONNECTION_TEXT = tr('Se perdió la conexión con el servidor.\nPuede que el anfitrión haya cerrado la partida o que la red se haya caído.');
 
@@ -441,12 +454,12 @@ async function boot() {
   }
 
   function sendHello(room) {
-    net.send({ t: 'hello', name: app.joinName, color: app.joinColor, room });
+    net.send({ t: 'hello', name: app.joinName, color: app.joinColor, room, auth: authToken() });
     clearTimeout(app.welcomeTimer);
     app.welcomeTimer = setTimeout(() => {
       if (ctx.selfId === null && net.connected) {
         net.close();
-        showConnectError(tr('SIN RESPUESTA'), tr('El servidor aceptó la conexión pero no respondió.\nComprueba que sea un servidor de ZOMBIES LAN.'));
+        showConnectError(tr('SIN RESPUESTA'), tr('El servidor aceptó la conexión pero no respondió.\nComprueba que sea un servidor de Zombies: The Last Survivors.'));
       }
     }, WELCOME_TIMEOUT_MS);
   }
@@ -468,7 +481,8 @@ async function boot() {
     menus('showRooms', { onRefresh: onRefreshRooms, onCreate: onCreateRoom, onJoin: onJoinRoomAction, onBack: backToTitle });
   }
 
-  function onJoin(name, color) {
+  // mode: 'multi' (buscador de salas; menus.js ya comprobó la sesión) o 'solo' (partida privada de 1)
+  function onJoin(name, color, mode = 'multi', opts = {}) {
     if (app.connecting) return;
     const n = typeof name === 'string' ? name.trim().slice(0, 16) : '';
     app.joinName = n || settings.name || tr('Jugador');
@@ -478,6 +492,10 @@ async function boot() {
     saveSettings(settings);
     events.emit('settings', settings);
     call('audio', 'unlock');
+    if (mode === 'solo') {
+      connectSocket().then((ok) => { if (ok) { overlays.hideStatus(); sendHello({ mode: 'solo', map: opts && opts.map }); } });
+      return;
+    }
     const code = pendingRoomCode;
     pendingRoomCode = null;
     if (code) {
@@ -704,7 +722,7 @@ async function boot() {
 
   // ------------------------------------------------------------ redimensionado
   function onResize() {
-    const aspect = gfx.resize(settings.quality);
+    const aspect = gfx.resize(settings);
     camera.aspect = aspect;
     camera.updateProjectionMatrix();
     const vc = ctx.weapons && ctx.weapons.vmCamera;
@@ -775,12 +793,14 @@ async function boot() {
     }
     overlays.toggle('spectate', !!spec, spec || '');
 
-    if (DEBUG) {
+    if (DEBUG || settings.showFps) {
       fpsFrames++; fpsTime += dt;
       if (fpsTime >= 0.5) { fpsValue = Math.round(fpsFrames / fpsTime); fpsFrames = 0; fpsTime = 0; }
       const zs = net.lastSnapshot ? net.lastSnapshot.z.size : 0;
-      overlays.toggle('fps', true, `FPS ${fpsValue}  RTT ${Math.round(net.rtt)} ms  Z ${zs}\n${renderer.info.render.calls} draws  ${renderer.info.render.triangles} tris`);
-    }
+      overlays.toggle('fps', true, DEBUG
+        ? `FPS ${fpsValue}  RTT ${Math.round(net.rtt)} ms  Z ${zs}\n${renderer.info.render.calls} draws  ${renderer.info.render.triangles} tris`
+        : `FPS ${fpsValue}${net.connected ? `  ·  ${Math.round(net.rtt)} ms` : ''}`);
+    } else overlays.toggle('fps', false);
   }
 
   // ------------------------------------------------------------ render
@@ -802,13 +822,22 @@ async function boot() {
 
   // ------------------------------------------------------------ bucle principal
   let lastT = performance.now();
+  let capNext = 0;         // límite de FPS: cuándo toca el siguiente fotograma (ms)
 
   function frame() {
     requestAnimationFrame(frame);
     const t = performance.now();
+    const cap = settings.fpsCap;
+    if (cap > 0) {
+      // Se salta fotogramas del navegador hasta el siguiente turno; el objetivo avanza en pasos fijos para que
+      // la media sea exacta aunque la pantalla no sea múltiplo del límite (144 Hz con límite 60).
+      const iv = 1000 / cap;
+      if (t < capNext - 0.5) return;
+      capNext = t - capNext > iv ? t + iv : capNext + iv;
+    }
     let dt = (t - lastT) / 1000;
     lastT = t;
-    gfx.adaptResolution(dt, isPlaying() && !document.hidden, settings.quality);
+    gfx.adaptResolution(dt, isPlaying() && !document.hidden && !(cap && cap < 60), settings);   // con límite bajo, los FPS bajos no son falta de GPU
     gfx.tickShadows(ctx.world);
     if (!(dt > 0)) dt = 0;
     dt = Math.min(dt, 0.05);

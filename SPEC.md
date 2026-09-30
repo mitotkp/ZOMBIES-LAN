@@ -1,4 +1,4 @@
-# ZOMBIES LAN — Especificación técnica (contrato entre módulos)
+# Zombies: The Last Survivors — Especificación técnica (contrato entre módulos)
 
 Shooter cooperativo en primera persona inspirado en el modo **Zombies de Call of Duty: Black Ops 2**.
 Servidor **Node.js** (autoritativo) + cliente **navegador** con **Three.js**. Partidas **LAN** de 1 a 4 jugadores:

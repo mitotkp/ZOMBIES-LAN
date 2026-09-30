@@ -468,22 +468,25 @@ export class PlayerController {
   _updateCamera(dt, state) {
     const cam = this.ctx.camera;
     const p = this.position;
-    const bobY = Math.sin(this._bobPhase * 2) * 0.034 * this._bobAmp;
-    const bobX = Math.sin(this._bobPhase) * 0.024 * this._bobAmp;
+    // Ajuste "Movimiento de cámara" (0..1): escala balanceo, inclinación, cabeceo al aterrizar y sacudidas
+    const cm = Number((this.ctx.settings || {}).cameraMotion);
+    const k = Number.isFinite(cm) ? clamp(cm, 0, 1) : 1;
+    const bobY = Math.sin(this._bobPhase * 2) * 0.034 * this._bobAmp * k;
+    const bobX = Math.sin(this._bobPhase) * 0.024 * this._bobAmp * k;
     const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
     const rx = cy, rz = -sy;
-    this.eye.set(p.x + rx * bobX, p.y + this._eyeH + bobY + this._landDip, p.z + rz * bobX);
+    this.eye.set(p.x + rx * bobX, p.y + this._eyeH + bobY + this._landDip * k, p.z + rz * bobX);
     if (!cam) return;
 
     const sh = this._shakeOffsets(dt);
     cam.rotation.order = 'YXZ';
     cam.position.copy(this.eye);
-    let rp = this.pitch, ry = this.yaw, rr = this._roll + Math.sin(this._bobPhase) * 0.004 * this._bobAmp;
-    if (sh) {
-      rp += sh.p; ry += sh.y; rr += sh.r;
-      cam.position.x += rx * sh.x;
-      cam.position.z += rz * sh.x;
-      cam.position.y += sh.yy;
+    let rp = this.pitch, ry = this.yaw, rr = (this._roll + Math.sin(this._bobPhase) * 0.004 * this._bobAmp) * k;
+    if (sh && k > 0) {
+      rp += sh.p * k; ry += sh.y * k; rr += sh.r * k;
+      cam.position.x += rx * sh.x * k;
+      cam.position.z += rz * sh.x * k;
+      cam.position.y += sh.yy * k;
     }
     cam.rotation.set(rp, ry, rr);
 

@@ -1,5 +1,5 @@
 // Bots headless para probar el servidor (SPEC.md 5.4).
-// Uso: node tools/bot-test.js --bots 2 --seconds 120 --url ws://localhost:3000 [--scenario] [--god] [--round N] [--verbose]
+// Uso: node tools/bot-test.js --bots 2 --seconds 120 --url ws://localhost:3000 [--scenario] [--god] [--round N] [--verbose] [--accounts] [--solo]
 //   --scenario  (requiere servidor con --dev) el bot 1 recorre el mapa probando compras: puerta, pared, caja,
 //               Pack-a-Punch, ventajas, escudo, potenciadores y salto de ronda.
 //   --god       los bots usan /god (requiere --dev) para probar rondas altas sin caer.
@@ -22,7 +22,7 @@ function arg(name, def) {
   if (v === undefined || v.startsWith('--')) return true;
   return v;
 }
-const NBOTS = Math.max(1, Math.min(4, parseInt(arg('bots', 2), 10) || 2));
+const NBOTS = arg('solo', false) ? 1 : Math.max(1, Math.min(4, parseInt(arg('bots', 2), 10) || 2));
 const SECONDS = Math.max(5, parseFloat(arg('seconds', 120)) || 120);
 const URL = String(arg('url', 'ws://localhost:3000'));
 const ROOM_CODE = String(arg('room', 'BOTS1')).toUpperCase().slice(0, 8);
@@ -32,6 +32,8 @@ const START_ROUND = parseInt(arg('round', 0), 10) || 0;
 const MAP_ID = String(arg('map', 'pueblo'));
 setActiveMap(MAP_ID);   // los bots navegan por el mismo mapa que la sala   // salta a esta ronda al empezar (requiere --dev en el servidor)
 const VERBOSE = !!arg('verbose', false);
+const ACCOUNTS = !!arg('accounts', false);   // iniciar sesión con cuentas botN (servidor con base de datos)
+const SOLO = !!arg('solo', false);           // modo un jugador (un solo bot)
 
 const T0 = Date.now();
 const stamp = () => ((Date.now() - T0) / 1000).toFixed(1).padStart(6) + 's';
@@ -99,13 +101,26 @@ class Bot {
     }, 50);
   }
 
-  connect() {
+  // Con --accounts cada bot usa la cuenta botN (la crea la primera vez): cuenta para la tabla y los logros
+  async signIn() {
+    if (!ACCOUNTS) return null;
+    const http = URL.replace(/^ws/, 'http');
+    const body = JSON.stringify({ username: `bot${this.index + 1}`, password: 'botpass1' });
+    const post = (p) => fetch(http + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }).then((r) => r.json());
+    let r = await post('/api/login');
+    if (!r.token) r = await post('/api/register');
+    if (!r.token) { stats.errors.push(`${this.name}: no pudo iniciar sesión (${r.error})`); return null; }
+    return r.token;
+  }
+
+  async connect() {
+    const auth = await this.signIn();
     this.ws = new WebSocket(URL);
     this.ws.on('open', () => {
-      const room = this.index === 0
-        ? { mode: 'create', code: ROOM_CODE, name: 'Bots', map: MAP_ID }
-        : { mode: 'join', code: ROOM_CODE };
-      this.send({ t: 'hello', name: this.name, color: PLAYER_COLORS[this.index % PLAYER_COLORS.length], room });
+      const room = SOLO ? { mode: 'solo', map: MAP_ID }
+        : this.index === 0 ? { mode: 'create', code: ROOM_CODE, name: 'Bots', map: MAP_ID }
+          : { mode: 'join', code: ROOM_CODE };
+      this.send({ t: 'hello', name: this.name, color: PLAYER_COLORS[this.index % PLAYER_COLORS.length], room, auth });
     });
     this.ws.on('message', (data) => {
       let m;
@@ -187,6 +202,9 @@ class Bot {
         break;
       case 'bleedout':
         if (this.index === 0) { stats.bleedouts++; log(`jugador #${ev.pid} se desangró`); }
+        break;
+      case 'achv':
+        if (ev.pid === this.id) log(`${this.name} desbloqueó el logro "${ev.id}"`);
         break;
       case 'gameover':
         if (this.index === 0) {

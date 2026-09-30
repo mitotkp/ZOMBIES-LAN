@@ -1,4 +1,4 @@
-# ZOMBIES-LAN — Plan para continuar
+# Zombies: The Last Survivors — Plan para continuar
 
 Shooter cooperativo en primera persona, inspirado en el modo Zombies de Black Ops 2.
 Servidor **Node.js autoritativo** + cliente **navegador con Three.js**, para 1–4 jugadores en LAN.

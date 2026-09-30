@@ -4,6 +4,8 @@
 import * as THREE from 'three';
 import { PERKS } from '/shared/perks.js';
 import { POWERUP_INFO, PLAYER, MEDS, MED_KEYS, ZOMBIE_TYPES, angleDiff, yawTo, clamp } from '/shared/constants.js';
+import { EXHAUST_RECOVER } from '/shared/movement.js';
+import { ACHIEVEMENT_BY_ID } from '/shared/achievements.js';
 import { weaponName, meleeStats } from '/shared/weapons.js';
 import { MAP_NAME, SHIELD_PARTS } from '/shared/map.js';
 import { esc, safeColor, mulberry32, serverNow, sfx, ensureChalkDefs, isDebugUrl } from './uiutil.js';
@@ -66,7 +68,7 @@ const TEMPLATE = `
 <div class="hud-reload"></div>
 <div class="hud-downpanel"><div class="dp-title"></div><div class="dp-sub"></div><div class="dp-bar"><i></i></div></div>
 <div class="hud-chat"><div class="chat-feed"></div><div class="chat-entry"><span class="chat-label">${tr('Decir:')}</span><input class="chat-input" type="text" maxlength="120" autocomplete="off" spellcheck="false"></div></div>
-<div class="hud-bl"><div class="hud-parts"></div><div class="hud-perks"></div><div class="hud-round"></div><div class="hud-health"><div class="hp-row"><span class="hp-label">${tr('Salud')}</span><span class="hp-num"></span><span class="hp-inf">${tr('Infectado')}</span></div><div class="hp-bar"><i class="hp-fill"></i><i class="hp-cap"></i></div><div class="hp-heal"><span class="hp-heal-t"></span><div class="hp-heal-bar"><i></i></div></div><div class="hud-meds"></div></div></div>
+<div class="hud-bl"><div class="hud-parts"></div><div class="hud-perks"></div><div class="hud-round"></div><div class="hud-healmenu"></div><div class="hud-health"><div class="hp-row"><svg class="hp-ecg" viewBox="0 0 48 16" aria-hidden="true"><path d="M0 9h13l3-5 4 11 4-14 3 8h21"/></svg><span class="hp-label">${tr('Salud')}</span><span class="hp-num"></span><span class="hp-inf">${tr('Infectado')}</span></div><div class="hp-bar"><i class="hp-fill"></i><i class="hp-cap"></i></div><div class="stm-row"><span class="stm-label">${tr('Estamina')}</span><span class="stm-state"></span><div class="stm-bar"><i class="stm-fill"></i><i class="stm-min"></i></div></div><div class="hp-heal"><span class="hp-heal-t"></span><div class="hp-heal-bar"><i></i></div></div><div class="hud-meds"></div></div></div>
 <div class="hud-br">
   <div class="hud-scores"></div>
   <div class="hud-ammo">
@@ -183,6 +185,8 @@ export class HUD {
       timer: q('.hud-timer'), tmMain: q('.tm-main'), tmSub: q('.tm-sub'),
       infect: q('.hud-infect'), health: q('.hud-health'), hpNum: q('.hp-num'), hpFill: q('.hp-fill'), hpCap: q('.hp-cap'),
       hpInf: q('.hp-inf'), hpHeal: q('.hp-heal'), hpHealT: q('.hp-heal-t'), hpHealBar: q('.hp-heal-bar i'), meds: q('.hud-meds'),
+      stRow: q('.stm-row'), stFill: q('.stm-fill'), stMin: q('.stm-min'), stState: q('.stm-state'),
+      healMenu: q('.hud-healmenu'),
     };
 
     this.time = 0;
@@ -422,6 +426,16 @@ export class HUD {
     this._on('ev:bossDown', (e) => {
       const T = ZOMBIE_TYPES[e.key] || {};
       this._banner(tr('¡{0} ha caído!', T.name || 'El jefe'), e.pid != null ? tr('Lo remató {0} · Busca el botiquín y el potenciador', this._name(e.pid)) : '', '#ffd23f');
+    });
+    this._on('ev:achv', (e) => {
+      const a = ACHIEVEMENT_BY_ID[e.id];
+      if (!a) return;
+      if (this._isSelf(e.pid)) {
+        sfx(this.ctx, 'revive');
+        this._banner(tr('¡Logro desbloqueado!'), tr(a.name), '#ffd23f');
+      } else {
+        this.message(tr('{0} consiguió el logro «{1}»', this._name(e.pid), tr(a.name)), 2.5);
+      }
     });
     this._on('ev:tank', () => {
       this._flash('rgba(120,0,0,0.35)', 0.8);
@@ -856,6 +870,7 @@ export class HUD {
     const el = this.el;
     const alive = !!self && self.state === 'alive';
     el.health.classList.toggle('on', alive);
+    this._updateHealMenu(alive ? self : null);
     const inf = alive && !!self.infected;
     el.infect.style.opacity = inf ? (0.32 + 0.14 * Math.sin(this.time * 2.6)).toFixed(3) : '0';
     if (!alive) return;
@@ -872,6 +887,7 @@ export class HUD {
       el.health.classList.toggle('low', f < 0.35);
       el.health.classList.toggle('inf', inf);
     }
+    this._updateStamina();
     // curas
     const meds = self.meds || {};
     const mkey = MED_KEYS.map((k) => meds[k] | 0).join(',');
@@ -891,6 +907,59 @@ export class HUD {
       if (c.healT !== h.item) { c.healT = h.item; el.hpHealT.textContent = tr('Usando: {0}', def.name); }
       el.hpHealBar.style.transform = `scaleX(${p.toFixed(3)})`;
     } else c.healT = null;
+  }
+
+  // Menú de curas (lo abre la tecla H; el estado vive en WeaponSystem.healMenu)
+  _updateHealMenu(self) {
+    const el = this.el;
+    const w = this.ctx.weapons;
+    const m = self && w ? w.healMenu : null;
+    el.healMenu.classList.toggle('on', !!m);
+    const c = this._cache;
+    if (!m) { c.healMenu = null; return; }
+    const meds = self.meds || {};
+    const maxHp = +self.maxHp || PLAYER.health;
+    const hurt = (+self.hp || 0) < maxHp;
+    const key = `${m.sel}|${MED_KEYS.map((k) => meds[k] | 0).join(',')}|${hurt}|${!!self.infected}`;
+    if (c.healMenu === key) return;
+    c.healMenu = key;
+    const desc = {
+      bandage: tr('+{0} de salud', MEDS.bandage.heal),
+      antidote: tr('Cura la infección (+{0})', MEDS.antidote.heal),
+      medkit: tr('Salud completa y cura la infección'),
+    };
+    el.healMenu.innerHTML = `<div class="hm-title">${esc(tr('Curas'))}</div>` + MED_KEYS.map((k, i) => {
+      const def = MEDS[k];
+      const n = meds[k] | 0;
+      const useful = (def.cures && !!self.infected) || (def.heal > 0 && hurt);
+      const cls = `hm-item${k === m.sel ? ' sel' : ''}${n ? '' : ' none'}${useful ? '' : ' useless'}`;
+      return `<div class="${cls}" style="--mc:${def.color}"><span class="hm-key">${i + 1}</span><i class="hm-dot"></i>`
+        + `<span>${esc(tr(def.name))}<span class="hm-desc">${esc(desc[k] || '')}</span></span><span class="hm-n">×${n}</span></div>`;
+    }).join('') + `<div class="hm-hint">${esc(tr('1-3 o clic para usar · rueda para elegir · H para cerrar'))}</div>`;
+  }
+
+  // Estamina: aparece al gastarla y se desvanece cuando vuelve a estar llena. Agotada = roja y parpadeando
+  // hasta recuperar lo necesario para volver a correr (EXHAUST_RECOVER, la marca de la barra).
+  _updateStamina() {
+    const el = this.el;
+    const p = this.ctx.player;
+    const s = p && p.sim;
+    if (!s) { el.stRow.classList.remove('on'); return; }
+    const st = clamp(+s.stamina || 0, 0, 1);
+    const exhausted = !!s.exhausted;
+    const regen = !s.sprinting && st < 1 && !(s.regenDelay > 0);
+    const show = exhausted || st < 0.999 || s.sprinting;
+    el.stRow.classList.toggle('on', show);
+    el.stRow.classList.toggle('exh', exhausted);
+    el.stRow.classList.toggle('regen', regen && !exhausted);
+    el.stFill.style.transform = `scaleX(${st.toFixed(3)})`;
+    const c = this._cache;
+    const state = exhausted ? 'exh' : regen ? 'regen' : '';
+    if (c.stState !== state) {
+      c.stState = state;
+      el.stMin.style.left = `${(EXHAUST_RECOVER * 100).toFixed(1)}%`;
+      el.stState.textContent = exhausted ? tr('Agotado') : regen ? tr('Recuperando') : '';
+    }
   }
 
   _startHeartbeat() {

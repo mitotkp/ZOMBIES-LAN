@@ -11,6 +11,9 @@ import { WebSocketServer } from 'ws';
 import { DEFAULT_PORT, GAME_TITLE, MAX_PLAYERS } from '../shared/constants.js';
 import { MAP_NAME } from '../shared/map.js';
 import { RoomManager } from './rooms.js';
+import { stats } from './stats.js';
+import { initDb, closeDb, dbEnabled, dbError, leaderboard, loadProfile } from './db.js';
+import { handleAuth, sessionUser, bearer } from './auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -150,14 +153,37 @@ function serveFile(req, res, file, stat) {
   stream.pipe(res);
 }
 
-function handleRequest(req, res) {
+// Tabla de puntos global y, con sesión (Authorization: Bearer), el perfil propio para Logros
+async function serveStats(req, res) {
+  const user = sessionUser(bearer(req));
+  let body, status = 200;
+  if (!dbEnabled()) { status = 503; body = { error: 'nodb' }; } else {
+    try {
+      body = await leaderboard(user ? user.id : null);
+      body.me = user ? await loadProfile(user.id, user.username) : null;
+    } catch (e) {
+      console.error('[stats] error al leer la tabla:', e.message);
+      status = 500; body = { error: 'server' };
+    }
+  }
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  res.end(req.method === 'HEAD' ? undefined : JSON.stringify(body));
+}
+
+async function handleRequest(req, res) {
   try {
+    const urlPath = (req.url || '/').split('?')[0].split('#')[0] || '/';
+    if (await handleAuth(req, res, urlPath)) return;
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       res.setHeader('Allow', 'GET, HEAD');
       sendText(res, 405, 'Método no permitido');
       return;
     }
-    const urlPath = (req.url || '/').split('?')[0].split('#')[0] || '/';
+    if (urlPath === '/api/stats') { await serveStats(req, res); return; }
     const r = resolvePath(urlPath);
     if (!r) { sendText(res, 403, 'Acceso denegado', req.method); return; }
     let file = r.full;
@@ -250,6 +276,9 @@ server.on('error', (e) => {
   process.exit(1);
 });
 
+// La base de datos se conecta antes de aceptar jugadores (si falla, el juego arranca sin cuentas)
+await initDb();
+
 server.listen(PORT, '0.0.0.0', () => {
   const line = '='.repeat(62);
   console.log(line);
@@ -265,6 +294,9 @@ server.listen(PORT, '0.0.0.0', () => {
   } else {
     console.log('  No se encontró ninguna dirección de red local: conéctate a una red para jugar con amigos.');
   }
+  if (dbEnabled()) console.log('  Base de datos: conectada (cuentas, logros y tabla de puntos activos).');
+  else if (dbError()) console.log(`  Base de datos: ERROR (${dbError()}). El multijugador necesita cuentas: revisa DATABASE_URL.`);
+  else console.log('  Base de datos: sin configurar (define DATABASE_URL). Solo estará disponible el modo un jugador.');
   if (DEV) console.log('  Modo desarrollo: escribe /help en el chat del juego para ver los comandos.');
   console.log('  Pulsa Ctrl+C para detener el servidor.');
   console.log(line);
@@ -278,6 +310,8 @@ function shutdown() {
   stopping = true;
   console.log('\nDeteniendo el servidor...');
   try { rooms.close(); } catch { /* nada */ }
+  try { stats.flush(); } catch { /* nada */ }
+  setTimeout(() => closeDb(), 300);
   try { wss.close(); } catch { /* nada */ }
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 1500).unref();

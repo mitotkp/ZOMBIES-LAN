@@ -1,4 +1,4 @@
-// Audio procedural de ZOMBIES LAN: todo se sintetiza con WebAudio salvo las voces del locutor de potenciadores.
+// Audio procedural de Zombies: The Last Survivors: todo se sintetiza con WebAudio salvo las voces del locutor de potenciadores.
 //  play(nombre, {pos, volume, rate, loop}) -> { stop() }   efectos (con pos: espacializados con HRTF)
 //  weapon(arquetipo, {pos, upgraded, volume})             disparos por capas
 //  music(nombre)                                          música original sintetizada

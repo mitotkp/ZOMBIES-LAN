@@ -257,7 +257,7 @@ export class Net {
     const ctx = this.ctx;
     const gs = this._normalizeGs(m.gs);
     if (gs && gs.now) this._onServerStamp(gs.now);
-    const room = m.room && typeof m.room === 'object' ? { code: String(m.room.code || ''), name: String(m.room.name || ''), locked: !!m.room.locked } : null;
+    const room = m.room && typeof m.room === 'object' ? { code: String(m.room.code || ''), name: String(m.room.name || ''), locked: !!m.room.locked, solo: !!m.room.solo } : null;
     const session = typeof m.session === 'string' ? m.session : null;
     if (ctx) {
       ctx.selfId = m.id;

@@ -15,6 +15,12 @@ const CRATE_GLB = '/models/props/crate.glb';
 const BARREL_GLB = '/models/props/barrel.glb';
 const CAR_GLB = '/models/props/car.glb';
 const BUS_GLB = '/models/props/bus.glb';
+const BENCH_GLB = '/models/props/bench.glb';
+const COUNTER_GLB = '/models/props/counter.glb';
+const TABLE_GLB = '/models/props/table.glb';
+const CHAIR_GLB = '/models/props/chair.glb';
+const GENERATOR_GLB = '/models/props/generator.glb';
+const TRANSFORMER_GLB = '/models/props/transformer.glb';
 import { facadePoint, facadePlaneYaw } from './levelgeo.js';
 import { Doors, Windows } from './barriers.js';
 import { PerkMachines, PackAPunch, PowerSwitch, Workbench } from './machines.js';
@@ -120,22 +126,29 @@ export class Flames {
 // Props estáticos de shared/map.js PROPS
 const rectOf = (p) => ({ cx: (p.x0 + p.x1 + 1) / 2, cz: (p.z0 + p.z1 + 1) / 2, lx: p.x1 - p.x0 + 1, lz: p.z1 - p.z0 + 1 });
 
-function bench(B, p, r) {
+// world: si se pasa y bench.glb ya está cargado, el banco entero es una instancia real teñida con el mismo
+// seatCol. Los r() del bucle de asientos se consumen igual en ambos casos para no correr la secuencia
+// aleatoria (semilla fija) del resto del mapa.
+function bench(B, p, r, world) {
   const { cx, cz, lx } = rectOf(p);
   const P = B.at(cx, 0, cz, 0);
   const frame = 0x2e3034;
-  P.box('metal', lx - 0.1, 0.07, 0.12, 0, 0.36, 0, { color: frame });
-  for (let x = -lx / 2 + 0.35; x <= lx / 2 - 0.3; x += 1.35) {
-    P.box('metal', 0.07, 0.36, 0.08, x, 0.18, 0, { color: frame });
-    P.box('metal', 0.1, 0.03, 0.8, x, 0.015, 0, { color: frame });
-  }
   const seatCol = r() < 0.5 ? 0xc0622a : 0x2c5a96;
+  const real = world && placeGltfProp(world, BENCH_GLB, cx, 0, cz, 0, seatCol);
+  if (!real) {
+    P.box('metal', lx - 0.1, 0.07, 0.12, 0, 0.36, 0, { color: frame });
+    for (let x = -lx / 2 + 0.35; x <= lx / 2 - 0.3; x += 1.35) {
+      P.box('metal', 0.07, 0.36, 0.08, x, 0.18, 0, { color: frame });
+      P.box('metal', 0.1, 0.03, 0.8, x, 0.015, 0, { color: frame });
+    }
+  }
   for (let i = 0; i < lx; i++) {
     const x = -lx / 2 + 0.5 + i;
-    P.box('metal', 0.9, 0.44, 0.04, x, 0.66, 0, { color: 0x3a3c40 });
+    if (!real) P.box('metal', 0.9, 0.44, 0.04, x, 0.66, 0, { color: 0x3a3c40 });
     for (const s of [-1, 1]) {
-      if (r() < 0.1) continue; // asiento arrancado
-      const tilt = r() < 0.15 ? 0.25 : 0;
+      const missing = r() < 0.1; // asiento arrancado
+      const tilt = !missing && r() < 0.15 ? 0.25 : 0;
+      if (real || missing) continue;
       P.box('plastic', 0.86, 0.05, 0.4, x, 0.44, s * 0.25, { color: seatCol, rx: s * 0.06 + tilt });
       P.box('plastic', 0.86, 0.36, 0.04, x, 0.68, s * 0.045, { color: seatCol, rx: -s * 0.1 });
       P.box('metal', 0.04, 0.2, 0.3, x + 0.45, 0.56, s * 0.24, { color: frame });
@@ -280,38 +293,49 @@ function bottle(P, x, y, z, r, scale = 1) {
   P.cyl('plastic', 0.012 * scale, 0.012 * scale, 0.04 * scale, x, y + h + 0.09 * scale, z, { color: c, seg: 6 });
 }
 
-function counter(B, p, r) {
+// world: si se pasa y counter.glb ya está cargado, la barra (paneles, rejilla, grifos y caja registradora) es
+// una instancia real; botellas y vasos siguen siendo el mismo desorden aleatorio encima en ambos casos.
+function counter(B, p, r, world) {
   const { cx, cz, lx } = rectOf(p);
   const P = B.at(cx, 0, cz, 0);    // lado de los clientes = +Z
-  P.box('wood', lx - 0.1, 0.95, 0.75, 0, 0.475, -0.05, { color: 0x4a2a18 });
-  P.box('wood', lx - 0.1, 0.95, 0.06, 0, 0.475, 0.36, { color: 0x6a3a22 });
-  for (let x = -lx / 2 + 0.4; x < lx / 2; x += 0.8) P.box('wood', 0.06, 0.9, 0.04, x, 0.5, 0.4, { color: 0x3a2014 });
-  P.box('wood', lx, 0.07, 0.96, 0, 1.03, 0, { color: 0x2a160c });
-  P.box('chrome', lx - 0.2, 0.05, 0.05, 0, 0.16, 0.5, { color: 0xc8a860 });
-  for (let x = -lx / 2 + 0.3; x < lx / 2; x += 1.6) P.box('chrome', 0.04, 0.14, 0.04, x, 0.09, 0.47, { color: 0xc8a860 });
-  // botellas, vasos, grifos y caja registradora
+  if (!(world && placeGltfProp(world, COUNTER_GLB, cx, 0, cz, 0))) {
+    P.box('wood', lx - 0.1, 0.95, 0.75, 0, 0.475, -0.05, { color: 0x4a2a18 });
+    P.box('wood', lx - 0.1, 0.95, 0.06, 0, 0.475, 0.36, { color: 0x6a3a22 });
+    for (let x = -lx / 2 + 0.4; x < lx / 2; x += 0.8) P.box('wood', 0.06, 0.9, 0.04, x, 0.5, 0.4, { color: 0x3a2014 });
+    P.box('wood', lx, 0.07, 0.96, 0, 1.03, 0, { color: 0x2a160c });
+    P.box('chrome', lx - 0.2, 0.05, 0.05, 0, 0.16, 0.5, { color: 0xc8a860 });
+    for (let x = -lx / 2 + 0.3; x < lx / 2; x += 1.6) P.box('chrome', 0.04, 0.14, 0.04, x, 0.09, 0.47, { color: 0xc8a860 });
+    for (let k = 0; k < 3; k++) {
+      P.box('chrome', 0.06, 0.28, 0.06, 1.2 + k * 0.22, 1.2, -0.3, { color: 0xc0c4c8 });
+      P.box('plastic', 0.04, 0.16, 0.04, 1.2 + k * 0.22, 1.42, -0.28, { color: [0x1a1a1a, 0x8a1a1a, 0x1a3a8a][k] });
+    }
+    P.box('metal', 0.42, 0.3, 0.36, -lx / 2 + 0.5, 1.22, -0.15, { color: 0x3a3a3c, rx: -0.1 });
+    P.box('plastic', 0.34, 0.03, 0.18, -lx / 2 + 0.5, 1.38, -0.05, { color: 0x6a6a60, rx: -0.4 });
+  }
+  // botellas y vasos
   for (let i = 0; i < 12; i++) bottle(P, -lx / 2 + 0.5 + r() * (lx - 1), 1.065, -0.2 + r() * 0.3, r, 1);
   for (let i = 0; i < 6; i++) P.cyl('glass', 0.035, 0.03, 0.1, -lx / 2 + 0.6 + r() * (lx - 1.2), 1.115, 0.1 + r() * 0.25, { color: 0x9ab0b8, seg: 8 });
-  for (let k = 0; k < 3; k++) {
-    P.box('chrome', 0.06, 0.28, 0.06, 1.2 + k * 0.22, 1.2, -0.3, { color: 0xc0c4c8 });
-    P.box('plastic', 0.04, 0.16, 0.04, 1.2 + k * 0.22, 1.42, -0.28, { color: [0x1a1a1a, 0x8a1a1a, 0x1a3a8a][k] });
-  }
-  P.box('metal', 0.42, 0.3, 0.36, -lx / 2 + 0.5, 1.22, -0.15, { color: 0x3a3a3c, rx: -0.1 });
-  P.box('plastic', 0.34, 0.03, 0.18, -lx / 2 + 0.5, 1.38, -0.05, { color: 0x6a6a60, rx: -0.4 });
 }
 
-function table(B, p, r) {
+// world: la mesa y cada silla en pie son instancias reales de table.glb/chair.glb (las volcadas se quedan
+// procedurales: detalle raro). La silla se ubica con la matriz de P, igual que la colocaba P.sub(...).
+function table(B, p, r, world) {
   const { cx, cz } = rectOf(p);
-  const P = B.at(cx, 0, cz, r() * TAU);
-  P.cyl('wood', 0.42, 0.42, 0.05, 0, 0.765, 0, { color: 0x3a2014, seg: 18 });
-  P.cyl('metal', 0.045, 0.045, 0.72, 0, 0.38, 0, { color: 0x222222, seg: 8 });
-  P.cyl('metal', 0.24, 0.26, 0.04, 0, 0.02, 0, { color: 0x222222, seg: 14 });
+  const tableRy = r() * TAU;
+  const P = B.at(cx, 0, cz, tableRy);
+  if (!(world && placeGltfProp(world, TABLE_GLB, cx, 0, cz, 0))) {
+    P.cyl('wood', 0.42, 0.42, 0.05, 0, 0.765, 0, { color: 0x3a2014, seg: 18 });
+    P.cyl('metal', 0.045, 0.045, 0.72, 0, 0.38, 0, { color: 0x222222, seg: 8 });
+    P.cyl('metal', 0.24, 0.26, 0.04, 0, 0.02, 0, { color: 0x222222, seg: 14 });
+  }
   for (const s of [-1, 1]) {
     if (r() < 0.2) {
       // silla volcada
       P.box('wood', 0.36, 0.36, 0.04, s * 0.3, 0.2, 0.05, { color: 0x4a2a18, rx: 1.3 });
       continue;
     }
+    const wp = new THREE.Vector3(s * 0.3, 0, 0).applyMatrix4(P.parent);
+    if (world && placeGltfProp(world, CHAIR_GLB, wp.x, 0, wp.z, tableRy + (s > 0 ? -Math.PI / 2 : Math.PI / 2))) continue;
     const Q = P.sub(s * 0.3, 0, 0, s > 0 ? -Math.PI / 2 : Math.PI / 2);
     Q.box('wood', 0.36, 0.04, 0.36, 0, 0.46, 0, { color: 0x5a3420 });
     for (const [lx2, lz2] of [[-0.15, -0.15], [0.15, -0.15], [-0.15, 0.15], [0.15, 0.15]]) Q.box('wood', 0.035, 0.44, 0.035, lx2, 0.22, lz2, { color: 0x3a2014 });
@@ -345,37 +369,43 @@ function crates(B, p, r, world) {
   P.box('rust', 0.05, 1.3, 0.02, 0.92, 0.65, 0.3, { color: 0x3a3a3a });
 }
 
-function generator(B, p, r, signs) {
+// world: el cuerpo (generador grande o transformador chico, según lx) es una instancia real; el tubo que sube
+// hasta el techo (depende de CEIL_H), las franjas de peligro, los cables y la señal de voltaje no cambian.
+function generator(B, p, r, signs, world) {
   const { cx, cz, lx } = rectOf(p);
   if (lx >= 3) {
     const P = B.at(cx, 0, cz, 0);
-    P.box('metal', 2.9, 0.18, 2.5, 0, 0.09, 0, { color: 0x2a2c2e });
+    if (!(world && placeGltfProp(world, GENERATOR_GLB, cx, 0, cz, 0))) {
+      P.box('metal', 2.9, 0.18, 2.5, 0, 0.09, 0, { color: 0x2a2c2e });
+      P.box('metal', 2.1, 1.3, 1.7, -0.25, 0.83, 0, { color: 0xb8962a });
+      for (let x = -1.1; x <= 0.7; x += 0.3) P.box('metal', 0.04, 1.1, 1.74, x, 0.85, 0, { color: 0x8a701e });
+      P.box('metal', 0.36, 1.45, 1.9, 1.05, 0.9, 0, { color: 0x2e3032 });
+      for (let y = 0.35; y < 1.6; y += 0.12) P.box('dark', 0.04, 0.05, 1.7, 1.24, y, 0);
+      P.cyl('metal', 0.36, 0.36, 1.6, -0.35, 0.55, -1.0, { rz: Math.PI / 2, color: 0x8a2a1a, seg: 14 });
+      P.box('metal', 0.7, 0.55, 0.16, 0.2, 1.76, 0.78, { color: 0x3a3d40, rx: -0.3 });
+      P.sphere('alarm', 0.04, 0.0, 1.82, 0.88, { seg: 8 });
+      P.sphere('bulb', 0.04, 0.2, 1.82, 0.88, { seg: 8 });
+      P.cyl('chrome', 0.05, 0.05, 0.03, 0.4, 1.78, 0.87, { rx: Math.PI / 2 - 0.3, seg: 10 });
+    }
     P.box('zoc_hazard', 2.92, 0.1, 0.02, 0, 0.1, 1.26, {});
     P.box('zoc_hazard', 2.92, 0.1, 0.02, 0, 0.1, -1.26, {});
-    P.box('metal', 2.1, 1.3, 1.7, -0.25, 0.83, 0, { color: 0xb8962a });
-    for (let x = -1.1; x <= 0.7; x += 0.3) P.box('metal', 0.04, 1.1, 1.74, x, 0.85, 0, { color: 0x8a701e });
-    P.box('metal', 0.36, 1.45, 1.9, 1.05, 0.9, 0, { color: 0x2e3032 });
-    for (let y = 0.35; y < 1.6; y += 0.12) P.box('dark', 0.04, 0.05, 1.7, 1.24, y, 0);
-    P.cyl('metal', 0.36, 0.36, 1.6, -0.35, 0.55, -1.0, { rz: Math.PI / 2, color: 0x8a2a1a, seg: 14 });
     P.cyl('rust', 0.13, 0.13, 2.55, -0.8, 1.48 + 1.27, -0.45, { seg: 10 });
     P.cyl('rust', 0.18, 0.18, 0.3, -0.8, CEIL_H - 0.15, -0.45, { seg: 10 });
-    P.box('metal', 0.7, 0.55, 0.16, 0.2, 1.76, 0.78, { color: 0x3a3d40, rx: -0.3 });
-    P.sphere('alarm', 0.04, 0.0, 1.82, 0.88, { seg: 8 });
-    P.sphere('bulb', 0.04, 0.2, 1.82, 0.88, { seg: 8 });
-    P.cyl('chrome', 0.05, 0.05, 0.03, 0.4, 1.78, 0.87, { rx: Math.PI / 2 - 0.3, seg: 10 });
     // mazos de cables hacia la pared
     for (let k = 0; k < 3; k++) P.rod('rubber', [0.8 + k * 0.08, 0.2, 1.1], [1.4 + k * 0.1, 0.03, 2.2 + k * 0.4], 0.035);
     signs.add('voltage', posterTexture('voltage'), 0.5, 0.5, cx - 0.25, 0.9, cz + 0.86, 0);
   } else {
     const P = B.at(cx, 0, cz, 0);
-    P.box('concrete', 1.95, 0.15, 1.95, 0, 0.075, 0, { color: 0x8a8a86 });
-    P.box('metal', 1.3, 1.4, 1.1, 0, 0.85, 0, { color: 0x5a6a5a });
-    for (let i = 0; i < 7; i++) for (const s of [-1, 1]) P.box('metal', 0.04, 1.1, 0.26, -0.54 + i * 0.18, 0.85, s * 0.68, { color: 0x4a5a4a });
-    for (let k = -1; k <= 1; k++) {
-      for (let d = 0; d < 4; d++) P.cyl('plastic', 0.1, 0.1, 0.05, k * 0.38, 1.62 + d * 0.09, 0, { color: 0x7a4a2a, seg: 10 });
-      P.cyl('chrome', 0.02, 0.02, 0.5, k * 0.38, 1.7, 0, { seg: 6 });
+    if (!(world && placeGltfProp(world, TRANSFORMER_GLB, cx, 0, cz, 0))) {
+      P.box('concrete', 1.95, 0.15, 1.95, 0, 0.075, 0, { color: 0x8a8a86 });
+      P.box('metal', 1.3, 1.4, 1.1, 0, 0.85, 0, { color: 0x5a6a5a });
+      for (let i = 0; i < 7; i++) for (const s of [-1, 1]) P.box('metal', 0.04, 1.1, 0.26, -0.54 + i * 0.18, 0.85, s * 0.68, { color: 0x4a5a4a });
+      for (let k = -1; k <= 1; k++) {
+        for (let d = 0; d < 4; d++) P.cyl('plastic', 0.1, 0.1, 0.05, k * 0.38, 1.62 + d * 0.09, 0, { color: 0x7a4a2a, seg: 10 });
+        P.cyl('chrome', 0.02, 0.02, 0.5, k * 0.38, 1.7, 0, { seg: 6 });
+      }
+      P.box('metal', 1.34, 0.08, 1.14, 0, 1.56, 0, { color: 0x4a5a4a });
     }
-    P.box('metal', 1.34, 0.08, 1.14, 0, 1.56, 0, { color: 0x4a5a4a });
     signs.add('voltage', posterTexture('voltage'), 0.5, 0.5, cx + 0.66, 0.95, cz, Math.PI / 2);
   }
 }
@@ -590,14 +620,14 @@ export function buildStaticProps(B, world) {
   const signs = world.signs;
   for (const p of PROPS) {
     switch (p.kind) {
-      case 'bench': bench(B, p, r); break;
+      case 'bench': bench(B, p, r, world); break;
       case 'bus': bus(B, p, r, signs, world); break;
       case 'car': car(B, p, r, p.x0 > 40 ? world.flames : null, world); break;
       case 'barrel': barrels(B, p, r, world.flames, world); break;
-      case 'counter': counter(B, p, r); break;
-      case 'table': table(B, p, r); break;
+      case 'counter': counter(B, p, r, world); break;
+      case 'table': table(B, p, r, world); break;
       case 'crate': crates(B, p, r, world); break;
-      case 'generator': generator(B, p, r, signs); break;
+      case 'generator': generator(B, p, r, signs, world); break;
       default: {
         const { cx, cz, lx, lz } = rectOf(p);
         B.at(cx, 0, cz, 0).box('crate', lx * 0.9, p.h, lz * 0.9, 0, p.h / 2, 0, {});

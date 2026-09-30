@@ -63,6 +63,26 @@ export function smoothstep(a, b, x) { const t = Math.min(1, Math.max(0, (x - a) 
 export function easeOutBack(t) { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); }
 export function easeInOut(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
 
+// Sombras según los ajustes: 'off' | 'low' | 'high' (sin `shadows` guardado, se deduce de la calidad)
+export function shadowMode(settings) {
+  const s = settings || {};
+  if (s.shadows === 'off' || s.shadows === 'low' || s.shadows === 'high') return s.shadows;
+  return s.quality === 'low' ? 'off' : 'high';
+}
+
+// Aplica el modo de sombras a la luz direccional (luna): activa/desactiva y cambia la resolución del mapa
+// (al cambiarla hay que tirar el mapa viejo para que Three lo recree). Devuelve la resolución en uso.
+export function applyMoonShadow(moon, settings) {
+  const mode = shadowMode(settings);
+  const res = mode === 'low' ? 1024 : 2048;
+  if (moon.shadow.mapSize.x !== res) {
+    moon.shadow.mapSize.set(res, res);
+    if (moon.shadow.map) { moon.shadow.map.dispose(); moon.shadow.map = null; }
+  }
+  moon.castShadow = mode !== 'off';
+  return res;
+}
+
 // Ruido de parpadeo determinista (0..1) para luces
 export function flickerNoise(t, seed) {
   const s = Math.sin(t * 12.9898 + seed * 78.233) * 43758.5453;

@@ -20,6 +20,7 @@ import { ZombieManager } from './zombies.js';
 import { EasterEgg, EE_STEP } from './easteregg.js';
 import { Player } from './entities/player.js';
 import { separateFromZombies, packMoveState } from '../shared/movement.js';
+import { stats } from './stats.js';
 import crypto from 'node:crypto';
 
 const DEG = Math.PI / 180;
@@ -97,6 +98,10 @@ export class Game {
     this.sessions = new Map();     // token -> pid (para reconexión)
     this.reconnectTimers = new Map(); // pid -> temporizador de limpieza tras desconexión
     this.nextPid = 1;
+    this.solo = !!opts.solo;       // partida de un jugador: no cuenta para la tabla de puntos global
+    this.users = new Map();        // pid -> { id, username } de la cuenta (estadísticas y logros, ver stats.js)
+    this.earned = new Map();       // pid -> puntos ganados en esta partida (récord de la tabla global)
+    this.cheated = false;          // se usó un comando de desarrollo en esta partida: no cuenta
     this.ee = new EasterEgg(this);
     this.gs = this._freshState();
     this.dirty = true;
@@ -360,6 +365,10 @@ export class Game {
 
     const name = p.name;
     const wasHost = p.host;
+    // Quien abandona a mitad de partida conserva su récord hasta ese momento
+    if (gs.phase === 'playing') this._record(p);
+    const user = this.users.get(pid);
+    if (user) { stats.detach(user.id); this.users.delete(pid); }
     delete gs.players[pid];
     this.pd.delete(pid);
     this.players.delete(pid);
@@ -566,7 +575,7 @@ export class Game {
   }
 
   _roomInfo() {
-    return this.roomCode ? { code: this.roomCode, name: this.roomName, locked: !!this.roomPassword, map: this.mapId } : null;
+    return this.roomCode ? { code: this.roomCode, name: this.roomName, locked: !!this.roomPassword, map: this.mapId, solo: this.solo } : null;
   }
 
   // Intenta recuperar una sesión previa (reconexión tras un corte no voluntario). true si se resolvió.
@@ -617,8 +626,14 @@ export class Game {
       this._kick(conn, 'La partida está llena (máximo 4 jugadores).');
       return;
     }
+    // Multijugador solo con cuenta (RoomManager ya lo filtra; esto cubre un token de reconexión caducado)
+    if (!conn.user && !this.solo && !this.dev) {
+      this._kick(conn, 'auth');
+      return;
+    }
     const pid = this.nextPid++;
-    const name = cleanText(m.name, 16) || `Jugador ${pid}`;
+    // Con cuenta, el nombre en partida es el de usuario
+    const name = (conn.user && conn.user.username) || cleanText(m.name, 16) || `Jugador ${pid}`;
     const color = this._pickColor(m.color, pid);
     const used = new Set(this._players().map((q) => q.spawn));
     let spawn = 0;
@@ -634,6 +649,10 @@ export class Game {
     this.players.set(pid, new Player(p, this.pd.get(pid)));
     conn.pid = pid;
     this.byPid.set(pid, conn);
+    if (conn.user) {
+      this.users.set(pid, conn.user);
+      stats.attach(conn.user.id, conn.user.username);
+    }
     const now = this.clock();
     const token = crypto.randomBytes(16).toString('hex');
     this.sessions.set(token, pid);
@@ -648,6 +667,10 @@ export class Game {
     this._system(`${name} se unió a la partida.`);
     if (gs.phase === 'playing') this._msg(pid, 'Entraste a mitad de partida: aparecerás al comenzar la próxima ronda.');
     if (this.dev) this._msg(pid, 'Modo desarrollo activo: escribe /help en el chat para ver los comandos.');
+    // Un jugador: sin sala de espera, la partida empieza en cuanto el cliente recibe el estado
+    if (this.solo && gs.phase === 'lobby') {
+      setTimeout(() => { this._use(); if (this.gs.phase === 'lobby' && this.playerCount()) this.startGame(); }, 300);
+    }
   }
 
   _pickColor(req, pid) {
@@ -1030,12 +1053,36 @@ export class Game {
     return true;
   }
 
+  // Estadísticas globales del jugador (no cuentan partidas con comandos de desarrollo ni jugadores
+  // sin perfil, como los bots). Cada logro nuevo se anuncia a toda la sala.
+  _stat(p, fn) {
+    if (!p || this.cheated || this.gs.phase !== 'playing') return;
+    const user = this.users.get(p.id);
+    if (!user) return;
+    for (const id of stats.update(user.id, fn)) {
+      this._ev({ e: 'achv', pid: p.id, id });
+      this._log(`${p.name} desbloqueó el logro "${id}".`);
+    }
+  }
+
+  // Récord de la tabla global (ronda alcanzada y puntos ganados en esta partida). No cuenta en
+  // un jugador ni en partidas con comandos de desarrollo; la BD se queda con el mayor.
+  _record(p) {
+    if (!p || this.solo || this.cheated || !this.gs.round) return;
+    const user = this.users.get(p.id);
+    if (user) stats.record(user.id, this.gs.round, this.earned.get(p.id) || 0);
+  }
+
   _addPoints(p, n, scaled) {
     if (!p || !n) return;
     let v = Math.round(n);
     if (scaled && this._timerActive('doublepoints')) v *= 2;
     p.points = Math.max(0, p.points + v);
-    if (v > 0) this.puScore += v;
+    if (v > 0) {
+      this.puScore += v;
+      if (this.gs.phase === 'playing') this.earned.set(p.id, (this.earned.get(p.id) || 0) + v);
+      this._stat(p, (s) => { s.points += v; });
+    }
     this.markDirty();
     this._ev({ e: 'pts', pid: p.id, n: v }, { to: p.id });
   }
@@ -1501,7 +1548,7 @@ export class Game {
     if (player) player.revive(now);
     if (byPid != null) {
       const r = this.gs.players[byPid];
-      if (r) r.revives++;
+      if (r) { r.revives++; this._stat(r, (s) => { s.revives++; }); }
     }
     this.markDirty();
     this.flushGs();
@@ -1735,6 +1782,8 @@ export class Game {
       this._addPoints(p, pts, true);
       p.kills++;
       if (kind === 'bullet' && part === 'h') p.headshots++;
+      const head = kind === 'bullet' && part === 'h';
+      this._stat(p, (s) => { s.kills++; if (head) s.headshots++; });
       if (z.type === 'tank') this._addPoints(p, ZOMBIE_TYPES.tank.points, true);
       this.markDirty();
     }
@@ -1743,6 +1792,10 @@ export class Game {
       if (p && scoring) {
         this._addPoints(p, BOSS_RULES.killPoints, true);
         for (const q of this._players()) if (q !== p && q.state !== 'dead') this._addPoints(q, BOSS_RULES.teamPoints, true);
+        // El logro es para todo el equipo que sigue en pie, no solo para quien da el último golpe
+        for (const q of this._players()) {
+          if (q === p || q.state !== 'dead') this._stat(q, (s) => stats.bossKill(s, z.boss));
+        }
       }
       const t = this._randomPowerupType(this.clock());
       if (t) this.spawnPowerup(t, z.x, z.z, undefined, z.y);
@@ -1840,6 +1893,10 @@ export class Game {
     this.flushGs();
     this._ev({ e: 'roundStart', round });
     for (const r of respawns) this._ev({ e: 'respawn', ...r });
+    for (const p of this._players()) {
+      this._stat(p, (s) => { s.bestRound = Math.max(s.bestRound, round); });
+      this._record(p);
+    }
     this._log(`Ronda ${round} (${this.gs.zLeft} zombis).`);
   }
 
@@ -1885,6 +1942,9 @@ export class Game {
       respawns.push(this._respawnPlayer(p, now));
     }
     this.zombies.startGame();
+    this.cheated = false;
+    this.earned.clear();
+    for (const p of this._players()) this._stat(p, (s) => { s.games++; });
     this.markDirty();
     this.flushGs();
     for (const r of respawns) this._ev({ e: 'respawn', ...r });
@@ -1908,6 +1968,7 @@ export class Game {
       const d = this.pd.get(p.id);
       if (d) d.hold = null;
     }
+    for (const p of this._players()) this._record(p);
     const stats = this._players()
       .sort((a, b) => a.id - b.id)
       .map((p) => ({ id: p.id, name: p.name, color: p.color, points: p.points, kills: p.kills, headshots: p.headshots, downs: p.downs, revives: p.revives }));
@@ -1958,6 +2019,10 @@ export class Game {
     const playing = gs.phase === 'playing';
     const needPlay = () => { if (!playing) say('Ese comando solo funciona durante la partida.'); return playing; };
     this._log(`[dev] ${p.name}: ${msg}`);
+    if (cmd !== 'help' && playing && !this.cheated) {
+      this.cheated = true;
+      this._system('Se usó un comando de desarrollo: esta partida ya no cuenta para la tabla de puntos ni los logros.');
+    }
     switch (cmd) {
       case 'help':
         say('Comandos: /points N, /round N, /power, /give ARMA [up], /god, /killall, /pu TIPO, /parts, /doors, /perk VENTAJA, /meds, /infect, /item TIPO, /spawn TIPO, /ee PASO');

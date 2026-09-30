@@ -3,7 +3,7 @@
 // son geometría emisiva + sprites aditivos. Secuencia de encendido al activar la electricidad.
 import * as THREE from 'three';
 import { CEIL_H } from '/shared/map.js';
-import { makeGlow, makePool, flickerNoise, smoothstep } from './kit.js';
+import { makeGlow, makePool, flickerNoise, smoothstep, shadowMode, applyMoonShadow } from './kit.js';
 import { MOON_DIR } from './sky.js';
 import { facadePoint, facadePlaneYaw } from './levelgeo.js';
 
@@ -159,9 +159,9 @@ export class Lighting {
   }
 
   applyQuality() {
-    const high = !this.ctx.settings || this.ctx.settings.quality !== 'low';
+    const high = shadowMode(this.ctx.settings) !== 'off';
     if (this.moon) {
-      this.moon.castShadow = high;
+      this.shadowRes = applyMoonShadow(this.moon, this.ctx.settings);
       this.moon.intensity = high ? 1.25 : 0.95;
     }
     if (this.hemi) this.hemi.intensity = high ? HEMI_HIGH : HEMI_LOW;
@@ -188,7 +188,7 @@ export class Lighting {
   _followShadow() {
     const cam = this.ctx.camera;
     if (!cam || !this.moon || !this.moonTarget) return;
-    const texel = (SHADOW_HALF * 2) / SHADOW_RES;
+    const texel = (SHADOW_HALF * 2) / (this.shadowRes || SHADOW_RES);
     const x = Math.round(cam.position.x / texel) * texel;
     const z = Math.round(cam.position.z / texel) * texel;
     if (x === this.moonTarget.position.x && z === this.moonTarget.position.z) return;

@@ -1,6 +1,6 @@
 {
-  "name": "zombies-lan",
-  "version": "1.0.0",
+  "name": "zombies-the-last-survivors",
+  "version": "0.9.0-beta",
   "description": "Shooter de zombis cooperativo por LAN inspirado en el modo Zombies de Black Ops 2 (servidor Node + cliente Three.js en el navegador)",
   "type": "module",
   "main": "server/index.js",
@@ -13,6 +13,7 @@
   "private": true,
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",
+    "pg": "^8.23.0",
     "three": "0.186.1",
     "ws": "8.21.3"
   }

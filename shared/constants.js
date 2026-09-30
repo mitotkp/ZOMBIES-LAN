@@ -1,7 +1,8 @@
 // Constantes de juego compartidas entre servidor (Node) y cliente (navegador).
 // Unidades: metros, segundos, puntos. Los tiempos absolutos del servidor van en milisegundos.
 
-export const GAME_TITLE = 'ZOMBIES LAN';
+export const GAME_TITLE = 'Zombies: The Last Survivors';
+export const GAME_VERSION = '0.9.0-beta';   // mantener igual que "version" en package.json
 export const DEFAULT_PORT = 3000;
 export const MAX_PLAYERS = 4;
 
@@ -246,7 +247,7 @@ export const REPAIR_TIME = 0.6;           // segundos por tabla (Speed Cola: la 
 // Rondas
 export const ROUND = {
   firstDelay: 5,           // segundos antes de la ronda 1
-  intermission: 10,        // pausa entre rondas
+  intermission: 20,        // pausa entre rondas
 };
 
 // Caja misteriosa
