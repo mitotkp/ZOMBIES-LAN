@@ -5,6 +5,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { WebSocketServer } from 'ws';
@@ -101,19 +102,46 @@ const MOUNTS = [
   { prefix: '/', dir: path.join(ROOT, 'public') },
 ];
 
+// Versión del código cliente: huella de nombres, tamaños y fechas de public/ y shared/. index.html
+// carga el código desde /v/<versión>/..., así que al desplegar cambia la URL y ni el navegador ni
+// Cloudflare (que fuerza 4 h de caché en .js/.css) pueden servir una copia vieja.
+function computeBuildId() {
+  const h = crypto.createHash('sha1');
+  const walk = (dir) => {
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    entries.sort((a, b) => (a.name < b.name ? -1 : 1));
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else {
+        try { const st = fs.statSync(full); h.update(`${path.relative(ROOT, full)}|${st.size}|${Math.floor(st.mtimeMs)}\n`); } catch { /* nada */ }
+      }
+    }
+  };
+  walk(path.join(ROOT, 'public'));
+  walk(path.join(ROOT, 'shared'));
+  return h.digest('hex').slice(0, 10);
+}
+const BUILD_ID = computeBuildId();
+const VERSIONED = /^\/v\/[A-Za-z0-9_-]{1,32}(\/.*)$/;
+const INDEX_HTML = path.join(ROOT, 'public', 'index.html');
+
 // Traduce la ruta pedida a un archivo dentro de la carpeta montada, o null si intenta salirse
 function resolvePath(urlPath) {
   let decoded;
   try { decoded = decodeURIComponent(urlPath); } catch { return null; }
   if (decoded.includes('\0')) return null;
   decoded = decoded.replace(/\\/g, '/');
+  const v = VERSIONED.exec(decoded);
+  if (v) decoded = v[1];
   for (const m of MOUNTS) {
     if (!decoded.startsWith(m.prefix)) continue;
     const rel = decoded.slice(m.prefix.length);
     const base = path.resolve(m.dir);
     const full = path.resolve(base, '.' + path.posix.normalize('/' + rel));
     if (full !== base && !full.startsWith(base + path.sep)) return null;
-    return { full, base };
+    return { full, base, versioned: !!v };
   }
   return null;
 }
@@ -127,13 +155,24 @@ function sendText(res, status, text, method = 'GET') {
   res.end(method === 'HEAD' ? undefined : text);
 }
 
-function serveFile(req, res, file, stat) {
+function serveFile(req, res, file, stat, versioned = false) {
   const ext = path.extname(file).toLowerCase();
   const type = MIME[ext] || 'application/octet-stream';
+  // La página principal lleva la versión actual dentro (sustituye __BUILD__) y nunca se guarda en caché
+  if (file === INDEX_HTML) {
+    fs.readFile(file, 'utf8', (err, html) => {
+      if (err) { sendText(res, 500, 'Error interno', req.method); return; }
+      const body = Buffer.from(html.replaceAll('__BUILD__', BUILD_ID), 'utf8');
+      res.writeHead(200, { 'Content-Type': type, 'Content-Length': body.length, 'Cache-Control': 'no-cache, no-store', 'X-Content-Type-Options': 'nosniff' });
+      res.end(req.method === 'HEAD' ? undefined : body);
+    });
+    return;
+  }
   const headers = {
     'Content-Type': type,
     'Content-Length': stat.size,
-    'Cache-Control': 'no-cache',
+    // Con versión en la URL el contenido de esa URL no cambia nunca: caché larga
+    'Cache-Control': versioned ? 'public, max-age=31536000, immutable' : 'no-cache',
     'Last-Modified': stat.mtime.toUTCString(),
     'X-Content-Type-Options': 'nosniff',
   };
@@ -197,7 +236,7 @@ async function handleRequest(req, res) {
         return;
       }
       if (err || !stat.isFile()) { sendText(res, 404, 'No encontrado', req.method); return; }
-      serveFile(req, res, file, stat);
+      serveFile(req, res, file, stat, r.versioned);
     });
   } catch (e) {
     console.error('[http] error:', e);

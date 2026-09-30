@@ -25,10 +25,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Ops+One&family=Oswald:wght@400;500;600;700&family=Special+Elite&display=swap">
-  <link rel="stylesheet" href="/css/style.css">
+  <!-- __BUILD__ lo sustituye el servidor por la versión actual: al desplegar cambia la URL y el navegador
+       (y Cloudflare) descargan el código nuevo en lugar de usar una copia vieja de su caché. -->
+  <link rel="stylesheet" href="/v/__BUILD__/css/style.css">
 
   <script type="importmap">
   { "imports": {
+    "/shared/": "/v/__BUILD__/shared/",
     "three": "/vendor/three/build/three.module.js",
     "three/addons/": "/vendor/three/examples/jsm/",
     "@dimforge/rapier3d-compat": "/vendor/rapier3d/dist/rapier.mjs"
@@ -47,7 +50,7 @@
   </noscript>
   <div id="boot-error"><div><b>Zombies: The Last Survivors</b><span id="boot-error-text"></span></div></div>
 
-  <script type="module" src="/js/main.js"></script>
+  <script type="module" src="/v/__BUILD__/js/main.js"></script>
 
   <!-- Aviso si el módulo principal no llega a arrancar (navegador antiguo, archivos que faltan...) -->
   <script>
