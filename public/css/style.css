@@ -662,6 +662,10 @@ kbd {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 .mn-input::placeholder { color: rgba(233, 223, 200, 0.32); font-weight: 400; }
+/* Lista desplegable de un <select> (p. ej. el mapa al crear sala): sin esto sale blanca con texto claro */
+select.mn-input { cursor: pointer; }
+.mn-input option { background: #16110e; color: var(--chalk); font-weight: 500; }
+.mn-input option:checked { background: var(--blood); color: #fff; }
 .mn-input:focus { border-color: rgba(216, 40, 28, 0.75); box-shadow: inset 0 0.2em 0.5em rgba(0, 0, 0, 0.6), 0 0 0.8em rgba(163, 21, 15, 0.3); }
 
 /* Botones: placa con marca roja; al pasar el ratón, un brochazo de sangre la cubre */
@@ -956,8 +960,13 @@ kbd {
 .st-section:first-child { margin-top: 0; }
 .mn-settings .mn-panel-box { max-height: calc(100vh - 3em); overflow-y: auto; }
 
-.ct-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.9em 2em; }
-.ct-group .ct-row { padding: 0.28em 0; }
+/* Controles: texto más pequeño, grupos repartidos en columnas (3 en pantalla ancha) y el panel
+   se desplaza por dentro si no cabe */
+.mn-controls .mn-panel-box { max-height: calc(100vh - 3em); overflow-y: auto; font-size: 0.86em; }
+.ct-groups { columns: 3 16em; column-gap: 2.4em; }
+.ct-group { break-inside: avoid; margin-bottom: 1.1em; }
+.ct-group .ct-row { padding: 0.14em 0; }
+.ct-group .ct-label { font-size: 0.88em; }
 .ct-title {
   margin: 0.2em 0 0.45em; font: 1.05em/1 var(--f-display); letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--blood-bright);
@@ -1189,7 +1198,7 @@ kbd {
   .mn-main-controls { display: none; }
   .mn-lobby-grid { grid-template-columns: minmax(0, 1fr); }
   .mn-rooms-grid { grid-template-columns: minmax(0, 1fr); }
-  .ct-groups { grid-template-columns: minmax(0, 1fr); }
+  .ct-groups { columns: 1; }
   .ct-tips { columns: 1; }
 }
 @media (max-width: 760px) {
