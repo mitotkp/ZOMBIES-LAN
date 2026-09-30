@@ -1,3 +1,9 @@
-﻿# Estadísticas guardadas por el servidor (tabla de puntos y logros)
+# Datos locales del servidor
 data/
+
+# Credenciales de la base de datos (nunca al repositorio)
 database.env
+.env
+
+# Copia de seguridad del compose que se deja en el servidor al desplegar
+docker-compose.yml.bak
