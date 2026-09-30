@@ -1,0 +1,24 @@
+# Despliegue en el servidor: docker compose up -d --build
+# DATABASE_URL se lee del archivo .env junto a este compose (no se sube a git), p. ej.
+#   DATABASE_URL=postgres://usuario:clave@postgres-server:5432/basededatos
+services:
+  zombies:
+    build: .
+    container_name: zombies-lan
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8181:3000"
+    environment:
+      - PORT=3000
+      - ALLOWED_ORIGINS=https://zombies.trycatchstudio.org
+      - MAX_CONN_PER_IP=8
+      - DATABASE_URL=${DATABASE_URL}
+    networks:
+      - default
+      - postgres
+
+# Red del contenedor postgres-server: así el juego lo alcanza por su nombre
+networks:
+  postgres:
+    external: true
+    name: postgres_default
