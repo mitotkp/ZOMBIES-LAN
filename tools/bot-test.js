@@ -12,6 +12,7 @@ import { WEAPONS, weaponDef, fireInterval } from '../shared/weapons.js';
 import { PLAYER, MELEE, GRENADE, PLAYER_COLORS, yawTo, forwardXZ } from '../shared/constants.js';
 import { PF } from '../shared/protocol.js';
 import { FlowField, clearPath } from '../server/nav.js';
+import { decodeSnap } from '../shared/snapcodec.js';
 
 // ------------------------------------------------------------------ argumentos
 
@@ -122,9 +123,16 @@ class Bot {
           : { mode: 'join', code: ROOM_CODE };
       this.send({ t: 'hello', name: this.name, color: PLAYER_COLORS[this.index % PLAYER_COLORS.length], room, auth });
     });
-    this.ws.on('message', (data) => {
+    this.ws.on('message', (data, isBinary) => {
       let m;
-      try { m = JSON.parse(data.toString()); } catch { stats.errors.push(`${this.name}: JSON inválido del servidor`); return; }
+      if (isBinary) {
+        // snapshots de posiciones en binario (shared/snapcodec.js)
+        m = decodeSnap(data);
+        if (!m) { stats.errors.push(`${this.name}: mensaje binario inválido del servidor`); return; }
+        stats.snapBytes = (stats.snapBytes || 0) + data.length;
+      } else {
+        try { m = JSON.parse(data.toString()); } catch { stats.errors.push(`${this.name}: JSON inválido del servidor`); return; }
+      }
       try { this.onMessage(m); } catch (e) { stats.errors.push(`${this.name}: excepción en el bot: ${e.stack || e}`); }
     });
     this.ws.on('close', (code) => {
@@ -167,7 +175,8 @@ class Bot {
       case 'snap':
         if (this.index === 0) stats.snaps++;
         this.zombies.clear();
-        for (const z of m.z || []) this.zombies.set(z[0], { id: z[0], x: z[1], z: z[2], rot: z[3], anim: z[4], flags: z[5] });
+        this.snapNow = m.now;   // los bots apuntan a este snapshot: es el instante que el servidor debe rebobinar
+        for (const z of m.z || []) this.zombies.set(z[0], { id: z[0], x: z[1], z: z[2], rot: z[3], anim: z[4], flags: z[5], y: z[6] || 0 });
         break;
       case 'ev':
         this.onEvent(m);
@@ -221,10 +230,17 @@ class Bot {
         setTimeout(() => this.fillSlot(ev.slot), 0);
         break;
       case 'ammo':
-        this.fillAll();
+        // igual que el cliente: munición comprada = reserva llena de esa arma (el cargador no cambia)
+        if (ev.slot == null) this.refillReserves(); else this.refillReserve(ev.slot);
+        break;
+      case 'ammoSync':
+        // el servidor rechazó un disparo por munición: no debería pasar si el bot cuenta como el cliente
+        stats.ammoRejects = (stats.ammoRejects || 0) + 1;
+        this.mag[ev.w + (ev.up ? '+' : '')] = ev.m; this.reserve[ev.w + (ev.up ? '+' : '')] = ev.r;
+        log(`${this.name}: disparo rechazado por munición (${ev.w} ${ev.m}/${ev.r})`);
         break;
       case 'pu':
-        if (ev.type === 'maxammo') this.fillAll();
+        if (ev.type === 'maxammo') this.refillReserves();
         if (this.index === 0) log(`potenciador ${ev.type} recogido por #${ev.pid}`);
         break;
       case 'puSpawn':
@@ -265,10 +281,19 @@ class Bot {
     const k = w.k + (w.up ? '+' : '');
     this.mag[k] = def.mag; this.reserve[k] = def.reserve;
   }
-  fillAll() {
+  refillReserve(slot) {
+    const s = this.self;
+    const w = s && s.weapons[slot];
+    const def = w && weaponDef(w.k, w.up);
+    if (!def) return;
+    const k = w.k + (w.up ? '+' : '');
+    if (this.mag[k] === undefined) this.mag[k] = def.mag;
+    this.reserve[k] = def.reserve;
+  }
+  refillReserves() {
     const s = this.self;
     if (!s) return;
-    for (let i = 0; i < s.weapons.length; i++) this.fillSlot(i);
+    for (let i = 0; i < s.weapons.length; i++) this.refillReserve(i);
   }
 
   // ---- navegación
@@ -409,13 +434,14 @@ class Bot {
         const n = Math.min(def.mag, this.reserve[k]);
         this.reserve[k] -= n; this.mag[k] = n;
         this.reloadUntil = now + def.reload * 1000;
+        this.send({ t: 'reload', w: w.k, up: !!w.up });   // el servidor lleva la cuenta real
       }
       return;
     }
     this.mag[k]--;
     const dt = s.perks && s.perks.includes('doubletap');
     this.nextFireAt = now + Math.max(fireInterval(def, dt) * 1000, def.mode === 'auto' ? 0 : 180);
-    const hy = (best.flags & 1) ? 0.35 : 1.62;
+    const hy = ((best.flags & 1) ? 0.35 : 1.62) + (best.y || 0);
     const dx = best.x - ex, dy = hy - ey, dz = best.z - ez;
     const len = Math.hypot(dx, dy, dz) || 1;
     const dir = [dx / len, dy / len, dz / len];
@@ -429,8 +455,12 @@ class Bot {
     const part = Math.random() < 0.75 ? 'h' : 'b';
     const hits = [];
     const pellets = def.pellets || 1;
-    for (let i = 0; i < pellets; i++) if (i === 0 || Math.random() < 0.6) hits.push([best.id, part, Math.round(len * 100) / 100]);
-    this.send({ t: 'fire', w: w.k, up: !!w.up, o: [ex, ey, ez], d: dir, e: [best.x, hy, best.z], hits });
+    const rays = [];
+    for (let i = 0; i < pellets; i++) {
+      rays.push(dir);
+      if (i === 0 || Math.random() < 0.6) hits.push([best.id, part, Math.round(len * 100) / 100, i]);
+    }
+    this.send({ t: 'fire', w: w.k, up: !!w.up, o: [ex, ey, ez], d: dir, e: [best.x, hy, best.z], hits, rays, ts: this.snapNow });
   }
 
   // ---- comportamiento general
@@ -779,6 +809,8 @@ setTimeout(() => {
   console.log(`Snapshots recibidos (bot 1): ${stats.snaps}   Mensajes gs: ${stats.gsMsgs}`);
   console.log(`Eventos (bot 1): ${Object.entries(stats.events).map(([k, v]) => `${k}=${v}`).join(' ')}`);
   console.log(`Denegaciones: ${Object.entries(stats.denies).map(([k, v]) => `${k}=${v}`).join(' ') || 'ninguna'}`);
+  console.log(`Disparos rechazados por munición: ${stats.ammoRejects || 0}`);
+  if (stats.snapBytes) console.log(`Snapshots binarios: ${(stats.snapBytes / NBOTS / SECONDS / 1024).toFixed(1)} KB/s por jugador`);
   if (stats.scenario.length) {
     console.log('Escenario:');
     for (const r of stats.scenario) console.log(`  [${r.ok ? 'OK' : 'FALLO'}] ${r.name}${r.detail ? ' — ' + r.detail : ''}`);

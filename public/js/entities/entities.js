@@ -87,7 +87,10 @@ export class EntityManager {
     if (net && typeof net.sample === 'function') {
       try {
         const now = typeof net.serverNow === 'function' ? net.serverNow() : Date.now();
-        sample = net.sample(now - INTERP_DELAY_MS);
+        // Instante (reloj del servidor) del mundo que se está dibujando: los disparos lo envían para
+        // que el servidor rebobine los zombis a ese momento (compensación de lag)
+        this.sampleTime = now - INTERP_DELAY_MS;
+        sample = net.sample(this.sampleTime);
       } catch (err) {
         sample = null;
       }

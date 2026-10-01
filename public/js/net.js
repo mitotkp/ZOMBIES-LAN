@@ -4,6 +4,7 @@
 
 import { INTERP_DELAY_MS, angleDiff } from '/shared/constants.js';
 import { safeParse } from '/shared/protocol.js';
+import { decodeSnap } from '/shared/snapcodec.js';
 import { MAP_ID } from '/shared/map.js';
 
 const MAX_EXTRAP_MS = 100;       // extrapolación máxima si falta el snapshot siguiente
@@ -61,6 +62,7 @@ export class Net {
         reject(err);
         return;
       }
+      ws.binaryType = 'arraybuffer';   // snapshots binarios (ver _onMessage)
       this.ws = ws;
       let opened = false;
       let settled = false;
@@ -200,6 +202,13 @@ export class Net {
 
   _onMessage(data) {
     this.stats.msgsIn++;
+    // Los snapshots de posiciones llegan en binario (shared/snapcodec.js); el resto, en JSON
+    if (data instanceof ArrayBuffer) {
+      this.stats.bytesIn += data.byteLength;
+      const snap = decodeSnap(data);
+      if (snap) this._onSnap(snap);
+      return;
+    }
     if (typeof data === 'string') this.stats.bytesIn += data.length;
     const m = safeParse(data);
     if (!m || typeof m !== 'object' || typeof m.t !== 'string') return;

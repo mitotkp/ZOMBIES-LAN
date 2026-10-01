@@ -300,3 +300,18 @@ export function falloff(def, dist) {
 export function fireInterval(def, doubleTap) {
   return 60 / (def.rpm * (doubleTap ? 1.33 : 1));
 }
+
+// M1911 temporal de "última batalla" (si al caer no llevas ninguna pistola ni arma maravilla)
+export const LAST_STAND_AMMO = { mag: 8, reserve: 24 };
+
+// Escopetas de bombeo: se recargan cartucho a cartucho (el resto, cargador entero)
+export function reloadsByShell(def) {
+  return def.model === 'shotgun' && def.mode === 'pump';
+}
+
+// Tiempo mínimo (s) desde que empieza una recarga hasta que la munición pasa al cargador. El servidor
+// lo usa, con margen para el lag, para no aceptar un cargador lleno sin haber recargado.
+export function reloadCommitTime(def, speedCola) {
+  const k = speedCola ? 0.5 : 1;
+  return reloadsByShell(def) ? 0.28 * k : (def.reload || 0) * 0.52 * k;
+}

@@ -170,6 +170,8 @@ export class Player {
       p.cur = clamp(p.cur, 0, Math.max(0, p.weapons.length - 1));
     }
     p.bleedUntil = now + PLAYER.bleedoutTime * 1000;
+    // la pistola temporal de última batalla empieza con munición nueva cada vez que caes
+    if (this.priv) { this.priv.lsAmmo = null; this.priv.reload = null; }
     p.reviver = null;
     p.reviveUntil = 0;
     p.selfReviveAt = 0;
@@ -193,7 +195,7 @@ export class Player {
     p.selfReviveAt = 0;
     p.reviver = null;
     p.reviveUntil = 0;
-    if (d) { d.lastDamageAt = now; d.invulnUntil = now + REVIVE_INVULN; }
+    if (d) { d.lastDamageAt = now; d.invulnUntil = now + REVIVE_INVULN; d.lsAmmo = null; d.reload = null; }
   }
 }
 

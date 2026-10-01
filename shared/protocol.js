@@ -7,8 +7,11 @@ export const C2S = {
   READY: 'ready',     // { v: bool }
   START: 'start',     // {}  (solo anfitrión)
   STATE: 'st',        // { p:[x,y,z], yaw, pitch, f: flags, cur: slot }
-  FIRE: 'fire',       // { w, up, o:[x,y,z], d:[dx,dy,dz], e:[x,y,z], hits:[[zid, part, dist], ...] }
-  PROJ: 'proj',       // { w, up, o:[x,y,z], d:[dx,dy,dz] }         (proyectil lanzado, para los demás)
+  FIRE: 'fire',       // { w, up, o:[x,y,z], d:[dx,dy,dz], e:[x,y,z], hits:[[zid, part, dist, perdigón], ...],
+                      //   rays:[[dx,dy,dz] por perdigón], ts: instante visto (reloj del servidor) } -> el servidor
+                      //   rebobina los zombis a ts y traza cada perdigón (server/lagcomp.js); gasta 1 bala
+  RELOAD: 'reload',   // { w, up }  (empieza una recarga: el servidor lleva la munición real)
+  PROJ: 'proj',       // { w, up, o:[x,y,z], d:[dx,dy,dz] }         (proyectil lanzado: gasta 1 bala y da derecho a 1 'boom')
   NADE: 'nade',       // { o:[x,y,z], v:[vx,vy,vz] }                 (granada lanzada)
   BOOM: 'boom',       // { w, up, p:[x,y,z], direct: zid|null }       (impacto de proyectil/granada: w='frag' para granadas)
   MELEE: 'melee',     // { hits:[zid,...], shield: bool }
@@ -25,7 +28,7 @@ export const S2C = {
   ROOM_DENY: 'roomDeny', // { reason: 'notfound'|'password'|'full'|'bad' }          (rechazo de 'hello' con room)
   WELCOME: 'welcome',   // { id, host: bool, gs, session, room: {code,name,locked}|null }
   GS: 'gs',           // estado de juego completo (ver SPEC.md 3)
-  SNAP: 'snap',       // { now, z:[[id,x,z,rot,anim,flags,yOff]...], p:[[id,x,y,z,yaw,pitch,flags,w,up]...] }
+  SNAP: 'snap',       // BINARIO (shared/snapcodec.js): { now, z:[[id,x,z,rot,anim,flags,yOff,tipo]...], p:[[id,x,y,z,yaw,pitch,flags,w,up]...] }
   EV: 'ev',           // { e: nombre, ...datos }
   PONG: 'pong',       // { c, now }
   KICK: 'kick',       // { reason }

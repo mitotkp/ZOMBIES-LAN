@@ -6,14 +6,17 @@ import {
   MAX_PLAYERS, TICK_RATE, GS_MAX_RATE, SNAPSHOT_RATE, PLAYER, POINTS, BOARDS_PER_WINDOW, REPAIR_TIME,
   BOX, PAP, SHIELD, MELEE, GRENADE, POWERUPS, PLAYER_COLORS, clamp, angleDiff, yawTo, forwardXZ,
   MEDS, MED_KEYS, MED_DROPS, INFECTION, ZOMBIE_TYPES, BOSS_RULES,
-  BALANCE,
+  BALANCE, INTERP_DELAY_MS,
 } from '../shared/constants.js';
 import {
   W, H, DOORS, WINDOW_INFO, INTERACTABLE_BY_ID, BOX_LOCATIONS, BOX_START, SHIELD_PARTS,
   PLAYER_SPAWNS, PLAYER_SPAWN_YAW, START_ZONE, setActiveMap, isMapId, DEFAULT_MAP, sameFloor, MAP,
 } from '../shared/map.js';
 import { solidForPlayer, lineOfSight } from '../shared/collision.js';
-import { WEAPONS, weaponDef, weaponName, BOX_POOL, ammoPrice, partMult, falloff, meleeStats } from '../shared/weapons.js';
+import {
+  WEAPONS, weaponDef, weaponName, BOX_POOL, ammoPrice, partMult, falloff, meleeStats, fireInterval,
+  LAST_STAND_AMMO, reloadCommitTime,
+} from '../shared/weapons.js';
 import { PERKS, PERK_LIMIT, perkPrice, perkNeedsPower } from '../shared/perks.js';
 import { PF, r2, safeParse } from '../shared/protocol.js';
 import { ZombieManager } from './zombies.js';
@@ -21,6 +24,8 @@ import { EasterEgg, EE_STEP } from './easteregg.js';
 import { Player } from './entities/player.js';
 import { separateFromZombies, packMoveState } from '../shared/movement.js';
 import { stats } from './stats.js';
+import { HitHistory, validateHit, hitboxOf, LAGCOMP_MAX_MS } from './lagcomp.js';
+import { encodeSnap } from '../shared/snapcodec.js';
 import crypto from 'node:crypto';
 
 const DEG = Math.PI / 180;
@@ -41,6 +46,7 @@ const GAMEOVER_TIME = 15000;          // ms en la pantalla final antes de volver
 const RECONNECT_GRACE_MS = 25000;     // ventana para recuperar el mismo jugador tras una desconexión no voluntaria
 const SPAWN_INVULN = 2000;            // ms de invulnerabilidad tras reaparecer
 const NADE_WINDOW = 6000;             // ms de validez de una granada lanzada
+const PROJ_WINDOW = 10000;            // ms de validez de un proyectil lanzado (para su explosión)
 const MSG_RATE_LIMIT = 250;           // mensajes por segundo por conexión
 const PING_INTERVAL = 2000;
 const PAUSE_MAX_MS = 5 * 60 * 1000;   // una pausa dura como mucho 5 minutos
@@ -57,6 +63,14 @@ function vec3(a, lim = 2000) {
   const x = Number(a[0]), y = Number(a[1]), z = Number(a[2]);
   if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return null;
   return [r2(clamp(x, -lim, lim)), r2(clamp(y, -lim, lim)), r2(clamp(z, -lim, lim))];
+}
+// Dirección unitaria [x,y,z] sin redondear (para trazar balas con precisión), o null si no es válida
+function unit3(a) {
+  if (!Array.isArray(a) || a.length < 3) return null;
+  const x = Number(a[0]), y = Number(a[1]), z = Number(a[2]);
+  const len = Math.hypot(x, y, z);
+  if (!Number.isFinite(len) || len < 0.5 || len > 1.5) return null;
+  return [x / len, y / len, z / len];
 }
 function cleanText(s, max) {
   if (typeof s !== 'string') return '';
@@ -99,6 +113,11 @@ export class Game {
     this.reconnectTimers = new Map(); // pid -> temporizador de limpieza tras desconexión
     this.nextPid = 1;
     this.solo = !!opts.solo;       // partida de un jugador: no cuenta para la tabla de puntos global
+    // Munición real de cada arma: objeto de p.weapons -> { m: cargador, r: reserva }. Un arma nueva
+    // (compra, caja, Pack-a-Punch, reaparición) es un objeto nuevo y empieza llena, igual que en el cliente.
+    this.ammo = new WeakMap();
+    this.hitHist = new HitHistory();   // posiciones recientes de los zombis (compensación de lag, ver lagcomp.js)
+    this.hitCheck = { ok: 0, rejected: 0 };   // impactos de bala validados en la partida (se registran al terminar)
     this.users = new Map();        // pid -> { id, username } de la cuenta (estadísticas y logros, ver stats.js)
     this.earned = new Map();       // pid -> puntos ganados en esta partida (récord de la tabla global)
     this.cheated = false;          // se usó un comando de desarrollo en esta partida: no cuenta
@@ -462,8 +481,11 @@ export class Game {
       if (up) flags |= PF.UPGRADED;
       players.push([p.id, r2(d.x), r2(d.y), r2(d.z), r2(d.yaw), r2(d.pitch), flags, w, up]);
     }
-    const snap = { t: 'snap', now, z: this.zombies.snapshot(), p: players };
-    this._broadcastRaw(JSON.stringify(snap), null, true);
+    const zrows = this.zombies.snapshot();
+    // Lo mismo que ven los clientes, guardado para rebobinar los disparos (compensación de lag)
+    this.hitHist.record(now, zrows, (id) => this.zombies.get(id));
+    // En binario (shared/snapcodec.js): es el mensaje más frecuente y así pesa ~3 veces menos
+    this._broadcastRaw(Buffer.from(encodeSnap(now, zrows, players)), null, true);
     // Confirmación de movimiento a cada jugador: último comando atendido + su estado simulado (para reconciliar)
     for (const p of this._players()) {
       const d = this.pd.get(p.id);
@@ -562,7 +584,8 @@ export class Game {
         break;
       case 'st': this._onState(p, d, m, now); break;
       case 'fire': this._onFire(p, d, m, now); break;
-      case 'proj': this._onProj(p, d, m); break;
+      case 'proj': this._onProj(p, d, m, now); break;
+      case 'reload': this._onReload(p, d, m, now); break;
       case 'nade': this._onNade(p, d, m, now); break;
       case 'boom': this._onBoom(p, d, m, now); break;
       case 'melee': this._onMelee(p, d, m, now); break;
@@ -708,6 +731,75 @@ export class Game {
     return pistol || { k: 'm1911', up: false };
   }
 
+  // ---- munición (autoridad del servidor)
+  // El cliente predice su munición y el servidor lleva la cuenta real: cada disparo gasta una bala y,
+  // con el cargador vacío, solo se acepta si el cliente avisó de que empezó a recargar esa arma hace el
+  // tiempo suficiente. Ambos cuentan igual, así que en una partida normal nunca se rechaza nada.
+
+  _ammoFor(p, d, key, up) {
+    const w = p.weapons.find((x) => x && x.k === key && !!x.up === up);
+    if (w) {
+      let a = this.ammo.get(w);
+      if (!a) {
+        const def = weaponDef(key, up) || {};
+        a = { m: def.mag || 0, r: def.reserve || 0 };
+        this.ammo.set(w, a);
+      }
+      return a;
+    }
+    // Pistola temporal de "última batalla" (cuando no llevas ninguna)
+    if (p.state === 'down' && key === 'm1911' && !up) {
+      if (!d.lsAmmo) d.lsAmmo = { m: LAST_STAND_AMMO.mag, r: LAST_STAND_AMMO.reserve, temp: true };
+      return d.lsAmmo;
+    }
+    return null;
+  }
+
+  _consumeShot(p, d, key, up, now) {
+    const a = this._ammoFor(p, d, key, up);
+    if (!a) return false;
+    if (a.m > 0) { a.m--; return true; }
+    // Cargador vacío: vale si hay recarga pendiente de esta arma con el tiempo mínimo cumplido (con margen)
+    const def = weaponDef(key, up) || {};
+    const rl = d.reload;
+    const need = reloadCommitTime(def, p.perks.includes('speedcola')) * 1000 * 0.6 - 60;
+    if (a.r > 0 && rl && rl.k === key && rl.up === up && now - rl.at >= need) {
+      const take = Math.min(def.mag || 0, a.r);
+      a.r -= take;
+      a.m = take - 1;
+      d.reload = null;
+      return take > 0;
+    }
+    // Rechazado: se le manda al cliente la cuenta real (como mucho una vez cada 400 ms)
+    if (now - (d.ammoSyncAt || 0) > 400) {
+      d.ammoSyncAt = now;
+      this._ev({ e: 'ammoSync', pid: p.id, w: key, up, m: a.m, r: a.r, temp: !!a.temp }, { to: p.id });
+    }
+    return false;
+  }
+
+  _onReload(p, d, m, now) {
+    if (this.gs.phase !== 'playing' || (p.state !== 'alive' && p.state !== 'down')) return;
+    if (typeof m.w !== 'string') return;
+    const w = m.w, up = !!m.up;
+    if (!this._hasWeapon(p, w, up)) return;
+    // Si ya había una pendiente de la misma arma se conserva la más antigua (es la que ya llenó el cargador)
+    const rl = d.reload;
+    if (!rl || rl.k !== w || rl.up !== up) d.reload = { k: w, up, at: now };
+  }
+
+  // Munición de reserva al máximo (Munición Máxima para todos, o munición comprada en la pared)
+  _refillReserve(p, w) {
+    const a = this.ammo.get(w);
+    if (a) a.r = (weaponDef(w.k, !!w.up) || {}).reserve || 0;
+  }
+
+  // Cadencia máxima del arma (con Double Tap) y un margen para los mensajes que llegan juntos
+  _fireRateOk(p, d, def, now) {
+    const perSec = 1 / fireInterval(def, p.perks.includes('doubletap'));
+    return this._rate(d.fireTimes, now, 1000, Math.min(40, Math.ceil(perSec * 1.3) + 3));
+  }
+
   _rate(list, now, windowMs, max) {
     while (list.length && now - list[0] > windowMs) list.shift();
     if (list.length >= max) return false;
@@ -722,8 +814,9 @@ export class Game {
     const w = m.w, up = !!m.up;
     if (!this._hasWeapon(p, w, up)) return;
     const def = weaponDef(w, up);
-    if (!def || def.melee) return;
-    if (!this._rate(d.fireTimes, now, 1000, 40)) return;
+    if (!def || def.melee || def.projectile) return;   // los proyectiles llegan con 'proj'
+    if (!this._fireRateOk(p, d, def, now)) return;
+    if (!this._consumeShot(p, d, w, up, now)) return;
     if (d.hasPos) this.zombies.hearShot(d.x, d.z, d.y);
     const o = vec3(m.o), dir = vec3(m.d, 2);
     let e = vec3(m.e);
@@ -732,10 +825,27 @@ export class Game {
       // El campo 'e' del mensaje ya es el nombre del evento: el punto final del trazador viaja en 'end'
       this._ev({ e: 'fire', pid: p.id, w, up, o, d: dir, end: e }, { except: p.id });
     }
-    if (def.projectile) return; // el daño llega con 'boom'
     const hits = Array.isArray(m.hits) ? m.hits : [];
-    if (!hits.length) return;
-    const maxHits = Math.max(1, def.pellets || 1) * Math.max(1, def.pen || 1) + 2;
+    if (!hits.length || !o) return;
+    // El cañón tiene que estar donde el servidor cree que está el jugador (con margen por la latencia)
+    if (d.hasPos && (Math.hypot(o[0] - d.x, o[2] - d.z) > 3 || Math.abs(o[1] - ((d.y || 0) + PLAYER.eyeHeight)) > 2.5)) return;
+    const aim = unit3(m.d);
+    if (!aim) return;
+    // Compensación de lag: los zombis se rebobinan al instante que veía el tirador (ts, reloj del servidor)
+    let ts = Number(m.ts);
+    if (!Number.isFinite(ts)) ts = now - INTERP_DELAY_MS;
+    ts = clamp(ts, now - LAGCOMP_MAX_MS, now);
+    // Dirección de cada perdigón (m.rays); tiene que caer dentro del cono de dispersión máximo del arma
+    const pellets = Math.max(1, def.pellets | 0);
+    const maxCos = Math.cos((Math.min(20, (def.spreadHip || 0) * 3.4) + 2) * DEG);
+    const rays = [];
+    for (let i = 0; i < pellets; i++) {
+      const r = unit3(Array.isArray(m.rays) ? m.rays[i] : null) || (i === 0 ? aim : null);
+      rays.push(r && r[0] * aim[0] + r[1] * aim[1] + r[2] * aim[2] >= maxCos ? r : null);
+    }
+    const pen = Math.max(1, def.pen | 0);
+    const perPellet = new Array(pellets).fill(0);
+    const maxHits = pellets * pen;
     const instakill = this._timerActive('instakill', now);
     const mult = p.perks.includes('doubletap') ? 2 : 1;
     const survived = new Map();
@@ -747,14 +857,18 @@ export class Game {
       const zid = h[0];
       if (!Number.isInteger(zid)) continue;
       if (killed.has(zid)) continue;
-      const part = h[1] === 'h' || h[1] === 'l' ? h[1] : 'b';
-      let dist = Number(h[2]);
-      if (!Number.isFinite(dist) || dist < 0) dist = 0;
-      if (dist > 150) continue;
+      const pi = Number.isInteger(h[3]) ? h[3] : 0;
+      const ray = rays[pi];
+      if (!ray || perPellet[pi] >= pen) continue;
       const zb = this.zombies.get(zid);
       if (!zb) continue;
-      // coherencia básica: el zombi debe estar a una distancia plausible del tirador
-      if (d.hasPos && Math.hypot(zb.x - d.x, zb.z - d.z) > 160) continue;
+      const hb = this.hitHist.at(ts, zid) || hitboxOf(zb);
+      const claimed = { part: h[1] === 'h' || h[1] === 'l' ? h[1] : 'b', dist: Number(h[2]) };
+      const v = validateHit(o, ray, hb, claimed, this.gs.doors);
+      if (!v || v.dist > 150) { this.hitCheck.rejected++; continue; }
+      this.hitCheck.ok++;
+      perPellet[pi]++;
+      const part = v.part, dist = v.dist;
       const dmg = def.dmg * partMult(def, part) * falloff(def, dist) * mult;
       const res = this.zombies.damage(zid, dmg, p.id, {
         part, kind: 'bullet', weapon: w, upgraded: up, instakill, special: def.special || null,
@@ -768,7 +882,7 @@ export class Game {
     }
   }
 
-  _onProj(p, d, m) {
+  _onProj(p, d, m, now) {
     if (this.gs.phase !== 'playing') return;
     if (p.state !== 'alive' && p.state !== 'down') return;
     if (typeof m.w !== 'string') return;
@@ -778,6 +892,12 @@ export class Game {
     if (!def || !def.projectile) return;
     const o = vec3(m.o), dir = vec3(m.d, 2);
     if (!o || !dir) return;
+    if (!this._fireRateOk(p, d, def, now)) return;
+    if (!this._consumeShot(p, d, w, up, now)) return;
+    if (d.hasPos) this.zombies.hearShot(d.x, d.z, d.y);
+    // Cada proyectil lanzado da derecho a una explosión ('boom'), como las granadas
+    d.projs = (d.projs || []).filter((t) => now - t <= PROJ_WINDOW);
+    d.projs.push(now);
     this._ev({ e: 'proj', pid: p.id, w, up, o, d: dir }, { except: p.id });
   }
 
@@ -812,6 +932,9 @@ export class Game {
       const def = weaponDef(w, up);
       if (!def || !def.projectile) return;
       if (!this._rate(d.boomTimes, now, 1000, 12)) return;
+      d.projs = (d.projs || []).filter((t) => now - t <= PROJ_WINDOW);
+      if (!d.projs.length) return;          // explosión sin proyectil lanzado
+      d.projs.shift();
       const pr = def.projectile;
       radius = Math.max(0, pr.splash || 0);
       splashDmg = pr.splashDmg || 0;
@@ -1144,6 +1267,7 @@ export class Game {
       const up = !!p.weapons[slot].up;
       const price = ammoPrice(key, up) || (up ? PAP.upgradedAmmoPrice : Math.round((base.price || 0) / 2));
       if (!this._spend(p, price)) return;
+      this._refillReserve(p, p.weapons[slot]);
       this._ev({ e: 'buy', pid: p.id, kind: 'ammo', item: key });
       this._ev({ e: 'ammo', pid: p.id, slot }, { to: p.id });
       return;
@@ -1713,7 +1837,14 @@ export class Game {
     this._log(`${p.name} recogió ${pu.type}.`);
     switch (pu.type) {
       case 'maxammo':
-        for (const q of players) if (q.state !== 'dead') q.grenades = PLAYER.maxGrenades;
+        for (const q of players) {
+          if (q.state === 'dead') continue;
+          q.grenades = PLAYER.maxGrenades;
+          // reserva llena en todas las armas (el cargador no se toca), igual que hace el cliente
+          for (const w of q.weapons) if (w) this._refillReserve(q, w);
+          const qd = this.pd.get(q.id);
+          if (qd && qd.lsAmmo) qd.lsAmmo.r = LAST_STAND_AMMO.reserve;
+        }
         break;
       case 'instakill':
         gs.timers.instakill = now + POWERUPS.duration * 1000;
@@ -1980,6 +2111,10 @@ export class Game {
 
   _returnToLobby() {
     this.zombies.reset();
+    this.hitHist.clear();
+    const hc = this.hitCheck;
+    if (hc.ok + hc.rejected) this._log(`Impactos de bala: ${hc.ok} válidos, ${hc.rejected} rechazados por el servidor.`);
+    this.hitCheck = { ok: 0, rejected: 0 };
     const players = this.gs.players;
     const fresh = this._freshState();
     fresh.players = players;

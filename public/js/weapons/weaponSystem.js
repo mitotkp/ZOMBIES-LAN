@@ -4,9 +4,9 @@
 // "última batalla". El arma en primera persona se dibuja con ViewModel en una escena propia (vmScene/vmCamera)
 // y los proyectiles/granadas se simulan con Projectiles. También muestra los disparos de los demás jugadores.
 import * as THREE from 'three';
-import { WEAPONS, weaponDef, fireInterval, meleeStats } from '/shared/weapons.js';
+import { WEAPONS, weaponDef, fireInterval, meleeStats, LAST_STAND_AMMO } from '/shared/weapons.js';
 import { PERKS } from '/shared/perks.js';
-import { PLAYER, MELEE, SHIELD, GRENADE, MEDS, MED_KEYS, clamp, lerp } from '/shared/constants.js';
+import { PLAYER, MELEE, SHIELD, GRENADE, MEDS, MED_KEYS, INTERP_DELAY_MS, clamp, lerp } from '/shared/constants.js';
 import { raycastMap } from '/shared/collision.js';
 import { r2, r3 } from '/shared/protocol.js';
 import { updateCamo } from './models.js';
@@ -18,7 +18,6 @@ import { createWeapon } from './weapon.js';
 
 const V3 = THREE.Vector3;
 const TRACER_DEFAULT = 0xffe0a0;
-const LAST_STAND_AMMO = { mag: 8, reserve: 24 };   // M1911 temporal de "última batalla"
 const FIRE_BUFFER = 0.25;                          // s que se recuerda un clic de arma semiautomática
 
 // Tiempo para apuntar por arquetipo de modelo (s)
@@ -71,6 +70,7 @@ const arr2 = (v) => [r2(v.x), r2(v.y), r2(v.z)];
 // El servidor exige ids de zombi enteros: normaliza por si llegan como texto
 const zidOf = (id) => (Number.isInteger(Number(id)) ? Number(id) : id);
 const arr3 = (v) => [r3(v.x), r3(v.y), r3(v.z)];
+const r4 = (v) => Math.round(v * 10000) / 10000;
 
 export class WeaponSystem {
   constructor(ctx) {
@@ -682,6 +682,7 @@ export class WeaponSystem {
     const pellets = Math.max(1, def.pellets | 0);
     const pen = Math.max(1, def.pen | 0);
     const hits = [];
+    const rays = [];                 // dirección de cada perdigón: el servidor traza las balas él mismo
     const hitZ = new Map();          // zid -> { part, n, x, y, z }
     const pd = this._pd;
     const tColor = tracerColor(def, up);
@@ -693,8 +694,9 @@ export class WeaponSystem {
       if (pellets > 1) coneDir(d, spread, pd, (i + Math.random()) / pellets, Math.random());
       else coneDir(d, spread, pd);
       const tr = traceBullet(o.x, o.y, o.z, pd.x, pd.y, pd.z, pen, targets, doors, MAX_RANGE);
+      rays.push([r4(pd.x), r4(pd.y), r4(pd.z)]);
       for (const h of tr.hits) {
-        hits.push([zidOf(h.id), h.part, r2(h.t)]);
+        hits.push([zidOf(h.id), h.part, r2(h.t), i]);
         const hx = o.x + pd.x * h.t, hy = o.y + pd.y * h.t, hz = o.z + pd.z * h.t;
         let rec = hitZ.get(h.id);
         if (!rec) { rec = { part: h.part, n: 0, x: hx, y: hy, z: hz }; hitZ.set(h.id, rec); }
@@ -721,6 +723,8 @@ export class WeaponSystem {
       t: 'fire', w: key, up, o: arr2(o), d: arr3(d),
       e: first ? arr2(first) : arr2(new V3().copy(o).addScaledVector(d, 50)),
       hits,
+      // con impactos: dirección de cada perdigón e instante del mundo que se veía (compensación de lag)
+      ...(hits.length ? { rays, ts: this._shotTime() } : {}),
     });
   }
 
@@ -783,8 +787,17 @@ export class WeaponSystem {
     const def = this._def(), am = this._ammo();
     if (!def || def.melee || !am) return false;
     if (!this._reloadAllowed()) return false;
+    return this._startReload(am);
+  }
+
+  // Empieza la recarga y avisa al servidor, que lleva la cuenta real de la munición: sin este aviso
+  // no aceptaría disparos con un cargador que para él sigue vacío
+  _startReload(am) {
     const sc = this._hasPerk('speedcola') ? 0.5 : 1;
-    return am.reload(sc);
+    if (!am.reload(sc)) return false;
+    const a = this.active;
+    if (a) this._send({ t: 'reload', w: a.key, up: !!a.up });
+    return true;
   }
 
   // Avanza dt segundos la recarga en curso del arma activa (si hay una) y reproduce sus sonidos
@@ -820,8 +833,7 @@ export class WeaponSystem {
     if (!def || def.melee || am.currentBullets > 0 || am.reserveBullets <= 0 || this.isReloading) { am.cancelAutoReload(); return; }
     if (this._reloadAllowed() && !this.cycle) {
       am.cancelAutoReload();
-      const sc = this._hasPerk('speedcola') ? 0.5 : 1;
-      am.reload(sc);
+      this._startReload(am);
     }
   }
 
@@ -1173,6 +1185,7 @@ export class WeaponSystem {
     on('gs', () => this._syncFromGs());
     on('ev:give', (e) => this._onGive(e));
     on('ev:ammo', (e) => this._onAmmo(e));
+    on('ev:ammoSync', (e) => this._onAmmoSync(e));
     on('ev:pu', (e) => { if (e.type === 'maxammo' && this._playingNow()) this._refillAll(); });
     on('ev:perk', (e) => { if (this._isSelf(e.pid) && this._playingNow()) this._startDrink(e.perk); });
     on('ev:zdie', (e) => {
@@ -1229,6 +1242,21 @@ export class WeaponSystem {
     if (!w || !WEAPONS[w.k]) return;
     this._refillReserve(w.k, !!w.up);
     this._scheduleAutoReload(0.2);
+  }
+
+  // El servidor rechazó un disparo por falta de munición: su cuenta manda. Se corrige el arma afectada
+  // (normalmente no pasa nunca: cliente y servidor cuentan igual; sirve si alguien toca el cliente)
+  _onAmmoSync(e) {
+    if (!this._isSelf(e.pid)) return;
+    const a = this.active;
+    const am = a && a.temp && e.temp ? this.tempAmmo
+      : [...this.weapons.values()].find((w) => w.key === e.w && w.up === !!e.up) || null;
+    if (!am) return;
+    am.cancelReload();
+    am.currentBullets = Math.max(0, e.m | 0);
+    am.reserveBullets = Math.max(0, e.r | 0);
+    this.burstLeft = 0;
+    if (am.currentBullets === 0 && am.reserveBullets > 0) this._scheduleAutoReload(0.2);
   }
 
   // Disparo de otro jugador: trazador, destello, impacto y sonido 3D
@@ -1333,6 +1361,15 @@ export class WeaponSystem {
     this._tList = Array.isArray(list) ? list : [];
     this._tFrame = this._frame;
     return this._tList;
+  }
+
+  // Instante del mundo que se ve en pantalla (reloj del servidor): los zombis dibujados están interpolados
+  // a ese momento, y el servidor los rebobina ahí para validar el disparo
+  _shotTime() {
+    const ents = this.ctx.entities;
+    if (ents && Number.isFinite(ents.sampleTime)) return Math.round(ents.sampleTime);
+    const net = this.ctx.net;
+    return net && typeof net.serverNow === 'function' ? Math.round(net.serverNow() - INTERP_DELAY_MS) : undefined;
   }
 
   _send(obj) {
